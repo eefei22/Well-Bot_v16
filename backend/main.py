@@ -4,7 +4,7 @@ from fastapi import FastAPI
 import socketio
 import os
 import logging
-from src.speech_pipeline.pipeline import create_voice_pipeline
+from src.scripts._pipeline_wakeword import create_voice_pipeline
 import uvicorn
 
 # Configure clean logging

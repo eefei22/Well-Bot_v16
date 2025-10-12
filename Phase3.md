@@ -15,27 +15,28 @@ Well-Bot_v16/
 ├── backend/
 │   ├── Config/
 │   │   ├── STT/
-│   │   │   └── GoogleCloud.json          # Google Cloud credentials
+│   │   │   └── GoogleCloud.json                # Google Cloud credentials
 │   │   ├── WakeWord/
-│   │   │   ├── PorcupineAccessKey.txt    # Picovoice access key
-│   │   │   └── WellBot_WakeWordModel.ppn  # Custom wake word model
-│   │   └── intent_classifier/            # spaCy intent classification model
-│   │       ├── textcat/                  # Text classification component
-│   │       ├── vocab/                    # Vocabulary and embeddings
-│   │       └── meta.json                 # Model metadata
+│   │   │   ├── PorcupineAccessKey.txt          # Picovoice access key
+│   │   │   └── WellBot_WakeWordModel.ppn       # Custom wake word model
+│   │   └── LLM/
+│   │       └── deepseek.json                   # LLM API config (DeepSeek)
 │   ├── src/
-│   │   └── speech_pipeline/              # Enhanced speech pipeline package
-│   │       ├── __init__.py               # Package exports
-│   │       ├── wakeword.py              # Wake word detection service
-│   │       ├── mic_stream.py            # Microphone audio streaming
-│   │       ├── stt.py                   # Speech-to-text service
-│   │       ├── intent.py                # Intent classification service
-│   │       └── pipeline.py              # Enhanced pipeline orchestrator
-│   ├── main.py                          # Main application entry point
-│   └── requirements.txt                  # Python dependencies
-├── frontend/                            # React/TypeScript frontend
-├── porcupine/                           # Picovoice Porcupine library
-└── venv/                               # Python virtual environment
+│   │   └── scripts/
+│   │       ├── __init__.py                     # Module exports
+│   │       ├── wakeword.py                     # Wake word detection service
+│   │       ├── mic_stream.py                   # Microphone streaming
+│   │       ├── stt.py                          # Speech-to-text (Google STT)
+│   │       ├── intent.py                       # spaCy intent classification
+│   │       ├── llm.py                          # LLM API client (DeepSeek)
+│   │       ├── _pipeline_wakeword.py           # Wakeword pipeline orchestrator
+│   │       └── _pipeline_smalltalk.py          # Console small talk orchestrator
+│   ├── testing/
+│   │   └── smalltalk.py                        # Standalone smalltalk CLI test
+│   ├── main.py                                 # FastAPI + Socket.IO backend entry
+│   └── requirements.txt                        # All Python dependencies
+├── frontend/                                   # React/TypeScript frontend app
+└── venv/                                       # Python virtual environment
 ```
 
 ---
