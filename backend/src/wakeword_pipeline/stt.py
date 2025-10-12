@@ -35,7 +35,7 @@ class GoogleSTTService:
         self.language = language
         self.sample_rate = sample_rate
         
-        logger.info(f"GoogleSTTService initialized: language={language}, sample_rate={sample_rate}")
+        logger.info(f"STT service ready | Language: {language} | Rate: {sample_rate}Hz")
     
     def _build_streaming_config(self, **kwargs) -> speech.StreamingRecognitionConfig:
         """
@@ -91,7 +91,7 @@ class GoogleSTTService:
                 for chunk in audio_generator
             )
             
-            logger.info("Starting streaming recognition...")
+            logger.info("Speech recognition started")
             
             # Get streaming responses
             responses = self.client.streaming_recognize(streaming_config, requests)

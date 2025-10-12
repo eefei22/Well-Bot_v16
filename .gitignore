@@ -3,6 +3,9 @@
 # Archive folder
 archive/
 
+# Third-party dependencies
+porcupine/
+
 # Configuration folder with sensitive data
 backend/Config/
 

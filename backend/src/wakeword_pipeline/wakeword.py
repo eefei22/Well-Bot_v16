@@ -61,7 +61,7 @@ class WakeWordDetector:
             if self.custom_keyword_path and os.path.exists(self.custom_keyword_path):
                 keyword_paths.append(self.custom_keyword_path)
                 keywords.append("custom")
-                logger.info(f"Added custom wake word: {self.custom_keyword_path}")
+                logger.info(f"Custom wake word: Well-Bot")
             
             # Add built-in keywords if provided
             if built_in_keywords:
@@ -83,9 +83,7 @@ class WakeWordDetector:
             self._pa = pyaudio.PyAudio()
             
             self.is_initialized = True
-            logger.info("Wake word detector initialized successfully")
-            logger.info(f"Frame length: {self.porcupine.frame_length}")
-            logger.info(f"Sample rate: {self.porcupine.sample_rate}")
+            logger.info(f"Wake word detector ready | Frame: {self.porcupine.frame_length} | Rate: {self.porcupine.sample_rate}Hz")
             
             return True
             
@@ -122,7 +120,7 @@ class WakeWordDetector:
                     frames_per_buffer=self.porcupine.frame_length
                 )
                 
-                logger.info("Started continuous wake word detection")
+                logger.info("Wake word detection active")
                 
                 while self.running:
                     try:
@@ -139,7 +137,7 @@ class WakeWordDetector:
                         result = self.porcupine.process(pcm)
                         
                         if result >= 0:
-                            logger.info(f"Wake word detected! Keyword index: {result}")
+                            logger.info("Wake word detected")
                             try:
                                 on_detected()
                             except Exception as e:

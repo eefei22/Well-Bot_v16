@@ -7,7 +7,12 @@ import logging
 from src.speech_pipeline.pipeline import create_voice_pipeline
 import uvicorn
 
-logging.basicConfig(level=logging.INFO)
+# Configure clean logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s | %(levelname)-8s | %(name)-15s | %(message)s',
+    datefmt='%H:%M:%S'
+)
 logger = logging.getLogger(__name__)
 
 sio = socketio.AsyncServer(async_mode='asgi', cors_allowed_origins="*")

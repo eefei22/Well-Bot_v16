@@ -36,7 +36,7 @@ class MicStream:
         self._stream = None
         self._lock = threading.Lock()
         
-        logger.info(f"MicStream initialized: rate={rate}, chunk_size={chunk_size}")
+        logger.info(f"Microphone stream ready | Rate: {rate}Hz | Chunk: {chunk_size}")
     
     def start(self):
         """Open the mic and begin filling buffer."""
@@ -56,7 +56,7 @@ class MicStream:
                     stream_callback=self._fill_buffer
                 )
                 self.closed = False
-                logger.info("MicStream started successfully")
+                logger.info("Microphone active")
                 
             except Exception as e:
                 logger.error(f"Failed to start MicStream: {e}")
@@ -91,7 +91,7 @@ class MicStream:
         Yields:
             Raw audio data bytes
         """
-        logger.info("Starting audio generator")
+        logger.info("Audio generator started")
         
         while not self.closed:
             try:
@@ -127,7 +127,7 @@ class MicStream:
                 logger.error(f"Error signaling generator termination: {e}")
             
             self._cleanup()
-            logger.info("MicStream stopped")
+            logger.info("Microphone stopped")
     
     def _cleanup(self):
         """Internal cleanup method."""

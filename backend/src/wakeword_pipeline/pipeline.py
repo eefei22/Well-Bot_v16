@@ -20,11 +20,13 @@ try:
     from .wakeword import WakeWordDetector, create_wake_word_detector
     from .mic_stream import MicStream
     from .stt import GoogleSTTService
+    from .intent import IntentInference
 except ImportError:
     # Fallback for direct execution
     from wakeword import WakeWordDetector, create_wake_word_detector
     from mic_stream import MicStream
     from stt import GoogleSTTService
+    from intent import IntentInference
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +43,8 @@ class VoicePipeline:
         stt_service: GoogleSTTService,
         lang: str = "en-US",
         on_wake_callback: Optional[Callable[[], None]] = None,
-        on_final_transcript: Optional[Callable[[str], None]] = None
+        on_final_transcript: Optional[Callable[[str], None]] = None,
+        intent_model_path: Optional[str] = None
     ):
         """
         Initialize the voice pipeline.
@@ -52,6 +55,7 @@ class VoicePipeline:
             lang: Language code for processing
             on_wake_callback: Optional callback for wake word detection
             on_final_transcript: Optional callback for final transcripts
+            intent_model_path: Optional path to intent classification model
         """
         self.wakeword = wakeword_detector
         self.stt = stt_service
@@ -59,11 +63,21 @@ class VoicePipeline:
         self.on_wake_callback = on_wake_callback
         self.on_final_transcript = on_final_transcript
         
+        # Initialize intent inference if model path provided
+        self.intent_inference = None
+        if intent_model_path:
+            try:
+                self.intent_inference = IntentInference(intent_model_path)
+                logger.info(f"Intent inference initialized with spaCy intent classifier")
+            except Exception as e:
+                logger.warning(f"Failed to initialize intent inference: {e}")
+                self.intent_inference = None
+        
         self.active = False
         self.stt_active = False
         self._lock = threading.Lock()
         
-        logger.info(f"VoicePipeline initialized with language: {lang}")
+        logger.info(f"Pipeline initialized | Language: {lang} | Intent: {'Enabled' if self.intent_inference else 'Disabled'}")
     
     def _on_wake(self):
         """
@@ -71,7 +85,7 @@ class VoicePipeline:
         Starts the STT pipeline.
         """
         import threading
-        logger.info(f"[Pipeline] Wake triggered in thread {threading.current_thread().name}")
+        logger.info("Wake word detected - starting STT")
         
         with self._lock:
             if self.stt_active:
@@ -93,7 +107,7 @@ class VoicePipeline:
     def _run_stt(self):
         """Runs the STT session in a background thread after wakeword."""
         import threading
-        logger.info(f"[Pipeline] STT running in thread {threading.current_thread().name}")
+        logger.info("STT session started")
         
         mic = MicStream(
             rate=self.stt.get_sample_rate(), 
@@ -102,29 +116,47 @@ class VoicePipeline:
         
         try:
             mic.start()
-            logger.info("[Pipeline] Microphone stream started")
+            logger.info("Microphone active - processing speech")
             
             def on_transcript(text: str, is_final: bool):
                 """Handle transcript results from STT."""
-                if is_final:
-                    logger.info(f"[Pipeline] Final transcript: {text}")
-                    
-                    # Call user-provided callback if available
-                    if self.on_final_transcript:
-                        try:
-                            self.on_final_transcript(text)
-                        except Exception as e:
-                            logger.error(f"Error in final transcript callback: {e}")
-                    
-                    # Stop microphone stream
-                    mic.stop()
-                    logger.info("[Pipeline] STT session ended")
-                    
-                else:
+                if not is_final:
+                    # Emit interim result to frontend, etc.
                     logger.debug(f"[Pipeline] Interim transcript: {text}")
+                    return
+                
+                # Final transcript arrived
+                logger.info(f"Transcript: '{text}'")
+                
+                # Process with intent inference if available
+                intent_result = None
+                if self.intent_inference:
+                    try:
+                        intent_result = self.intent_inference.predict_intent(text)
+                        logger.info(f"Intent: {intent_result['intent']} (confidence: {intent_result['confidence']:.3f})")
+                    except Exception as e:
+                        logger.error(f"Error in intent inference: {e}")
+                        intent_result = {
+                            "intent": "unknown",
+                            "confidence": 0.0,
+                            "all_scores": {},
+                            "error": str(e)
+                        }
+                
+                # Call user-provided callback if available
+                if self.on_final_transcript:
+                    try:
+                        # Pass both transcript and intent result to callback
+                        self.on_final_transcript(text, intent_result)
+                    except Exception as e:
+                        logger.error(f"Error in final transcript callback: {e}")
+                
+                # Stop microphone stream
+                mic.stop()
+                logger.info("STT session completed")
             
             # Start STT streaming
-            logger.info("[Pipeline] Starting STT recognition...")
+            logger.info("Starting speech recognition")
             self.stt.stream_recognize(
                 audio_generator=mic.generator(),
                 on_transcript=on_transcript,
@@ -144,7 +176,7 @@ class VoicePipeline:
             with self._lock:
                 self.stt_active = False
             
-            logger.info("[Pipeline] STT pipeline cleanup completed")
+            logger.info("Returning to wake word listening")
     
     def start(self):
         """Start listening for wake word, and then run STT after detection."""
@@ -163,7 +195,7 @@ class VoicePipeline:
             self.wakeword.start(self._on_wake)
             self.active = True
             
-            logger.info("[Pipeline] Wake word listening started - pipeline is active")
+            logger.info("Pipeline active - listening for wake word")
             
         except Exception as e:
             logger.error(f"Failed to start pipeline: {e}")
@@ -231,7 +263,8 @@ def create_voice_pipeline(
     custom_keyword_file: Optional[str] = None,
     language: str = "en-US",
     on_wake_callback: Optional[Callable[[], None]] = None,
-    on_final_transcript: Optional[Callable[[str], None]] = None
+    on_final_transcript: Optional[Callable[[str, Optional[dict]], None]] = None,
+    intent_model_path: Optional[str] = None
 ) -> VoicePipeline:
     """
     Factory function to create a complete voice pipeline.
@@ -241,7 +274,8 @@ def create_voice_pipeline(
         custom_keyword_file: Path to custom wake word model file
         language: Language code for STT
         on_wake_callback: Optional callback for wake word detection
-        on_final_transcript: Optional callback for final transcripts
+        on_final_transcript: Optional callback for final transcripts (text, intent_result)
+        intent_model_path: Optional path to intent classification model
         
     Returns:
         Configured VoicePipeline instance
@@ -261,7 +295,8 @@ def create_voice_pipeline(
             stt_service=stt_service,
             lang=language,
             on_wake_callback=on_wake_callback,
-            on_final_transcript=on_final_transcript
+            on_final_transcript=on_final_transcript,
+            intent_model_path=intent_model_path
         )
         
         logger.info("Voice pipeline created successfully")
@@ -274,33 +309,58 @@ def create_voice_pipeline(
 
 # Example usage and testing
 if __name__ == "__main__":
-    # Configure logging
-    logging.basicConfig(level=logging.INFO)
+    # Configure clean logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s | %(levelname)-8s | %(name)-15s | %(message)s',
+        datefmt='%H:%M:%S'
+    )
     
-    def on_final_transcript(text: str):
-        """Handle final transcripts."""
-        print(f"🎯 Final transcript received: '{text}'")
+    def on_final_transcript(text: str, intent_result: Optional[dict]):
+        """Handle final transcripts with intent classification."""
+        print(f"\nFinal transcript received: '{text}'")
+        
+        if intent_result:
+            print(f"\nIntent detected: {intent_result['intent']} (confidence: {intent_result['confidence']:.3f})")
+            print(f"All scores: {intent_result['all_scores']}\n")
+            
+            # Handle different intents
+            if intent_result['intent'] == 'todo_add':
+                print("Processing todo add request...\n")
+                # Call your todo module here
+            elif intent_result['intent'] == 'small_talk':
+                print("Processing small talk...\n")
+                # Call LLM for conversational response
+            elif intent_result['intent'] == 'journal_write':
+                print("Processing journal entry...\n")
+                # Call your journal module here
+            else:
+                print(f"Unknown intent: {intent_result['intent']}\n")
+        else:
+            print("No intent classification available")
+        
         # Here you would typically send to NLU/downstream processing
-        # For example: nlu_service.process(text)
     
     try:
         # Paths relative to this file
         current_dir = os.path.dirname(__file__)
         access_key_path = os.path.join(current_dir, '..', '..', 'Config', 'WakeWord', 'PorcupineAccessKey.txt')
         custom_keyword_path = os.path.join(current_dir, '..', '..', 'Config', 'WakeWord', 'WellBot_WakeWordModel.ppn')
+        intent_model_path = os.path.join(current_dir, '..', '..', 'Config', 'intent_classifier')
         
         # Create pipeline
         pipeline = create_voice_pipeline(
             access_key_file=access_key_path,
             custom_keyword_file=custom_keyword_path,
             language="en-US",
-            on_final_transcript=on_final_transcript
+            on_final_transcript=on_final_transcript,
+            intent_model_path=intent_model_path
         )
         
         # Start pipeline
         pipeline.start()
         
-        print("🎤 Voice pipeline started!")
+        print("Voice pipeline started!")
         print("Say the wake word to activate STT")
         print("Press Ctrl+C to stop")
         
@@ -313,14 +373,14 @@ if __name__ == "__main__":
                 # print(f"Status: {status}")
                 
         except KeyboardInterrupt:
-            print("\n🛑 Stopping pipeline...")
+            print("\nStopping pipeline...\n")
             pipeline.stop()
             
     except Exception as e:
-        print(f"❌ Error: {e}")
+        print(f"Error: {e}")
     finally:
         try:
             pipeline.cleanup()
-            print("✅ Pipeline cleanup completed")
+            print("Pipeline cleanup completed")
         except:
             pass
