@@ -1,0 +1,11 @@
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-socketio==5.10.0
+google-cloud-speech==2.21.0
+picovoice==3.0.1
+pyaudio==0.2.14
+python-multipart==0.0.6
+numpy
+soundfile
+librosa
+pydub
