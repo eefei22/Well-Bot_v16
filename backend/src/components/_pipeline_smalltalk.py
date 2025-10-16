@@ -14,10 +14,12 @@ try:
     from .mic_stream import MicStream
     from .stt import GoogleSTTService
     from .llm import DeepSeekClient
+    from ..supabase.database import start_conversation, add_message, end_conversation
 except ImportError:
     from mic_stream import MicStream
     from stt import GoogleSTTService
     from llm import DeepSeekClient
+    from src.supabase.database import start_conversation, add_message, end_conversation
 
 
 class SmallTalkSession:
@@ -56,6 +58,8 @@ class SmallTalkSession:
         if system_prompt:
             self.messages.append({"role": "system", "content": system_prompt})
 
+        # Database conversation tracking
+        self.conversation_id: Optional[str] = None
         self._active = False
 
     # ---- utterance capture ----
@@ -101,8 +105,16 @@ class SmallTalkSession:
         Ctrl+C to exit.
         """
         self._active = True
-        print("🎤 Small-Talk session started. Speak after the wakeword you already have.")
-        print("Press Ctrl+C to end.\n")
+        
+        # Start conversation in database
+        try:
+            self.conversation_id = start_conversation(title="Small Talk")
+            print("🎤 Small-Talk session started. Speak after the wakeword you already have.")
+            print("Press Ctrl+C to end.\n")
+        except Exception as e:
+            print(f"⚠️  Warning: Could not start database conversation: {e}")
+            print("🎤 Small-Talk session started (without database logging). Speak after the wakeword you already have.")
+            print("Press Ctrl+C to end.\n")
 
         try:
             while self._active:
@@ -114,15 +126,49 @@ class SmallTalkSession:
 
                 print(f"\n[You] {user_text}")
                 self.messages.append({"role": "user", "content": user_text})
+                
+                # Add user message to database
+                if self.conversation_id:
+                    try:
+                        add_message(
+                            conversation_id=self.conversation_id,
+                            role="user",
+                            content=user_text,
+                            intent="small_talk",
+                            lang="en"
+                        )
+                    except Exception as e:
+                        print(f"⚠️  Warning: Could not save user message to database: {e}")
 
                 # 2) stream LLM reply
                 print("[Assistant] ", end="", flush=True)
                 reply = self._stream_llm_reply()
                 self.messages.append({"role": "assistant", "content": reply})
+                
+                # Add assistant message to database
+                if self.conversation_id:
+                    try:
+                        add_message(
+                            conversation_id=self.conversation_id,
+                            role="assistant",
+                            content=reply,
+                            lang="en"
+                        )
+                    except Exception as e:
+                        print(f"⚠️  Warning: Could not save assistant message to database: {e}")
 
                 # 3) loop; mic will be reopened for next utterance
         except KeyboardInterrupt:
             pass
         finally:
             self._active = False
-            print("\nSmall-Talk session ended.")
+            
+            # End conversation in database
+            if self.conversation_id:
+                try:
+                    end_conversation(self.conversation_id)
+                    print("\nSmall-Talk session ended (conversation saved to database).")
+                except Exception as e:
+                    print(f"\nSmall-Talk session ended (⚠️  Warning: Could not end database conversation: {e})")
+            else:
+                print("\nSmall-Talk session ended.")

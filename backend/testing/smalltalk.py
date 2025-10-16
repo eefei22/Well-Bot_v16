@@ -1,6 +1,6 @@
 import os
 import sys
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src', 'scripts'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src', 'components'))
 
 from mic_stream import MicStream
 from stt import GoogleSTTService
