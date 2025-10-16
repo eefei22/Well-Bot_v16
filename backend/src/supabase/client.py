@@ -2,7 +2,7 @@ import json, os
 from supabase import create_client, Client
 
 def get_supabase(service: bool = True) -> Client:
-    cfg_path = os.path.join("backend", "Config", "Supabase", "supabase.json")
+    cfg_path = os.path.join("backend", "config", "Supabase", "supabase.json")
     with open(cfg_path, "r", encoding="utf-8") as f:
         cfg = json.load(f)
 

@@ -7,7 +7,7 @@ from stt import GoogleSTTService
 from _pipeline_smalltalk import SmallTalkSession
 
 # If you use env var for GCP auth:
-# os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "backend/Config/STT/GoogleCloud.json"
+# os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "backend/config/STT/GoogleCloud.json"
 
 def mic_factory():
     # tune chunk to ~100ms (rate/10)
@@ -15,7 +15,7 @@ def mic_factory():
 
 if __name__ == "__main__":
     stt = GoogleSTTService(language="en-US", sample_rate=16000)
-    deepseek_cfg = "backend/Config/LLM/deepseek.json"
+    deepseek_cfg = "backend/config/LLM/deepseek.json"
 
     session = SmallTalkSession(
         stt=stt,

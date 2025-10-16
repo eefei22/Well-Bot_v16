@@ -39,8 +39,8 @@ def safe_on_transcript(text: str):
 
 def create_pipeline():
     backend_dir = os.path.dirname(__file__)
-    access_key_path = os.path.join(backend_dir, 'Config', 'WakeWord', 'PorcupineAccessKey.txt')
-    custom_keyword_path = os.path.join(backend_dir, 'Config', 'WakeWord', 'WellBot_WakeWordModel.ppn')
+    access_key_path = os.path.join(backend_dir, 'config', 'WakeWord', 'PorcupineAccessKey.txt')
+    custom_keyword_path = os.path.join(backend_dir, 'config', 'WakeWord', 'WellBot_WakeWordModel.ppn')
     return create_voice_pipeline(
         access_key_file=access_key_path,
         custom_keyword_file=custom_keyword_path,

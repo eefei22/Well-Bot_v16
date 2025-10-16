@@ -10,7 +10,7 @@
 ```
 Well-Bot_v16/
 ├── backend/                          # Python FastAPI Backend
-│   ├── Config/                       # Configuration files
+│   ├── config/                       # Configuration files
 │   │   ├── STT/
 │   │   │   └── GoogleCloud.json      # Google Cloud credentials
 │   │   └── WakeWord/

@@ -13,7 +13,7 @@ The system follows a continuous listening architecture where wake word detection
 ```
 Well-Bot_v16/
 ├── backend/
-│   ├── Config/
+│   ├── config/
 │   │   ├── STT/
 │   │   │   └── GoogleCloud.json          # Google Cloud credentials
 │   │   └── WakeWord/

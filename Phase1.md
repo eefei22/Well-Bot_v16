@@ -10,7 +10,7 @@
 ```
 Well-Bot_v16/
 ├── backend/                          # Python FastAPI Backend
-│   ├── Config/                       # Configuration files
+│   ├── config/                       # Configuration files
 │   │   ├── STT/
 │   │   │   └── GoogleCloud.json      # Google Cloud credentials
 │   │   └── WakeWord/
@@ -93,7 +93,7 @@ The Well-Bot now features a complete wake word detection system using Picovoice'
 - ✅ **Frame-based Processing**: Processes 512-sample audio frames
 - ✅ **Multi-keyword Support**: Can detect multiple wake words simultaneously
 - ✅ **Factory Pattern**: Easy instantiation with `create_wake_word_detector()`
-- ✅ **Configuration Management**: Reads access keys and model files from Config directory
+- ✅ **Configuration Management**: Reads access keys and model files from configdirectory
 - ✅ **Thread-safe**: Safe for use in multi-threaded environments
 
 ### **🧪 Testing & Validation**
@@ -120,8 +120,8 @@ from wakeword import create_wake_word_detector
 
 # Create detector with custom wake word
 detector = create_wake_word_detector(
-    access_key_file="Config/WakeWord/PorcupineAccessKey.txt",
-    custom_keyword_file="Config/WakeWord/WellBot_WakeWordModel.ppn"
+    access_key_file="config/WakeWord/PorcupineAccessKey.txt",
+    custom_keyword_file="config/WakeWord/WellBot_WakeWordModel.ppn"
 )
 
 # Initialize the detector
@@ -274,8 +274,8 @@ This test will:
 
 ### **Troubleshooting**
 If tests fail, check:
-- ✅ Picovoice access key is valid in `Config/WakeWord/PorcupineAccessKey.txt`
-- ✅ Custom wake word model exists at `Config/WakeWord/WellBot_WakeWordModel.ppn`
+- ✅ Picovoice access key is valid in `config/WakeWord/PorcupineAccessKey.txt`
+- ✅ Custom wake word model exists at `config/WakeWord/WellBot_WakeWordModel.ppn`
 - ✅ Microphone permissions are granted
 - ✅ Audio drivers are working correctly
 - ✅ No other applications are using the microphone

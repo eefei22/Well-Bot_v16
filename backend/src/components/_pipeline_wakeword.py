@@ -344,9 +344,9 @@ if __name__ == "__main__":
     try:
         # Paths relative to this file
         current_dir = os.path.dirname(__file__)
-        access_key_path = os.path.join(current_dir, '..', '..', 'Config', 'WakeWord', 'PorcupineAccessKey.txt')
-        custom_keyword_path = os.path.join(current_dir, '..', '..', 'Config', 'WakeWord', 'WellBot_WakeWordModel.ppn')
-        intent_model_path = os.path.join(current_dir, '..', '..', 'Config', 'intent_classifier')
+        access_key_path = os.path.join(current_dir, '..', '..', 'config', 'WakeWord', 'PorcupineAccessKey.txt')
+        custom_keyword_path = os.path.join(current_dir, '..', '..', 'config', 'WakeWord', 'WellBot_WakeWordModel.ppn')
+        intent_model_path = os.path.join(current_dir, '..', '..', 'config', 'intent_classifier')
         
         # Create pipeline
         pipeline = create_voice_pipeline(

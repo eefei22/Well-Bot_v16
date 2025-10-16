@@ -13,7 +13,7 @@ The intent recognition system uses machine learning models trained on spaCy's te
 ```
 Well-Bot_v16/
 ├── backend/
-│   ├── Config/
+│   ├── config/
 │   │   ├── STT/
 │   │   │   └── GoogleCloud.json                # Google Cloud credentials
 │   │   ├── WakeWord/
