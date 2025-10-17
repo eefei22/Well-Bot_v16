@@ -1,3 +1,5 @@
+#backend/src/components/_pipeline_smalltalk.py
+
 import json
 import os
 import sys
