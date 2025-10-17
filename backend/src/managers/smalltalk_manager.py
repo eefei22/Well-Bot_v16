@@ -43,6 +43,8 @@ class SmallTalkManager:
         self.silence_timeout = cfg.get("silence_timeout_seconds", 30)
         self.nudge_timeout = cfg.get("nudge_timeout_seconds", 15)
         self.max_turns = cfg.get("max_turns", 20)
+        self.nudge_pre_delay = cfg.get("nudge_pre_delay_ms", 200) / 1000.0  # Convert to seconds
+        self.nudge_post_delay = cfg.get("nudge_post_delay_ms", 300) / 1000.0
 
         self.nudge_audio_path = nudge_audio_path
 
@@ -60,6 +62,8 @@ class SmallTalkManager:
         self._last_user_time = None
         self._nudged = False
         self._silence_watcher_thread = None
+        self._current_mic = None
+        self._mic_lock = threading.Lock()
 
         # Optional IntentRecognizer to detect "termination intent"
         self.intent_inf = None
@@ -93,16 +97,35 @@ class SmallTalkManager:
         return False
 
     def _play_nudge(self):
-        """Play the nudge audio file"""
+        """Play the nudge audio file with microphone muting to prevent feedback."""
         if not playsound:
             logger.warning("playsound not available - cannot play nudge audio")
             return
-            
+        
+        # Mute the current microphone if active
+        with self._mic_lock:
+            if self._current_mic and self._current_mic.is_running():
+                logger.info("Muting microphone before nudge playback")
+                self._current_mic.mute()
+        
+        # Wait before playback to ensure muting takes effect
+        time.sleep(self.nudge_pre_delay)
+        
         try:
+            logger.info("Playing nudge audio")
             playsound(self.nudge_audio_path)
             logger.info("Nudge audio played successfully")
         except Exception as e:
             logger.error(f"Error playing nudge audio: {e}")
+        
+        # Wait after playback to avoid capturing residual audio
+        time.sleep(self.nudge_post_delay)
+        
+        # Unmute the microphone
+        with self._mic_lock:
+            if self._current_mic and self._current_mic.is_running():
+                logger.info("Unmuting microphone after nudge playback")
+                self._current_mic.unmute()
 
     def _silence_watcher(self):
         """
@@ -159,6 +182,33 @@ class SmallTalkManager:
             logger.info("Reached max turns, ending session")
             self.stop()
 
+    def _capture_transcript_with_tracking(self) -> Optional[str]:
+        """Capture transcript while tracking mic instance for muting."""
+        mic = self.mic_factory()
+        
+        with self._mic_lock:
+            self._current_mic = mic
+        
+        try:
+            mic.start()
+            final_text: Optional[str] = None
+            
+            def on_transcript(text: str, is_final: bool):
+                nonlocal final_text
+                if is_final:
+                    final_text = text
+                    mic.stop()
+            
+            self.stt.stream_recognize(mic.generator(), on_transcript)
+            return final_text
+        except Exception as e:
+            logger.error(f"STT error: {e}")
+            return None
+        finally:
+            mic.stop()
+            with self._mic_lock:
+                self._current_mic = None
+
     def start(self):
         """Start the smalltalk session with manager controls"""
         if self._active:
@@ -193,7 +243,7 @@ class SmallTalkManager:
 
                 while self._active:
                     # 1) capture one user utterance
-                    user_text = self.pipeline._capture_single_transcript()
+                    user_text = self._capture_transcript_with_tracking()
                     if not user_text:
                         # Could be silence or error — loop back
                         continue
@@ -279,8 +329,10 @@ class SmallTalkManager:
         self._active = False
         logger.info("SmallTalkManager stopping session")
         
-        # Wait for silence watcher to finish
-        if self._silence_watcher_thread and self._silence_watcher_thread.is_alive():
+        # Wait for silence watcher to finish (only if not called from within the watcher thread)
+        if (self._silence_watcher_thread and 
+            self._silence_watcher_thread.is_alive() and 
+            threading.current_thread() != self._silence_watcher_thread):
             self._silence_watcher_thread.join(timeout=1)
 
     def is_active(self) -> bool:
