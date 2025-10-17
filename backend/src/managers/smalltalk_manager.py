@@ -222,7 +222,7 @@ class SmallTalkManager:
                         break
 
                     # 2) stream LLM reply
-                    logger.info("[Assistant] ", end="", flush=True)
+                    logger.info("[Assistant] ")
                     reply = self.pipeline._stream_llm_reply()
                     
                     # Strip emojis from reply

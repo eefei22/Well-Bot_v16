@@ -36,14 +36,13 @@ def main():
     try:
         # Paths
         backend_dir = Path(__file__).parent.parent
-        stt_config_path = backend_dir / "config" / "STT" / "GoogleCloud.json"
         deepseek_config_path = backend_dir / "config" / "LLM" / "deepseek.json"
         llm_config_path = backend_dir / "config" / "LLM" / "smalltalk_instructions.json"
         nudge_audio_path = backend_dir / "assets" / "inactivity_nudge_EN.mp3"
         intent_model_path = backend_dir / "config" / "intent_classifier"
 
         # Check if all required files exist
-        required_files = [stt_config_path, deepseek_config_path, llm_config_path, nudge_audio_path]
+        required_files = [deepseek_config_path, llm_config_path, nudge_audio_path]
         for file_path in required_files:
             if not file_path.exists():
                 logger.error(f"Required file not found: {file_path}")
@@ -51,7 +50,7 @@ def main():
 
         # Initialize STT service
         logger.info("Initializing STT service...")
-        stt = GoogleSTTService(stt_config_path)
+        stt = GoogleSTTService(language="en-US", sample_rate=16000)
 
         # Create mic factory
         mic_factory = create_mic_factory()
