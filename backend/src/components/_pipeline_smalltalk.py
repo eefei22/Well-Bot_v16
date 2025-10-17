@@ -1,4 +1,4 @@
-#backend/src/components/_pipeline_smalltalk.py
+# backend/src/components/_pipeline_smalltalk.py
 
 import json
 import os
@@ -6,40 +6,42 @@ import sys
 import threading
 import time
 import logging
-from typing import Optional, Callable, List, Dict
+from typing import Optional, Callable, List, Dict, Iterator
 
-# Add the backend directory to the path to import modules
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
-# Handle relative/direct execution imports for module and CLI use.
 try:
     from .mic_stream import MicStream
     from .stt import GoogleSTTService
     from .llm import DeepSeekClient
+    from .tts import GoogleTTSClient
     from ..supabase.database import start_conversation, add_message, end_conversation
 except ImportError:
     from mic_stream import MicStream
     from stt import GoogleSTTService
     from llm import DeepSeekClient
+    from tts import GoogleTTSClient
     from src.supabase.database import start_conversation, add_message, end_conversation
+
+
+logger = logging.getLogger(__name__)
 
 
 class SmallTalkSession:
     """
-    Console-first small talk loop:
-    - Capture one utterance (mic + STT)
-    - Append to messages
-    - Stream DeepSeek reply
-    - Loop until stopped
+    Conversation loop:
+    - capture user speech → STT → LLM → TTS → play audio → loop
     """
     def __init__(
         self,
         stt: GoogleSTTService,
         mic_factory: Callable[[], MicStream],
         deepseek_config_path: str,
+        tts_voice_name: str,
+        tts_language_code: str = "en-US",
         system_prompt: Optional[str] = "You are a friendly, concise assistant. Keep responses short unless asked.",
         language_code: str = "en-US",
-        min_confidence: float = 0.0,  # you can wire NLU confidence here if needed later
+        min_confidence: float = 0.0,
     ):
         self.stt = stt
         self.mic_factory = mic_factory
@@ -55,21 +57,23 @@ class SmallTalkSession:
             model=cfg.get("model", "deepseek-chat"),
         )
 
-        # Multi-round chat memory
+        # Initialize TTS client
+        self.tts = GoogleTTSClient(
+            voice_name=tts_voice_name,
+            language_code=tts_language_code,
+            # you can set sample_rate, encoding etc as needed in your TTS config
+        )
+
+        # Chat memory
         self.messages: List[Dict[str, str]] = []
         if system_prompt:
             self.messages.append({"role": "system", "content": system_prompt})
 
-        # Database conversation tracking
         self.conversation_id: Optional[str] = None
         self._active = False
 
     # ---- utterance capture ----
     def _capture_single_transcript(self) -> Optional[str]:
-        """
-        Opens mic, runs streaming STT until a FINAL transcript is received,
-        returns that transcript (or None if aborted).
-        """
         mic = self.mic_factory()
         mic.start()
 
@@ -79,57 +83,64 @@ class SmallTalkSession:
             nonlocal final_text
             if is_final:
                 final_text = text
-                # stop mic to end STT stream gracefully
                 mic.stop()
 
         try:
             self.stt.stream_recognize(mic.generator(), on_transcript)
         except Exception as e:
-            print(f"[SmallTalk] STT error: {e}")
+            logger.error(f"[SmallTalk] STT error: {e}")
         finally:
             mic.stop()
 
         return final_text
 
-    # ---- LLM streaming ----
-    def _stream_llm_reply(self) -> str:
-        buffer = []
-        for chunk in self.llm.stream_chat(self.messages, temperature=0.6):
-            print(chunk, end="", flush=True)  # console stream
-            buffer.append(chunk)
-        print()  # newline after stream
-        return "".join(buffer)
+    # ---- LLM streaming + TTS streaming ----
+    def _stream_llm_and_tts(self) -> Iterator[bytes]:
+        """
+        Streams LLM response text, then passes chunks into TTS streaming, yielding audio bytes.
+        Returns an iterator over PCM audio chunks.
+        """
+        # Buffer the LLM text streaming, but also emit chunks to TTS
+        # This is simplistic: we gather all text first, then feed to TTS streaming
+   
+        # Option A: stream LLM chunks, buffer them, then feed to TTS
+        text_chunks: List[str] = []
+        for text_chunk in self.llm.stream_chat(self.messages, temperature=0.6):
+            # Print to console
+            print(text_chunk, end="", flush=True)
+            text_chunks.append(text_chunk)
 
-    # ---- public control ----
+        print()  # newline after full stream
+        full_text = "".join(text_chunks)
+        self.messages.append({"role": "assistant", "content": full_text})
+
+        # Then stream TTS audio
+        def text_gen():
+            # simple chunking: you could split by sentences, but here we yield the entire text as one chunk
+            yield full_text
+
+        for audio_chunk in self.tts.synthesize_safe(text_gen()):
+            yield audio_chunk
+
+    # ---- public loop start ----
     def start(self):
-        """
-        Enters a loop: listen → transcribe → LLM reply → repeat.
-        Ctrl+C to exit.
-        """
         self._active = True
-        
-        # Start conversation in database
+
         try:
             self.conversation_id = start_conversation(title="Small Talk")
-            print("🎤 Small-Talk session started. Speak after the wakeword you already have.")
-            print("Press Ctrl+C to end.\n")
+            print("🎤 Small-Talk session started. Speak after wakeword.")
         except Exception as e:
-            print(f"⚠️  Warning: Could not start database conversation: {e}")
-            print("🎤 Small-Talk session started (without database logging). Speak after the wakeword you already have.")
-            print("Press Ctrl+C to end.\n")
+            logger.warning(f"Could not start conversation: {e}")
 
         try:
             while self._active:
-                # 1) capture one user utterance
                 user_text = self._capture_single_transcript()
                 if not user_text:
-                    # Could be silence or error — loop back
                     continue
 
                 print(f"\n[You] {user_text}")
                 self.messages.append({"role": "user", "content": user_text})
-                
-                # Add user message to database
+
                 if self.conversation_id:
                     try:
                         add_message(
@@ -137,40 +148,41 @@ class SmallTalkSession:
                             role="user",
                             content=user_text,
                             intent="small_talk",
-                            lang="en"
+                            lang=self.language_code
                         )
                     except Exception as e:
-                        print(f"⚠️  Warning: Could not save user message to database: {e}")
+                        logger.warning(f"Could not save user message: {e}")
 
-                # 2) stream LLM reply
-                print("[Assistant] ", end="", flush=True)
-                reply = self._stream_llm_reply()
-                self.messages.append({"role": "assistant", "content": reply})
-                
-                # Add assistant message to database
+                # Stream LLM → TTS and play audio
+                print("[Assistant speaking audio] ", end="", flush=True)
+                for pcm_chunk in self._stream_llm_and_tts():
+                    # Here, you need a playback mechanism: e.g. feed to audio playback
+                    # For now we can write raw PCM chunk to stdout or buffer, placeholder:
+                    # (In manager you will connect to actual audio output)
+                    # e.g., audio_playback.play(pcm_chunk)
+                    # For demo, we just note size:
+                    # print(f"<audio chunk size {len(pcm_chunk)}> ", end="", flush=True)
+                    pass
+
+                # After streaming audio, store assistant text in DB
                 if self.conversation_id:
                     try:
                         add_message(
                             conversation_id=self.conversation_id,
                             role="assistant",
-                            content=reply,
-                            lang="en"
+                            content=self.messages[-1]["content"],
+                            lang=self.language_code
                         )
                     except Exception as e:
-                        print(f"⚠️  Warning: Could not save assistant message to database: {e}")
+                        logger.warning(f"Could not save assistant message: {e}")
 
-                # 3) loop; mic will be reopened for next utterance
         except KeyboardInterrupt:
-            pass
+            logger.info("Interrupted by user")
         finally:
             self._active = False
-            
-            # End conversation in database
             if self.conversation_id:
                 try:
                     end_conversation(self.conversation_id)
-                    print("\nSmall-Talk session ended (conversation saved to database).")
                 except Exception as e:
-                    print(f"\nSmall-Talk session ended (⚠️  Warning: Could not end database conversation: {e})")
-            else:
-                print("\nSmall-Talk session ended.")
+                    logger.warning(f"Could not end conversation: {e}")
+            print("\nSession ended.")

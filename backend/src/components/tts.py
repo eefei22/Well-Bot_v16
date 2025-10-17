@@ -123,7 +123,7 @@ if __name__ == "__main__":
 
     # Example test
     client = GoogleTTSClient(
-        voice_name="en-US-Chirp3-HD-Achernar",
+        voice_name="en-US-Chirp3-HD-Charon",
         language_code="en-US",
         audio_encoding=texttospeech.AudioEncoding.PCM,
         sample_rate_hertz=24000,
@@ -133,7 +133,7 @@ if __name__ == "__main__":
 
     # Simulate streaming input
     def sample_text_gen():
-        for part in ["Hello, how are you ", "doing today?"]:
+        for part in ["It looks like you're not responding anymore, I'm gonna go take a break now."]:
             yield part
 
     # Use streaming and capture
