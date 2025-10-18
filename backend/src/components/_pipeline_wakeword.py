@@ -10,7 +10,9 @@ import sys
 import threading
 import time
 import logging
+import json
 from typing import Optional, Callable
+from playsound import playsound
 
 # Add the backend directory to the path to import modules
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -44,7 +46,8 @@ class VoicePipeline:
         lang: str = "en-US",
         on_wake_callback: Optional[Callable[[], None]] = None,
         on_final_transcript: Optional[Callable[[str], None]] = None,
-        intent_model_path: Optional[str] = None
+        intent_model_path: Optional[str] = None,
+        preference_file_path: Optional[str] = None
     ):
         """
         Initialize the voice pipeline.
@@ -56,12 +59,23 @@ class VoicePipeline:
             on_wake_callback: Optional callback for wake word detection
             on_final_transcript: Optional callback for final transcripts
             intent_model_path: Optional path to intent classification model
+            preference_file_path: Optional path to preference.json file
         """
         self.wakeword = wakeword_detector
         self.stt = stt_service
         self.lang = lang
         self.on_wake_callback = on_wake_callback
         self.on_final_transcript = on_final_transcript
+        
+        # Load wakeword audio path from preferences
+        self.wakeword_audio_path = None
+        if preference_file_path:
+            try:
+                self.wakeword_audio_path = self._load_wakeword_audio_path(preference_file_path)
+                logger.info(f"Wakeword audio path loaded: {self.wakeword_audio_path}")
+            except Exception as e:
+                logger.warning(f"Failed to load wakeword audio path: {e}")
+                self.wakeword_audio_path = None
         
         # Initialize intent inference if model path provided
         self.intent_inference = None
@@ -77,21 +91,66 @@ class VoicePipeline:
         self.stt_active = False
         self._lock = threading.Lock()
         
-        logger.info(f"Pipeline initialized | Language: {lang} | Intent: {'Enabled' if self.intent_inference else 'Disabled'}")
+        logger.info(f"Pipeline initialized | Language: {lang} | Intent: {'Enabled' if self.intent_inference else 'Disabled'} | Wakeword Audio: {'Enabled' if self.wakeword_audio_path else 'Disabled'}")
+    
+    def _load_wakeword_audio_path(self, preference_file_path: str) -> Optional[str]:
+        """
+        Load wakeword audio path from preference.json file.
+        
+        Args:
+            preference_file_path: Path to preference.json file
+            
+        Returns:
+            Wakeword audio file path or None if not found/error
+        """
+        try:
+            with open(preference_file_path, 'r') as f:
+                preferences = json.load(f)
+            
+            wakeword_path = preferences.get('wokeword_audio_path')
+            if wakeword_path:
+                # Convert relative path to absolute path
+                backend_dir = os.path.join(os.path.dirname(__file__), '..', '..')
+                absolute_path = os.path.join(backend_dir, wakeword_path)
+                
+                # Check if file exists
+                if os.path.exists(absolute_path):
+                    return absolute_path
+                else:
+                    logger.warning(f"Wakeword audio file not found: {absolute_path}")
+                    return None
+            else:
+                logger.warning("No 'wokeword_audio_path' found in preferences")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error loading wakeword audio path from preferences: {e}")
+            return None
     
     def _on_wake(self):
         """
         Callback function triggered when wake word is detected.
-        Starts the STT pipeline.
+        Plays wakeword audio feedback and then starts the STT pipeline.
         """
         import threading
-        logger.info("Wake word detected - starting STT")
+        logger.info("Wake word detected - playing feedback audio")
         
         with self._lock:
             if self.stt_active:
                 logger.warning("STT already active, ignoring wake")
                 return
             self.stt_active = True
+
+        # Play wakeword audio feedback (blocking)
+        if self.wakeword_audio_path:
+            try:
+                logger.info(f"Playing wakeword audio: {self.wakeword_audio_path}")
+                playsound(self.wakeword_audio_path, block=True)
+                logger.info("Wakeword audio playback completed")
+            except Exception as e:
+                logger.error(f"Error playing wakeword audio: {e}")
+        else:
+            logger.info("No wakeword audio configured, skipping playback")
 
         # Call the callback (which should schedule the emit)
         if self.on_wake_callback:
@@ -101,6 +160,7 @@ class VoicePipeline:
                 logger.error(f"Error in wake callback: {e}")
 
         # Launch STT thread
+        logger.info("Starting STT after audio feedback")
         t = threading.Thread(target=self._run_stt, daemon=True)
         t.start()
     
@@ -264,7 +324,8 @@ def create_voice_pipeline(
     language: str = "en-US",
     on_wake_callback: Optional[Callable[[], None]] = None,
     on_final_transcript: Optional[Callable[[str, Optional[dict]], None]] = None,
-    intent_model_path: Optional[str] = None
+    intent_model_path: Optional[str] = None,
+    preference_file_path: Optional[str] = None
 ) -> VoicePipeline:
     """
     Factory function to create a complete voice pipeline.
@@ -276,6 +337,7 @@ def create_voice_pipeline(
         on_wake_callback: Optional callback for wake word detection
         on_final_transcript: Optional callback for final transcripts (text, intent_result)
         intent_model_path: Optional path to intent classification model
+        preference_file_path: Optional path to preference.json file
         
     Returns:
         Configured VoicePipeline instance
@@ -296,7 +358,8 @@ def create_voice_pipeline(
             lang=language,
             on_wake_callback=on_wake_callback,
             on_final_transcript=on_final_transcript,
-            intent_model_path=intent_model_path
+            intent_model_path=intent_model_path,
+            preference_file_path=preference_file_path
         )
         
         logger.info("Voice pipeline created successfully")
@@ -347,6 +410,7 @@ if __name__ == "__main__":
         access_key_path = os.path.join(current_dir, '..', '..', 'config', 'WakeWord', 'PorcupineAccessKey.txt')
         custom_keyword_path = os.path.join(current_dir, '..', '..', 'config', 'WakeWord', 'WellBot_WakeWordModel.ppn')
         intent_model_path = os.path.join(current_dir, '..', '..', 'config', 'intent_classifier')
+        preference_file_path = os.path.join(current_dir, '..', '..', 'config', 'user_preference', 'preference.json')
         
         # Create pipeline
         pipeline = create_voice_pipeline(
@@ -354,7 +418,8 @@ if __name__ == "__main__":
             custom_keyword_file=custom_keyword_path,
             language="en-US",
             on_final_transcript=on_final_transcript,
-            intent_model_path=intent_model_path
+            intent_model_path=intent_model_path,
+            preference_file_path=preference_file_path
         )
         
         # Start pipeline

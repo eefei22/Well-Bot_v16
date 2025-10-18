@@ -9,7 +9,7 @@ import logging
 
 from typing import Optional, Callable
 
-from ..components._pipeline_smalltalk import SmallTalkSession
+from ..components._pipeline_smalltalk import SmallTalkSession, TerminationPhraseDetected, normalize_text
 from ..components.mic_stream import MicStream
 from ..components.stt import GoogleSTTService
 
@@ -42,7 +42,6 @@ class SmallTalkManager:
         with open(llm_config_path, "r", encoding="utf-8") as f:
             cfg = json.load(f)
         self.system_prompt = cfg.get("system_prompt", "You are a friendly assistant. Do not use emojis.")
-        self.termination_phrases = [p.lower() for p in cfg.get("termination_phrases", [])]
         self.silence_timeout = cfg.get("silence_timeout_seconds", 30)
         self.nudge_timeout = cfg.get("nudge_timeout_seconds", 15)
         self.nudge_pre_delay = cfg.get("nudge_pre_delay_ms", 200) / 1000.0
@@ -59,9 +58,13 @@ class SmallTalkManager:
         backend_dir = os.path.dirname(os.path.dirname(os.path.dirname(llm_config_path)))  # Go up from config/LLM/ to backend/
         self.nudge_audio_path = os.path.join(backend_dir, nudge_audio_relative)
         
-        # Termination audio path from config (resolve relative to backend directory)
+        # Termination audio paths from config (resolve relative to backend directory)
         termination_audio_relative = cfg.get("termination_audio_path", "assets/termination_EN_male.wav")
         self.termination_audio_path = os.path.join(backend_dir, termination_audio_relative)
+        
+        # End audio path for command termination (different from inactivity termination)
+        end_audio_relative = cfg.get("end_audio_path", "assets/end_EN_male.wav")
+        self.end_audio_path = os.path.join(backend_dir, end_audio_relative)
         
         # Debug logging for path resolution
         logger.info(f"Nudge audio config: {nudge_audio_relative}")
@@ -71,12 +74,16 @@ class SmallTalkManager:
         logger.info(f"Termination audio config: {termination_audio_relative}")
         logger.info(f"Resolved termination path: {self.termination_audio_path}")
         logger.info(f"Termination file exists: {os.path.exists(self.termination_audio_path)}")
+        logger.info(f"End audio config: {end_audio_relative}")
+        logger.info(f"Resolved end path: {self.end_audio_path}")
+        logger.info(f"End file exists: {os.path.exists(self.end_audio_path)}")
 
         # Create the pipeline (which now handles LLM + TTS)
         self.pipeline = SmallTalkSession(
             stt=stt,
             mic_factory=mic_factory,
             deepseek_config_path=deepseek_config_path,
+            llm_config_path=llm_config_path,
             tts_voice_name=self.tts_voice_name,
             tts_language_code=self.tts_language_code,
             system_prompt=self.system_prompt,
@@ -106,13 +113,6 @@ class SmallTalkManager:
 
     def _strip_emojis(self, text: str) -> str:
         return re.sub(r"[^\w\s.,!?'-]", "", text)
-
-    def _is_termination_phrase(self, user_text: str) -> bool:
-        low = user_text.lower().strip()
-        for phrase in self.termination_phrases:
-            if low == phrase or low.startswith(phrase + " "):
-                return True
-        return False
 
     def _play_nudge(self):
         if not playsound:
@@ -173,6 +173,35 @@ class SmallTalkManager:
             if self._current_mic and self._current_mic.is_running():
                 self._current_mic.unmute()
 
+    def _play_end_audio(self):
+        """Play the end audio file when session ends due to user command."""
+        if not playsound:
+            logger.warning("playsound not available - cannot play end audio")
+            return
+
+        # Check if end file exists
+        if not os.path.exists(self.end_audio_path):
+            logger.error(f"End audio file not found: {self.end_audio_path}")
+            return
+
+        with self._mic_lock:
+            if self._current_mic and self._current_mic.is_running():
+                self._current_mic.mute()
+
+        try:
+            logger.info(f"Playing end audio: {self.end_audio_path}")
+            self._set_playback_state(True)  # Track end audio playback
+            playsound(self.end_audio_path)
+            logger.info("End audio played successfully")
+            self._set_playback_state(False)  # End end audio playback
+        except Exception as e:
+            logger.error(f"Error playing end audio: {e}")
+            self._set_playback_state(False)  # Ensure state is reset on error
+
+        with self._mic_lock:
+            if self._current_mic and self._current_mic.is_running():
+                self._current_mic.unmute()
+
     def _silence_watcher(self):
         while self._active:
             if self._last_user_time is None:
@@ -220,11 +249,6 @@ class SmallTalkManager:
         if clean != assistant_reply:
             if self.pipeline.messages and self.pipeline.messages[-1]["role"] == "assistant":
                 self.pipeline.messages[-1]["content"] = clean
-
-        if self._is_termination_phrase(user_text):
-            logger.info("Termination phrase triggered")
-            self.stop()
-            return
 
         if self._turn_count >= self.max_turns:
             logger.info("Max turns reached, ending")
@@ -309,71 +333,90 @@ class SmallTalkManager:
                 logger.warning(f"Could not start conversation: {e}")
 
             while self._active:
-                user_text = self._capture_transcript_with_tracking()
-                if not user_text:
-                    continue
-
-                logger.info(f"[User] {user_text}")
-                self.pipeline.messages.append({"role": "user", "content": user_text})
-
-                if self.pipeline.conversation_id:
-                    try:
-                        from ..supabase.database import add_message
-                        add_message(
-                            conversation_id=self.pipeline.conversation_id,
-                            role="user",
-                            content=user_text,
-                            intent="small_talk",
-                            lang=self.language_code
-                        )
-                    except Exception as e:
-                        logger.warning(f"Could not save user message: {e}")
-
-                if self._is_termination_phrase(user_text):
-                    logger.info("Termination phrase, ending")
-                    self.stop()
-                    break
-
-                logger.info("[Assistant speaking]")
-                self._set_playback_state(True)  # Start TTS audio playback
                 try:
-                    for pcm_chunk in self.pipeline._stream_llm_and_tts():
-                        # Before playback, mute mic
+                    user_text = self._capture_transcript_with_tracking()
+                    if not user_text:
+                        logger.debug("Manager: no user text captured, continuing...")
+                        continue
+
+                    # Log raw and normalized text for debugging
+                    logger.info(f"[User] raw_text = '{user_text}'")
+                    normalized = normalize_text(user_text)
+                    logger.info(f"[User] normalized_text = '{normalized}'")
+                    
+                    # Add user message to pipeline memory
+                    self.pipeline.messages.append({"role": "user", "content": user_text})
+
+                    # Save user message to database
+                    if self.pipeline.conversation_id:
+                        try:
+                            from ..supabase.database import add_message
+                            add_message(
+                                conversation_id=self.pipeline.conversation_id,
+                                role="user",
+                                content=user_text,
+                                intent="small_talk",
+                                lang=self.language_code
+                            )
+                        except Exception as e:
+                            logger.warning(f"Could not save user message: {e}")
+
+                    # 🎯 EARLY TERMINATION CHECK - BEFORE ANY PIPELINE PROCESSING
+                    logger.info("Manager: checking for termination BEFORE LLM processing...")
+                    try:
+                        self.pipeline.check_termination(user_text)
+                        logger.info("Manager: no termination detected, proceeding with conversation...")
+                    except TerminationPhraseDetected as e:
+                        logger.info(f"Manager: TERMINATION TRIGGERED! {e}")
+                        self._play_end_audio()  # Use end audio for command termination
+                        self.stop()
+                        break
+
+                    logger.info("[Assistant speaking]")
+                    self._set_playback_state(True)  # Start TTS audio playback
+                    try:
+                        for pcm_chunk in self.pipeline._stream_llm_and_tts():
+                            # Before playback, mute mic
+                            with self._mic_lock:
+                                if self._current_mic and self._current_mic.is_running():
+                                    self._current_mic.mute()
+
+                            self._play_pcm_chunk(pcm_chunk)
+                    finally:
+                        # After playback, unmute mic and stop playback tracking
                         with self._mic_lock:
                             if self._current_mic and self._current_mic.is_running():
-                                self._current_mic.mute()
+                                self._current_mic.unmute()
+                        self._set_playback_state(False)  # End TTS audio playback
+                        logger.info("TTS playback finished - microphone active, silence watcher resuming")
+                        
+                        # Reset silence timeout when microphone becomes active after TTS
+                        self._last_user_time = time.time()
+                        self._nudged = False
+                        logger.info("Silence timeout reset - microphone active after TTS")
 
-                        self._play_pcm_chunk(pcm_chunk)
-                finally:
-                    # After playback, unmute mic and stop playback tracking
-                    with self._mic_lock:
-                        if self._current_mic and self._current_mic.is_running():
-                            self._current_mic.unmute()
-                    self._set_playback_state(False)  # End TTS audio playback
-                    logger.info("TTS playback finished - microphone active, silence watcher resuming")
-                    
-                    # Reset silence timeout when microphone becomes active after TTS
-                    self._last_user_time = time.time()
-                    self._nudged = False
-                    logger.info("Silence timeout reset - microphone active after TTS")
+                    # Log assistant text
+                    assistant_text = self.pipeline.messages[-1]["content"]
+                    if self.pipeline.conversation_id:
+                        try:
+                            from ..supabase.database import add_message
+                            add_message(
+                                conversation_id=self.pipeline.conversation_id,
+                                role="assistant",
+                                content=assistant_text,
+                                lang=self.language_code
+                            )
+                        except Exception as e:
+                            logger.warning(f"Could not save assistant message: {e}")
 
-                # Log assistant text
-                assistant_text = self.pipeline.messages[-1]["content"]
-                if self.pipeline.conversation_id:
-                    try:
-                        from ..supabase.database import add_message
-                        add_message(
-                            conversation_id=self.pipeline.conversation_id,
-                            role="assistant",
-                            content=assistant_text,
-                            lang=self.language_code
-                        )
-                    except Exception as e:
-                        logger.warning(f"Could not save assistant message: {e}")
+                    self._on_turn_complete(user_text, assistant_text)
+                    if not self._active:
+                        break
 
-                self._on_turn_complete(user_text, assistant_text)
-                if not self._active:
-                    break
+                except Exception as e:
+                    logger.error(f"Manager: unexpected error in conversation loop: {e}")
+                    # Continue the loop unless it's a critical error
+                    continue
 
             # cleanup audio
             if self._audio_stream:

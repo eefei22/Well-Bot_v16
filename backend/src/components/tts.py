@@ -133,7 +133,7 @@ if __name__ == "__main__":
 
     # Simulate streaming input
     def sample_text_gen():
-        for part in ["It looks like you're not responding anymore, I'm gonna go take a break now."]:
+        for part in ["Hey, I heard you call me?"]:
             yield part
 
     # Use streaming and capture

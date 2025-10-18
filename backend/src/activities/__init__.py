@@ -8,3 +8,5 @@ Each activity is a self-contained component with its own configuration and lifec
 from .smalltalk import SmallTalkActivity
 
 __all__ = ['SmallTalkActivity']
+
+
