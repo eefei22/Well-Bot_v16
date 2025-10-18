@@ -132,11 +132,12 @@ The backend is organized into four primary modules:
   - Manages connection lifecycle
 
 #### Authentication (`auth.py`)
-- **Description**: Handles user authentication and session management.
-- **Functionality**:
-  - Manages user login and session tokens
-  - Handles authentication state
-  - Provides user identity for database operations
+- **Description**: Placeholder for future authentication functionality.
+- **Current State**: Empty file - authentication features not yet implemented
+- **Planned Functionality**:
+  - User login and session management
+  - Authentication state handling
+  - User identity management for database operations
 
 #### Database Operations (`database.py`)
 - **Description**: Provides high-level database operations for conversations and messages.
