@@ -1,331 +1,212 @@
-# Phase 3: Intent Recognition Integration - Progress Report
+Websocket but failed
 
-## 📋 Project Overview
+## 🎯 Requirements Recap & Design Choices
 
-Phase 3 focused on integrating intelligent intent recognition into the Well-Bot v16 voice assistant system. This phase successfully implemented spaCy-based intent classification that processes speech transcripts and determines user intent with high accuracy, enabling the system to route requests to appropriate downstream modules.
+You want the manager to:
 
-The intent recognition system uses machine learning models trained on spaCy's text classification capabilities to categorize user utterances into actionable intents such as todo management, journal writing, small talk, and quote requests.
+* Wrap around your existing smalltalk pipeline
+* Maintain cached memory / context so RAG retrieval isn’t run every utterance
+* Use a **pre-recorded audio file** (“Hey, are you there?”) as the nudge prompt (i.e. play audio)
+* No emojis from assistant (strip them)
+* Load system prompts / instructions from a config JSON in `backend/Config/LLM`
+* Provide voice termination detection (by a phrase)
+* Monitor silence, nudge, and end session if no response
+
+Thus, the manager will:
+
+1. Load config (LLM instructions, termination phrases, silence timeouts)
+2. Own the pipeline object (SmallTalkSession)
+3. Intercept transcript results (user utterance) and reply results (assistant)
+4. Decide when to nudge (play audio file)
+5. Decide when to stop
+6. Provide hooks for RAG (e.g. call retrieval once and cache context)
 
 ---
 
-## 🏗️ Project Structure
+## PART 0 - nudge audio file (DONE)
 
+audio files accessible from here
 ```
 Well-Bot_v16/
-├── backend/
-│   ├── Config/
-│   │   ├── STT/
-│   │   │   └── GoogleCloud.json          # Google Cloud credentials
-│   │   ├── WakeWord/
-│   │   │   ├── PorcupineAccessKey.txt    # Picovoice access key
-│   │   │   └── WellBot_WakeWordModel.ppn  # Custom wake word model
-│   │   └── intent_classifier/            # spaCy intent classification model
-│   │       ├── textcat/                  # Text classification component
-│   │       ├── vocab/                    # Vocabulary and embeddings
-│   │       └── meta.json                 # Model metadata
-│   ├── src/
-│   │   └── speech_pipeline/              # Enhanced speech pipeline package
-│   │       ├── __init__.py               # Package exports
-│   │       ├── wakeword.py              # Wake word detection service
-│   │       ├── mic_stream.py            # Microphone audio streaming
-│   │       ├── stt.py                   # Speech-to-text service
-│   │       ├── intent.py                # Intent classification service
-│   │       └── pipeline.py              # Enhanced pipeline orchestrator
-│   ├── main.py                          # Main application entry point
-│   └── requirements.txt                  # Python dependencies
-├── frontend/                            # React/TypeScript frontend
-├── porcupine/                           # Picovoice Porcupine library
-└── venv/                               # Python virtual environment
+  backend/
+    assets/
+        inactivity_nudge_EN.mp3   ← pre-recorded audio file 
+        inactivity_nudge_CN.mp3
+        inactivity_nudge_MY.mp3       
 ```
+
+So manager code can reference it via relative path (e.g. `os.path.join(asset_dir, "inactivity_nudge_EN")`).
 
 ---
 
-## 🔧 Framework and Library Packages
+## PART 1 - Config file for LLM instructions and manager settings
+Create something like:
 
-### Core Dependencies
-- **Python 3.8+** - Primary development language
-- **spaCy** - Natural language processing and text classification
-- **PyAudio** - Cross-platform audio I/O library
-- **Google Cloud Speech-to-Text** - Cloud-based speech recognition
-- **Picovoice Porcupine** - Wake word detection engine
-- **Threading** - Concurrent processing support
+`backend/Config/LLM/llm_instructions.json`
+```json
+{
+  "system_prompt": "You are a friendly assistant. Do not use emojis.",
+  "termination_phrases": ["stop", "end conversation", "goodbye", "bye", "exit"],
+  "silence_timeout_seconds": 30,
+  "nudge_timeout_seconds": 15,
+  "max_turns": 20
+}
+```
 
-### NLP Processing Stack
-- **spaCy** - Text preprocessing and classification
-- **TextCategorizer** - Intent classification component
-- **Custom Model** - Trained intent classifier
-- **Confidence Scoring** - Intent confidence metrics
-
-### Audio Processing Stack
-- **PyAudio** - Low-level audio capture and playback
-- **struct** - Binary data handling for audio frames
-- **queue** - Thread-safe audio buffering
-
-### Cloud Services
-- **Google Cloud Speech API** - Real-time speech recognition
-- **Picovoice Console** - Wake word model management
+Then manager loads this file at initialization.
 
 ---
 
-## 🧩 Component and Feature List
+## PART 2 - smalltalk_manager.py Sketch
 
-### 1. IntentInference (`intent.py`)
-**Features:**
-- spaCy-based intent classification
-- Confidence scoring for all intents
-- Error handling and fallback mechanisms
-- Model validation and loading
-- Standalone testing capabilities
+Here’s a skeleton you can adapt (inside `backend/src/managers/smalltalk_manager.py`):
 
-**Key Methods:**
-- `__init__(model_dir)` - Load spaCy intent classifier
-- `predict_intent(text)` - Classify text and return intent results
-- Error handling for missing models or classification failures
-
-**Intent Categories:**
-- `todo_add` - Task and reminder management
-- `small_talk` - Conversational interactions
-- `journal_write` - Journal entry creation
-- `get_quote` - Inspirational quote requests
-- `unknown` - Unclassified utterances
-
-### 2. Enhanced VoicePipeline (`pipeline.py`)
-**New Features:**
-- Integrated intent classification
-- Enhanced transcript callback with intent results
-- Intent-aware processing workflow
-- Configurable intent model path
-- Intent result logging and monitoring
-
-**Enhanced Methods:**
-- `__init__()` - Added intent_model_path parameter
-- `on_transcript()` - Enhanced with intent processing
-- `create_voice_pipeline()` - Added intent configuration
-
-### 3. WakeWordDetector (`wakeword.py`)
-**Features:** (Unchanged from Phase 2)
-- Continuous background wake word detection
-- Custom wake word model support
-- Thread-safe operation with callbacks
-- Automatic resource management
-
-### 4. MicStream (`mic_stream.py`)
-**Features:** (Unchanged from Phase 2)
-- Buffered microphone audio streaming
-- Generator-based audio chunk delivery
-- Thread-safe audio capture
-- Configurable sample rates and chunk sizes
-
-### 5. GoogleSTTService (`stt.py`)
-**Features:** (Unchanged from Phase 2)
-- Real-time streaming speech recognition
-- Interim and final transcript handling
-- Configurable language support
-- Callback-based transcript delivery
-
----
-
-## ⚙️ Technical Specifications
-
-### Intent Classification Configuration
-- **Model Type:** spaCy TextCategorizer
-- **Training Data:** Custom intent dataset
-- **Confidence Threshold:** Configurable (default: 0.5)
-- **Fallback Intent:** "unknown" for low confidence
-- **Processing Time:** < 50ms per classification
-
-### Intent Categories and Examples
-- **todo_add**: "Add buy milk to my todo", "Remind me to take meds"
-- **small_talk**: "Hello, how are you?", "What's the weather like?"
-- **journal_write**: "I want to write in my journal", "Record my thoughts"
-- **get_quote**: "Give me a quote", "I need some inspiration"
-- **unknown**: Unrecognized or ambiguous utterances
-
-### Performance Characteristics
-- **Intent Classification Latency:** < 50ms
-- **Confidence Accuracy:** > 95% for trained intents
-- **Memory Usage:** ~100MB (includes spaCy model)
-- **CPU Usage:** Minimal during classification
-- **Model Size:** ~50MB spaCy model files
-
-### Integration Flow
-```
-Speech Transcript → Intent Classification → Intent Result → Downstream Processing
-```
-
----
-
-## 📦 Dependencies
-
-### Python Packages (requirements.txt)
-```
-google-cloud-speech>=2.21.0
-pyaudio>=0.2.11
-pvporcupine>=3.0.0
-spacy>=3.7.0
-```
-
-### System Dependencies
-- **Audio Drivers:** Windows Audio Session API (WASAPI)
-- **Network:** Internet connection for Google Cloud API
-- **Microphone:** USB or built-in microphone
-- **Python Environment:** spaCy language models
-
-### Configuration Files
-- **Google Cloud Credentials:** Service account JSON key
-- **Picovoice Access Key:** API access token
-- **Wake Word Model:** Custom .ppn file
-- **Intent Classifier:** spaCy model directory
-
----
-
-## 🎯 Phase 3 Implementation Summary
-
-### Intent Recognition Architecture
-
-This phase successfully integrated intent recognition into the voice pipeline, creating an intelligent routing system:
-
-```
-[Microphone Audio Stream — always on]
-     ↓
-WakeWord Detector listens (very light processing)
-     ↓ (when wake word triggers)
-Activate STT: MicStream → STT Service
-     ↓
-Get transcript (interim + final)
-     ↓
-Intent Classification: Transcript → Intent Result
-     ↓
-Route to appropriate downstream module
-     ↓
-Return to wake word listening
-```
-
-### Enhanced Workflow Summary
-
-1. **Initialization Phase**
-   - Load wake word detector with custom model
-   - Initialize STT service with Google Cloud credentials
-   - Load spaCy intent classification model
-   - Setup enhanced audio pipeline components
-
-2. **Continuous Operation**
-   - Wake word detector runs in background thread
-   - Minimal CPU usage during idle state
-   - Ready to detect wake word at any time
-
-3. **Wake Word Detection**
-   - Audio frames processed continuously
-   - Custom "WellBot" wake word triggers callback
-   - Pipeline transitions to STT mode
-
-4. **Speech-to-Text Processing**
-   - Microphone stream activated
-   - Audio chunks sent to Google Cloud Speech API
-   - Interim results displayed in real-time
-   - Final transcript delivered via callback
-
-5. **Intent Classification**
-   - Transcript processed through spaCy classifier
-   - Intent confidence scores calculated
-   - Intent result passed to downstream handlers
-
-6. **Downstream Processing**
-   - Intent-based routing to appropriate modules
-   - Todo management for `todo_add` intents
-   - Conversational AI for `small_talk` intents
-   - Journal system for `journal_write` intents
-   - Quote service for `get_quote` intents
-
-7. **Session Completion**
-   - STT processing completes
-   - Microphone stream stopped
-   - Pipeline returns to wake word listening
-   - Ready for next interaction
-
-### Key Achievements
-
-✅ **Intent Classification** - Accurate spaCy-based intent recognition
-✅ **Enhanced Pipeline** - Seamless integration with existing speech pipeline
-✅ **Confidence Scoring** - Reliable intent confidence metrics
-✅ **Error Handling** - Robust fallback mechanisms for classification failures
-✅ **Modular Design** - Clean separation between intent classification and pipeline
-✅ **Production Ready** - Scalable intent recognition suitable for deployment
-
----
-
-## 🧪 Expected Test Output
-
-### Running the Enhanced Pipeline
-```bash
-cd backend/src/speech_pipeline
-python pipeline.py
-```
-
-### Expected Console Output
-```
-19:35:41 | INFO     | stt              | STT service ready | Language: en-US | Rate: 16000Hz
-19:35:41 | INFO     | __main__         | Intent inference initialized with spaCy intent classifier
-19:35:41 | INFO     | __main__         | Pipeline initialized | Language: en-US | Intent: Enabled
-19:35:41 | INFO     | __main__         | Voice pipeline created successfully
-19:35:41 | INFO     | __main__         | Initializing wake word detector...
-19:35:41 | INFO     | wakeword         | Custom wake word: Well-Bot
-19:35:42 | INFO     | wakeword         | Wake word detector ready | Frame: 512 | Rate: 16000Hz
-19:35:42 | INFO     | __main__         | Pipeline active - listening for wake word
-Voice pipeline started!
-Say the wake word to activate STT
-Press Ctrl+C to stop
-19:35:42 | INFO     | wakeword         | Wake word detection active
-
-# When wake word is detected:
-19:35:45 | INFO     | wakeword         | Wake word detected
-19:35:45 | INFO     | __main__         | Wake word detected - starting STT
-19:35:45 | INFO     | __main__         | STT session started
-19:35:45 | INFO     | mic_stream       | Microphone stream ready | Rate: 16000Hz | Chunk: 1600
-19:35:45 | INFO     | mic_stream       | Microphone active
-19:35:45 | INFO     | __main__         | Microphone active - processing speech
-19:35:45 | INFO     | __main__         | Starting speech recognition
-19:35:45 | INFO     | stt              | Speech recognition started
-19:35:45 | INFO     | mic_stream       | Audio generator started
-
-# During speech recognition with intent classification:
-19:35:51 | INFO     | __main__         | Transcript: 'Can we make a to-do list?'
-19:35:51 | INFO     | __main__         | Intent: todo_add (confidence: 0.999)
-
-Final transcript received: 'Can we make a to-do list?'
-Intent detected: todo_add (confidence: 0.999)
-All scores: {'small_talk': 3.99e-05, 'todo_add': 0.999, 'journal_write': 0.0005, 'get_quote': 0.0001, 'unknown': 1.91e-05}
-Processing todo add request...
-
-19:35:51 | INFO     | __main__         | STT session completed
-19:35:51 | INFO     | mic_stream       | Microphone stopped
-19:35:51 | INFO     | __main__         | Returning to wake word listening
-```
-
-### Test Scenarios
-1. **Todo Intent** - "Add buy milk to my todo" → `todo_add` intent
-2. **Small Talk Intent** - "Hello, how are you?" → `small_talk` intent
-3. **Journal Intent** - "I want to write in my journal" → `journal_write` intent
-4. **Quote Intent** - "Give me a quote" → `get_quote` intent
-5. **Unknown Intent** - Ambiguous utterances → `unknown` intent
-6. **Confidence Testing** - Verify high confidence scores for clear intents
-
-### Intent Classification Examples
 ```python
-# High confidence todo intent
-"Can we make a to-do list?" → todo_add (0.999)
+import os
+import threading
+import time
+import re
+from typing import Optional
 
-# Conversational intent
-"Hello, how are you doing today?" → small_talk (0.987)
+from ._smalltalk_pipeline import SmallTalkSession
+from speech_pipeline.intent import IntentInference  # if you want to detect termination via intent or phrase
+import spacy
 
-# Journal writing intent
-"I want to record my thoughts" → journal_write (0.945)
+# For playing audio file
+from playsound import playsound  # simple option — install via pip
 
-# Quote request intent
-"Give me some inspiration" → get_quote (0.923)
+class SmallTalkManager:
+    def __init__(
+        self,
+        pipeline: SmallTalkSession,
+        llm_config_path: str,
+        nudge_audio_path: str
+    ):
+        self.pipeline = pipeline
 
-# Low confidence/unknown
-"Random gibberish text" → unknown (0.234)
+        # Load LLM / manager config
+        import json
+        with open(llm_config_path, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+        self.system_prompt = cfg.get("system_prompt")
+        self.termination_phrases = [p.lower() for p in cfg.get("termination_phrases", [])]
+        self.silence_timeout = cfg.get("silence_timeout_seconds", 30)
+        self.nudge_timeout = cfg.get("nudge_timeout_seconds", 15)
+        self.max_turns = cfg.get("max_turns", 20)
+
+        self.nudge_audio_path = nudge_audio_path
+
+        self._active = False
+        self._turn_count = 0
+        self._last_user_time = None
+        self._nudged = False
+
+        # Optionally an IntentRecognizer to detect “termination intent”
+        self.intent_inf = IntentInference(...)  # load model (if you want to use it)
+
+    def _strip_emojis(self, text: str) -> str:
+        # remove emojis via regex (basic)
+        return re.sub(r"[^\w\s.,!?'-]", "", text)
+
+    def _is_termination_phrase(self, user_text: str) -> bool:
+        low = user_text.lower().strip()
+        for phrase in self.termination_phrases:
+            if low == phrase or low.startswith(phrase + " "):
+                return True
+        # Optionally use intent classifier:
+        # res = self.intent_inf.predict_intent(user_text)
+        # if res["intent"] == "terminate_intent" and res["confidence"] > 0.8:
+        #     return True
+        return False
+
+    def _play_nudge(self):
+        try:
+            playsound(self.nudge_audio_path)
+        except Exception as e:
+            print("[SmallTalkManager] Error playing nudge audio:", e)
+
+    def _silence_watcher(self):
+        """
+        Runs in a background thread to monitor silence.
+        If no user input beyond silence_timeout, triggers nudge or termination.
+        """
+        while self._active:
+            if self._last_user_time is None:
+                time.sleep(1)
+                continue
+            elapsed = time.time() - self._last_user_time
+            if elapsed >= self.silence_timeout and not self._nudged:
+                # time to nudge
+                print("[SmallTalkManager] Nudging user (silence).")
+                self._play_nudge()
+                self._nudged = True
+                # after nudging, wait for nudge_timeout more
+            elif elapsed >= self.silence_timeout + self.nudge_timeout:
+                print("[SmallTalkManager] No response after nudge, ending session.")
+                self.stop()
+                break
+            time.sleep(1)
+
+    def start(self):
+        self._active = True
+        self._turn_count = 0
+        self._nudged = False
+        self._last_user_time = None
+
+        # Optionally set pipeline’s system prompt
+        # pipeline might accept initial prompt or you inject it via message list
+
+        # start silence watcher
+        watcher = threading.Thread(target=self._silence_watcher, daemon=True)
+        watcher.start()
+
+        print("[SmallTalkManager] Session start")
+        self.pipeline.start(loop_callback=self._on_turn_complete)
+
+        # pipeline.start is blocking (in existing code). If not, you need to wait or join.
+
+    def _on_turn_complete(self, user_text: str, assistant_reply: str):
+        """
+        Called after each turn (user → assistant).
+        """
+        self._turn_count += 1
+        self._last_user_time = time.time()
+        self._nudged = False  # reset nudge status after user speaks
+
+        # 1. Strip emojis from assistant text and maybe override
+        clean = self._strip_emojis(assistant_reply)
+        # You might want to replace text in pipeline’s storage or UI output
+
+        # 2. Check turn limit
+        if self._turn_count >= self.max_turns:
+            print("[SmallTalkManager] Reached max turns, ending.")
+            self.stop()
+
+    def stop(self):
+        if not self._active:
+            return
+        self._active = False
+        print("[SmallTalkManager] Stopping session.")
+        self.pipeline.stop()
+
 ```
 
-The enhanced pipeline now provides intelligent intent recognition, enabling the system to understand user intentions and route requests to appropriate downstream modules for processing.
+**Notes / how it plugs in**:
+
+* I assume `SmallTalkSession.start(...)` can accept a callback when a turn is completed. If your pipeline doesn’t support that yet, you should modify pipeline to allow reporting back (user_text, assistant_reply) each turn.
+* Manager’s `start()` triggers the pipeline; manager monitors for silent gaps and termination conditions.
+* Manager intervenes (nudge or stop) independently.
+* Clean the assistant replies by stripping emojis before passing to user / DB / UI.
+* The `IntentInference` is optional — I included stub for termination detection via intent if you later train a “termination_intent.” (INCLUDE THIS IN THE IMPLEMENTATION BUT WRAP AROUND A COMMENT)
+
+---
+
+## ✅ Summary & Next Steps
+
+* Yes, add `smalltalk_manager.py` that owns/wraps `pipeline_smalltalk`.
+* Pipeline plugs into manager (manager calls pipeline).
+* You’ll place your nudge audio in something like `backend/assets/nudge_audio/are_you_there.wav`.
+* You’ll add `backend/Config/LLM/llm_instructions.json` for system prompts, termination phrases, timeouts.
+* RAG logic should live in manager (or manager calls retrieval) rather than polluting pipeline.
+
+If you like, I can polish that manager skeleton into a fully working code file based on your existing pipeline signature (so it fits seamlessly). Do you want me to generate that ready-to-use file for you next?

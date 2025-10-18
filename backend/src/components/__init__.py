@@ -12,7 +12,7 @@ from .wakeword import WakeWordDetector, create_wake_word_detector
 from .mic_stream import MicStream
 from .stt import GoogleSTTService
 from .intent import IntentInference
-from .pipeline import VoicePipeline, create_voice_pipeline
+from ._pipeline_wakeword import VoicePipeline, create_voice_pipeline
 
 __all__ = [
     'WakeWordDetector',

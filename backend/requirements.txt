@@ -1,9 +1,14 @@
+# py -3.12 -m venv venv 
+#.\venv\Scripts\Activate.ps1
+# pip install -r backend/requirements.txt
+
+
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 python-socketio==5.10.0
 
 google-cloud-speech==2.21.0
-google-cloud-dialogflow-cx
+google-cloud-texttospeech==2.16.3
 
 picovoice==3.0.1
 pyaudio==0.2.14
@@ -12,3 +17,8 @@ numpy
 soundfile
 librosa
 pydub
+httpx>=0.24
+
+supabase>=2.6
+python-dotenv>=1.0
+playsound

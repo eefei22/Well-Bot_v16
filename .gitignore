@@ -7,7 +7,7 @@ archive/
 porcupine/
 
 # Configuration folder with sensitive data
-backend/Config/
+backend/config/
 
 # Python
 __pycache__/

@@ -257,8 +257,8 @@ if __name__ == "__main__":
     
     # Paths relative to this file
     current_dir = os.path.dirname(__file__)
-    access_key_path = os.path.join(current_dir, '..', '..', 'Config', 'WakeWord', 'PorcupineAccessKey.txt')
-    custom_keyword_path = os.path.join(current_dir, '..', '..', 'Config', 'WakeWord', 'WellBot_WakeWordModel.ppn')
+    access_key_path = os.path.join(current_dir, '..', '..', 'config', 'WakeWord', 'PorcupineAccessKey.txt')
+    custom_keyword_path = os.path.join(current_dir, '..', '..', 'config', 'WakeWord', 'WellBot_WakeWordModel.ppn')
     
     def on_wake_word_detected():
         """Callback function called when wake word is detected."""

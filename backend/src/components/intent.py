@@ -49,8 +49,8 @@ class IntentInference:
 if __name__ == "__main__":
     # Derive model path relative to this file
     curr_dir = os.path.dirname(__file__)
-    # e.g. go up to project root and into Config
-    model_path = os.path.abspath(os.path.join(curr_dir, "../../Config/intent_classifier"))
+    # e.g. go up to project root and into config
+    model_path = os.path.abspath(os.path.join(curr_dir, "../../config/intent_classifier"))
 
     infer = IntentInference(model_path)
 

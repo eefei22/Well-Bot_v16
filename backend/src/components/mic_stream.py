@@ -35,6 +35,8 @@ class MicStream:
         self._pa = None
         self._stream = None
         self._lock = threading.Lock()
+        self._muted = False
+        self._mute_lock = threading.Lock()
         
         logger.info(f"Microphone stream ready | Rate: {rate}Hz | Chunk: {chunk_size}")
     
@@ -77,7 +79,7 @@ class MicStream:
             Tuple indicating no output data and continue status
         """
         try:
-            if not self.closed:
+            if not self.closed and not self._muted:  # Add muted check
                 self._buff.put(in_data)
         except Exception as e:
             logger.error(f"Error in audio callback: {e}")
@@ -163,6 +165,28 @@ class MicStream:
     def get_buffer_size(self) -> int:
         """Get the current buffer size."""
         return self._buff.qsize()
+    
+    def mute(self):
+        """Mute the microphone (discard incoming audio)."""
+        with self._mute_lock:
+            self._muted = True
+            # Clear buffer to remove any captured audio
+            while not self._buff.empty():
+                try:
+                    self._buff.get_nowait()
+                except Empty:
+                    break
+            logger.info("Microphone muted")
+
+    def unmute(self):
+        """Unmute the microphone (resume capturing audio)."""
+        with self._mute_lock:
+            self._muted = False
+            logger.info("Microphone unmuted")
+
+    def is_muted(self) -> bool:
+        """Check if microphone is muted."""
+        return self._muted
 
 
 # Example usage and testing

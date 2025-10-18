@@ -12,7 +12,7 @@ from typing import Callable, Iterable, Optional, Dict, Any
 
 # Set up credentials
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.join(
-    os.path.dirname(__file__), '..', '..', 'Config', 'STT', 'GoogleCloud.json'
+    os.path.dirname(__file__), '..', '..', 'config', 'STT', 'GoogleCloud.json'
 )
 
 logger = logging.getLogger(__name__)
