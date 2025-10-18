@@ -109,6 +109,7 @@ class SmallTalkActivity:
             self.manager.start()
             
             logger.info("✅ SmallTalk activity started successfully")
+            logger.info(f"🔍 Manager active status: {self.manager.is_active()}")
             return True
             
         except Exception as e:
@@ -173,9 +174,11 @@ class SmallTalkActivity:
         Returns:
             True if activity completed successfully, False otherwise
         """
+        logger.info("🎬 SmallTalkActivity.run() - Starting activity execution")
         try:
             # Start the activity
             if not self.start():
+                logger.error("❌ SmallTalkActivity.run() - Failed to start activity")
                 return False
             
             # Wait for completion

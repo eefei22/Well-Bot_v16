@@ -88,6 +88,17 @@ class WellBotOrchestrator:
             return False
         return True
 
+    def _wait_for_stt_teardown(self, timeout_s: float = 3.0) -> bool:
+        """Wait briefly for the voice pipeline's STT session and wakeword engine to fully stop."""
+        start = time.time()
+        while time.time() - start < timeout_s:
+            stt_active = self.voice_pipeline.is_stt_active() if self.voice_pipeline else False
+            wake_active = self.voice_pipeline.is_active() if self.voice_pipeline else False
+            if not stt_active and not wake_active:
+                return True
+            time.sleep(0.05)
+        return False
+
     def _initialize_components(self) -> bool:
         """Initialize STT, voice pipeline, activities."""
         try:
@@ -102,8 +113,10 @@ class WellBotOrchestrator:
                 language="en-US",
                 on_wake_callback=self._on_wake_detected,
                 on_final_transcript=self._on_transcript_received,
-                intent_model_path=str(self.intent_model_path)
+                intent_model_path=str(self.intent_model_path),
+                preference_file_path=str(self.backend_dir / "config" / "user_preference" / "preference.json"),
             )
+
             logger.info("✓ Voice pipeline initialized")
 
             logger.info("Initializing SmallTalk activity…")
@@ -146,7 +159,9 @@ class WellBotOrchestrator:
 
             # Transition to activity
             self.state = SystemState.ACTIVITY_ACTIVE
-            self._route_to_activity(intent, transcript)
+        
+        # Release lock before calling _route_to_activity to avoid deadlock
+        self._route_to_activity(intent, transcript)
 
     def _route_to_activity(self, intent: str, transcript: str):
         """Route the user to proper activity based on intent."""
@@ -167,18 +182,72 @@ class WellBotOrchestrator:
     def _start_smalltalk_activity(self):
         """Start the smalltalk activity thread."""
         logger.info("💬 Starting SmallTalk activity…")
-
+        
+        # Safety check - ensure smalltalk_activity is initialized
+        if self.smalltalk_activity is None:
+            logger.error("❌ SmallTalk activity is None - cannot start")
+            return
+        
         with self._lock:
+            self.state = SystemState.ACTIVITY_ACTIVE
             self.current_activity = "smalltalk"
 
-        # Stop wake-word detection for the duration of the activity
+        # 1) Stop wake word pipeline first (this triggers Picovoice/Porcupine cleanup)
         if self.voice_pipeline:
-            self.voice_pipeline.stop()
-            logger.info("🔇 Wake word detection paused for activity")
+            logger.info("🔇 Pausing wake word pipeline before SmallTalk…")
+            try:
+                logger.info("🔍 Calling voice_pipeline.stop()...")
+                
+                # Force stop with timeout
+                import threading
+                stop_success = threading.Event()
+                
+                def force_stop():
+                    try:
+                        self.voice_pipeline.stop()
+                        stop_success.set()
+                    except Exception as e:
+                        logger.error(f"Error in stop thread: {e}")
+                        stop_success.set()
+                
+                stop_thread = threading.Thread(target=force_stop, daemon=True)
+                stop_thread.start()
+                
+                # Wait for stop to complete with timeout
+                if stop_success.wait(timeout=5.0):
+                    logger.info("✅ voice_pipeline.stop() completed successfully")
+                else:
+                    logger.warning("⚠️ voice_pipeline.stop() timed out after 5s - forcing continuation")
+                    
+            except Exception as e:
+                logger.warning(f"Ignoring error while stopping voice pipeline: {e}")
+                logger.info("⚠️ Continuing despite stop error...")
+
+        # 2) Wait until STT/wakeword fully release audio devices
+        if self.voice_pipeline:
+            logger.info("⏳ Waiting for STT teardown (mic/device release)…")
+            ok = self._wait_for_stt_teardown(timeout_s=3.0)
+            if not ok:
+                logger.warning("⚠️ STT teardown wait timed out; proceeding anyway")
+
+        # 3) Add a tiny guard delay (Windows USB audio sometimes needs this)
+        logger.info("⏱️ Adding guard delay for Windows audio device release...")
+        time.sleep(0.15)
+
+        # 4) Sanity check - verify device state before activity starts
+        logger.info(f"🔍 Device state check - Wake active: {self.voice_pipeline.is_active() if self.voice_pipeline else None} | "
+                   f"STT active: {self.voice_pipeline.is_stt_active() if self.voice_pipeline else None}")
 
         def run_activity():
             try:
-                logger.info("🚀 Running SmallTalk activity…")
+                # Extra visibility
+                logger.info("🚀 Launching SmallTalkActivity.run()…")
+                
+                # Safety check - ensure smalltalk_activity exists
+                if self.smalltalk_activity is None:
+                    logger.error("❌ SmallTalk activity is None - cannot run")
+                    return
+                
                 success = self.smalltalk_activity.run()
                 if success:
                     logger.info("✅ SmallTalk activity completed successfully")

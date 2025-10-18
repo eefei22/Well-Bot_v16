@@ -66,6 +66,20 @@ class SmallTalkManager:
         end_audio_relative = cfg.get("end_audio_path", "assets/end_EN_male.wav")
         self.end_audio_path = os.path.join(backend_dir, end_audio_relative)
         
+        # Startup audio path for activity start notification (load from preference.json)
+        preference_file_path = os.path.join(backend_dir, "config", "user_preference", "preference.json")
+        start_smalltalk_audio_relative = "assets/start_smalltalk_EN_male.wav"  # default
+        
+        try:
+            with open(preference_file_path, "r", encoding="utf-8") as f:
+                preferences = json.load(f)
+            start_smalltalk_audio_relative = preferences.get("start_smalltalk_audio_path", start_smalltalk_audio_relative)
+            logger.info(f"Loaded start SmallTalk audio path from preferences: {start_smalltalk_audio_relative}")
+        except Exception as e:
+            logger.warning(f"Could not load preferences, using default start SmallTalk audio path: {e}")
+        
+        self.start_smalltalk_audio_path = os.path.join(backend_dir, start_smalltalk_audio_relative)
+        
         # Debug logging for path resolution
         logger.info(f"Nudge audio config: {nudge_audio_relative}")
         logger.info(f"Backend directory: {backend_dir}")
@@ -77,6 +91,9 @@ class SmallTalkManager:
         logger.info(f"End audio config: {end_audio_relative}")
         logger.info(f"Resolved end path: {self.end_audio_path}")
         logger.info(f"End file exists: {os.path.exists(self.end_audio_path)}")
+        logger.info(f"Start SmallTalk audio config: {start_smalltalk_audio_relative}")
+        logger.info(f"Resolved start SmallTalk path: {self.start_smalltalk_audio_path}")
+        logger.info(f"Start SmallTalk file exists: {os.path.exists(self.start_smalltalk_audio_path)}")
 
         # Create the pipeline (which now handles LLM + TTS)
         self.pipeline = SmallTalkSession(
@@ -196,6 +213,35 @@ class SmallTalkManager:
             self._set_playback_state(False)  # End end audio playback
         except Exception as e:
             logger.error(f"Error playing end audio: {e}")
+            self._set_playback_state(False)  # Ensure state is reset on error
+
+        with self._mic_lock:
+            if self._current_mic and self._current_mic.is_running():
+                self._current_mic.unmute()
+
+    def _play_start_smalltalk_audio(self):
+        """Play the startup audio file when SmallTalk activity begins."""
+        if not playsound:
+            logger.warning("playsound not available - cannot play start SmallTalk audio")
+            return
+
+        # Check if start file exists
+        if not os.path.exists(self.start_smalltalk_audio_path):
+            logger.error(f"Start SmallTalk audio file not found: {self.start_smalltalk_audio_path}")
+            return
+
+        with self._mic_lock:
+            if self._current_mic and self._current_mic.is_running():
+                self._current_mic.mute()
+
+        try:
+            logger.info(f"Playing start SmallTalk audio: {self.start_smalltalk_audio_path}")
+            self._set_playback_state(True)  # Track start audio playback
+            playsound(self.start_smalltalk_audio_path)
+            logger.info("Start SmallTalk audio played successfully")
+            self._set_playback_state(False)  # End start audio playback
+        except Exception as e:
+            logger.error(f"Error playing start SmallTalk audio: {e}")
             self._set_playback_state(False)  # Ensure state is reset on error
 
         with self._mic_lock:
@@ -324,6 +370,9 @@ class SmallTalkManager:
         self._silence_watcher_thread.start()
 
         logger.info("Starting SmallTalk session")
+        
+        # Play startup audio to inform user that SmallTalk activity has begun
+        self._play_start_smalltalk_audio()
 
         def run():
             from ..supabase.database import start_conversation
