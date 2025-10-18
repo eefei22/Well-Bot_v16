@@ -256,6 +256,23 @@ class WellBotOrchestrator:
             except Exception as e:
                 logger.error(f"Error in SmallTalk activity: {e}", exc_info=True)
             finally:
+                # Cleanup activity resources before restarting wakeword
+                logger.info("🧹 Cleaning up SmallTalk activity resources...")
+                if self.smalltalk_activity:
+                    try:
+                        self.smalltalk_activity.cleanup()
+                        logger.info("✅ SmallTalk activity cleanup completed")
+                        
+                        # Re-initialize for next run
+                        logger.info("🔄 Re-initializing SmallTalk activity for next run...")
+                        if not self.smalltalk_activity.reinitialize():
+                            logger.error("❌ Failed to re-initialize SmallTalk activity")
+                        else:
+                            logger.info("✅ SmallTalk activity re-initialized successfully")
+                            
+                    except Exception as e:
+                        logger.warning(f"Error during activity cleanup/reinit: {e}")
+                
                 # When activity ends, restart wake word detection
                 self._restart_wakeword_detection()
 
@@ -270,17 +287,61 @@ class WellBotOrchestrator:
     def _restart_wakeword_detection(self):
         """Restart wake word detection after an activity ends."""
         logger.info("🔄 Restarting wake word detection…")
+        
+        # 1) Ensure complete cleanup of previous pipeline
+        if self.voice_pipeline:
+            logger.info("🧹 Performing complete pipeline cleanup...")
+            try:
+                # Stop the pipeline completely
+                self.voice_pipeline.stop()
+                
+                # Wait for complete teardown
+                logger.info("⏳ Waiting for complete pipeline teardown...")
+                ok = self._wait_for_stt_teardown(timeout_s=5.0)
+                if not ok:
+                    logger.warning("⚠️ Pipeline teardown wait timed out")
+                
+                # Cleanup resources
+                self.voice_pipeline.cleanup()
+                logger.info("✅ Pipeline cleanup completed")
+                
+                # Add guard delay for Windows audio device release
+                time.sleep(0.2)
+                
+            except Exception as e:
+                logger.warning(f"Error during pipeline cleanup: {e}")
+        
+        # 2) Recreate the pipeline fresh to avoid resource conflicts
+        logger.info("🔄 Recreating voice pipeline fresh...")
+        try:
+            self.voice_pipeline = create_voice_pipeline(
+                access_key_file=str(self.access_key_path),
+                custom_keyword_file=str(self.wakeword_model_path),
+                language="en-US",
+                on_wake_callback=self._on_wake_detected,
+                on_final_transcript=self._on_transcript_received,
+                intent_model_path=str(self.intent_model_path),
+                preference_file_path=str(self.backend_dir / "config" / "user_preference" / "preference.json"),
+            )
+            logger.info("✅ Fresh voice pipeline created")
+        except Exception as e:
+            logger.error(f"Failed to recreate voice pipeline: {e}", exc_info=True)
+            with self._lock:
+                self.state = SystemState.SHUTTING_DOWN
+            return
+        
+        # 3) Start the fresh pipeline
         with self._lock:
             self.state = SystemState.LISTENING
             self.current_activity = None
-        if self.voice_pipeline:
-            try:
-                self.voice_pipeline.start()
-                logger.info("🎤 Wake word detection restarted – LISTENING for wake word")
-            except Exception as e:
-                logger.error(f"Failed to restart wake word pipeline: {e}", exc_info=True)
-                with self._lock:
-                    self.state = SystemState.SHUTTING_DOWN
+            
+        try:
+            self.voice_pipeline.start()
+            logger.info("🎤 Wake word detection restarted – LISTENING for wake word")
+        except Exception as e:
+            logger.error(f"Failed to start fresh wake word pipeline: {e}", exc_info=True)
+            with self._lock:
+                self.state = SystemState.SHUTTING_DOWN
 
     def start(self) -> bool:
         """Start the entire orchestration system."""

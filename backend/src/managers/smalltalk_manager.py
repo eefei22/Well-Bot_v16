@@ -1,6 +1,7 @@
 # backend/src/managers/smalltalk_manager.py
 
 import os
+import sys
 import threading
 import time
 import re
@@ -15,12 +16,22 @@ from ..components.stt import GoogleSTTService
 
 import pyaudio
 
-# For playing nudge audio
+# For playing nudge audio - use pydub as primary, PowerShell as fallback
+try:
+    from pydub import AudioSegment
+    from pydub.playback import play
+    PYDUB_AVAILABLE = True
+except ImportError:
+    PYDUB_AVAILABLE = False
+    logging.warning("pydub not available - will use PowerShell fallback for audio")
+
 try:
     from playsound import playsound
+    PLAYSOUND_AVAILABLE = True
 except ImportError:
     playsound = None
-    logging.warning("playsound not available - nudge audio will not work")
+    PLAYSOUND_AVAILABLE = False
+    logging.warning("playsound not available - using alternative audio methods")
 
 logger = logging.getLogger(__name__)
 
@@ -131,16 +142,59 @@ class SmallTalkManager:
     def _strip_emojis(self, text: str) -> str:
         return re.sub(r"[^\w\s.,!?'-]", "", text)
 
+    def _play_audio_file(self, audio_path: str) -> bool:
+        """
+        Play an audio file using the best available method.
+        Returns True if successful, False otherwise.
+        """
+        if not os.path.exists(audio_path):
+            logger.error(f"Audio file not found: {audio_path}")
+            return False
+
+        # Method 1: Try pydub (most reliable)
+        if PYDUB_AVAILABLE:
+            try:
+                logger.debug(f"Playing audio with pydub: {audio_path}")
+                audio = AudioSegment.from_wav(audio_path)
+                play(audio)
+                logger.debug("Audio played successfully with pydub")
+                return True
+            except Exception as e:
+                logger.warning(f"pydub playback failed: {e}, trying fallback")
+
+        # Method 2: Try PowerShell (Windows-specific fallback)
+        if sys.platform == "win32":
+            try:
+                import subprocess
+                logger.debug(f"Playing audio with PowerShell: {audio_path}")
+                # Use PowerShell's Media.SoundPlayer - more reliable than playsound
+                ps_cmd = f'powershell -c "(New-Object Media.SoundPlayer \'{audio_path}\').PlaySync()"'
+                result = subprocess.run(ps_cmd, shell=True, capture_output=True, text=True, timeout=10)
+                
+                if result.returncode == 0:
+                    logger.debug("Audio played successfully with PowerShell")
+                    return True
+                else:
+                    logger.warning(f"PowerShell playback failed: {result.stderr}")
+            except Exception as e:
+                logger.warning(f"PowerShell playback error: {e}")
+
+        # Method 3: Try playsound as last resort (with path normalization)
+        if PLAYSOUND_AVAILABLE:
+            try:
+                logger.debug(f"Playing audio with playsound: {audio_path}")
+                # Normalize the path to use consistent separators
+                normalized_path = os.path.normpath(audio_path)
+                playsound(normalized_path)
+                logger.debug("Audio played successfully with playsound")
+                return True
+            except Exception as e:
+                logger.warning(f"playsound playback failed: {e}")
+
+        logger.error(f"All audio playback methods failed for: {audio_path}")
+        return False
+
     def _play_nudge(self):
-        if not playsound:
-            logger.warning("playsound not available - cannot nudge")
-            return
-
-        # Check if nudge file exists
-        if not os.path.exists(self.nudge_audio_path):
-            logger.error(f"Nudge audio file not found: {self.nudge_audio_path}")
-            return
-
         with self._mic_lock:
             if self._current_mic and self._current_mic.is_running():
                 self._current_mic.mute()
@@ -149,8 +203,11 @@ class SmallTalkManager:
         try:
             logger.info(f"Playing nudge audio: {self.nudge_audio_path}")
             self._set_playback_state(True)  # Track nudge audio playback
-            playsound(self.nudge_audio_path)
-            logger.info("Nudge audio played successfully")
+            success = self._play_audio_file(self.nudge_audio_path)
+            if success:
+                logger.info("Nudge audio played successfully")
+            else:
+                logger.error("Failed to play nudge audio")
             self._set_playback_state(False)  # End nudge audio playback
         except Exception as e:
             logger.error(f"Error playing nudge: {e}")
@@ -163,15 +220,6 @@ class SmallTalkManager:
 
     def _play_termination_audio(self):
         """Play the termination audio file when session ends due to timeout."""
-        if not playsound:
-            logger.warning("playsound not available - cannot play termination audio")
-            return
-
-        # Check if termination file exists
-        if not os.path.exists(self.termination_audio_path):
-            logger.error(f"Termination audio file not found: {self.termination_audio_path}")
-            return
-
         with self._mic_lock:
             if self._current_mic and self._current_mic.is_running():
                 self._current_mic.mute()
@@ -179,8 +227,11 @@ class SmallTalkManager:
         try:
             logger.info(f"Playing termination audio: {self.termination_audio_path}")
             self._set_playback_state(True)  # Track termination audio playback
-            playsound(self.termination_audio_path)
-            logger.info("Termination audio played successfully")
+            success = self._play_audio_file(self.termination_audio_path)
+            if success:
+                logger.info("Termination audio played successfully")
+            else:
+                logger.error("Failed to play termination audio")
             self._set_playback_state(False)  # End termination audio playback
         except Exception as e:
             logger.error(f"Error playing termination audio: {e}")
@@ -192,15 +243,6 @@ class SmallTalkManager:
 
     def _play_end_audio(self):
         """Play the end audio file when session ends due to user command."""
-        if not playsound:
-            logger.warning("playsound not available - cannot play end audio")
-            return
-
-        # Check if end file exists
-        if not os.path.exists(self.end_audio_path):
-            logger.error(f"End audio file not found: {self.end_audio_path}")
-            return
-
         with self._mic_lock:
             if self._current_mic and self._current_mic.is_running():
                 self._current_mic.mute()
@@ -208,8 +250,11 @@ class SmallTalkManager:
         try:
             logger.info(f"Playing end audio: {self.end_audio_path}")
             self._set_playback_state(True)  # Track end audio playback
-            playsound(self.end_audio_path)
-            logger.info("End audio played successfully")
+            success = self._play_audio_file(self.end_audio_path)
+            if success:
+                logger.info("End audio played successfully")
+            else:
+                logger.error("Failed to play end audio")
             self._set_playback_state(False)  # End end audio playback
         except Exception as e:
             logger.error(f"Error playing end audio: {e}")
@@ -221,15 +266,6 @@ class SmallTalkManager:
 
     def _play_start_smalltalk_audio(self):
         """Play the startup audio file when SmallTalk activity begins."""
-        if not playsound:
-            logger.warning("playsound not available - cannot play start SmallTalk audio")
-            return
-
-        # Check if start file exists
-        if not os.path.exists(self.start_smalltalk_audio_path):
-            logger.error(f"Start SmallTalk audio file not found: {self.start_smalltalk_audio_path}")
-            return
-
         with self._mic_lock:
             if self._current_mic and self._current_mic.is_running():
                 self._current_mic.mute()
@@ -237,8 +273,11 @@ class SmallTalkManager:
         try:
             logger.info(f"Playing start SmallTalk audio: {self.start_smalltalk_audio_path}")
             self._set_playback_state(True)  # Track start audio playback
-            playsound(self.start_smalltalk_audio_path)
-            logger.info("Start SmallTalk audio played successfully")
+            success = self._play_audio_file(self.start_smalltalk_audio_path)
+            if success:
+                logger.info("Start SmallTalk audio played successfully")
+            else:
+                logger.error("Failed to play start SmallTalk audio")
             self._set_playback_state(False)  # End start audio playback
         except Exception as e:
             logger.error(f"Error playing start SmallTalk audio: {e}")

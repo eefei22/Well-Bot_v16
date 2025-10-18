@@ -9,7 +9,23 @@ import time
 import logging
 import json
 from typing import Optional, Callable
-from playsound import playsound
+
+# For playing wakeword audio - use pydub as primary, PowerShell as fallback
+try:
+    from pydub import AudioSegment
+    from pydub.playback import play
+    PYDUB_AVAILABLE = True
+except ImportError:
+    PYDUB_AVAILABLE = False
+    logging.warning("pydub not available - will use PowerShell fallback for audio")
+
+try:
+    from playsound import playsound
+    PLAYSOUND_AVAILABLE = True
+except ImportError:
+    playsound = None
+    PLAYSOUND_AVAILABLE = False
+    logging.warning("playsound not available - using alternative audio methods")
 
 # Add the backend directory to the path to import modules
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -79,6 +95,58 @@ class VoicePipeline:
 
         logger.info(f"Pipeline initialized | Language: {lang} | Intent: {'Yes' if self.intent_inference else 'No'} | Wakeword Audio: {'Yes' if self.wakeword_audio_path else 'No'}")
 
+    def _play_audio_file(self, audio_path: str) -> bool:
+        """
+        Play an audio file using the best available method.
+        Returns True if successful, False otherwise.
+        """
+        if not os.path.exists(audio_path):
+            logger.error(f"Audio file not found: {audio_path}")
+            return False
+
+        # Method 1: Try pydub (most reliable)
+        if PYDUB_AVAILABLE:
+            try:
+                logger.debug(f"Playing audio with pydub: {audio_path}")
+                audio = AudioSegment.from_wav(audio_path)
+                play(audio)
+                logger.debug("Audio played successfully with pydub")
+                return True
+            except Exception as e:
+                logger.warning(f"pydub playback failed: {e}, trying fallback")
+
+        # Method 2: Try PowerShell (Windows-specific fallback)
+        if sys.platform == "win32":
+            try:
+                import subprocess
+                logger.debug(f"Playing audio with PowerShell: {audio_path}")
+                # Use PowerShell's Media.SoundPlayer - more reliable than playsound
+                ps_cmd = f'powershell -c "(New-Object Media.SoundPlayer \'{audio_path}\').PlaySync()"'
+                result = subprocess.run(ps_cmd, shell=True, capture_output=True, text=True, timeout=10)
+                
+                if result.returncode == 0:
+                    logger.debug("Audio played successfully with PowerShell")
+                    return True
+                else:
+                    logger.warning(f"PowerShell playback failed: {result.stderr}")
+            except Exception as e:
+                logger.warning(f"PowerShell playback error: {e}")
+
+        # Method 3: Try playsound as last resort (with path normalization)
+        if PLAYSOUND_AVAILABLE:
+            try:
+                logger.debug(f"Playing audio with playsound: {audio_path}")
+                # Normalize the path to use consistent separators
+                normalized_path = os.path.normpath(audio_path)
+                playsound(normalized_path)
+                logger.debug("Audio played successfully with playsound")
+                return True
+            except Exception as e:
+                logger.warning(f"playsound playback failed: {e}")
+
+        logger.error(f"All audio playback methods failed for: {audio_path}")
+        return False
+
     def _load_wakeword_audio_path(self, preference_file_path: str) -> Optional[str]:
         try:
             with open(preference_file_path, 'r') as f:
@@ -109,8 +177,11 @@ class VoicePipeline:
         if self.wakeword_audio_path:
             try:
                 logger.info(f"Playing wakeword feedback audio: {self.wakeword_audio_path}")
-                playsound(self.wakeword_audio_path, block=True)
-                logger.info("Wakeword feedback audio done")
+                success = self._play_audio_file(self.wakeword_audio_path)
+                if success:
+                    logger.info("Wakeword feedback audio played successfully")
+                else:
+                    logger.error("Failed to play wakeword feedback audio")
             except Exception as e:
                 logger.error(f"Error playing wakeword audio: {e}")
         else:

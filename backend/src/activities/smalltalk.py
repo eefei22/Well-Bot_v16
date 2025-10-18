@@ -101,6 +101,11 @@ class SmallTalkActivity:
             logger.warning("Activity already active")
             return False
         
+        # Safety check - ensure manager exists
+        if not self.manager:
+            logger.error("❌ Manager is None - cannot start activity")
+            return False
+        
         try:
             logger.info("🚀 Starting SmallTalk activity...")
             self._active = True
@@ -130,6 +135,48 @@ class SmallTalkActivity:
             self.manager.stop()
         
         logger.info("✅ SmallTalk activity stopped")
+    
+    def cleanup(self):
+        """Complete cleanup of all resources"""
+        logger.info("🧹 Cleaning up SmallTalk activity resources...")
+        
+        # Stop if still active
+        if self._active:
+            self.stop()
+        
+        # Cleanup manager resources
+        if self.manager:
+            try:
+                logger.info("🧹 Cleaning up manager audio resources...")
+                # The manager's cleanup is handled in its destructor
+                self.manager = None
+            except Exception as e:
+                logger.warning(f"Error during manager cleanup: {e}")
+        
+        # Cleanup STT service
+        if self.stt_service:
+            try:
+                logger.info("🧹 Cleaning up STT service...")
+                # STT service cleanup is handled automatically
+                self.stt_service = None
+            except Exception as e:
+                logger.warning(f"Error during STT cleanup: {e}")
+        
+        # Reset initialization state
+        self._initialized = False
+        
+        logger.info("✅ SmallTalk activity cleanup completed")
+    
+    def reinitialize(self) -> bool:
+        """Re-initialize the activity for subsequent runs"""
+        logger.info("🔄 Re-initializing SmallTalk activity...")
+        
+        # Reset state
+        self._active = False
+        self._initialized = False
+        
+        # Re-initialize components
+        return self.initialize()
     
     def is_active(self) -> bool:
         """Check if the activity is currently active"""
