@@ -10,6 +10,7 @@ import sys
 import logging
 import threading
 import time
+import json
 from pathlib import Path
 from enum import Enum
 from typing import Optional, Dict, Any
@@ -54,6 +55,7 @@ class WellBotOrchestrator:
         self.access_key_path      = self.backend_dir / "config" / "WakeWord" / "PorcupineAccessKey.txt"
         self.wakeword_model_path  = self.backend_dir / "config" / "WakeWord" / "WellBot_WakeWordModel.ppn"
         self.intent_model_path    = self.backend_dir / "config" / "WakeWord" / "intents.json"
+        self.wakeword_config_path = self.backend_dir / "config" / "WakeWord" / "wakeword_config.json"
         self.deepseek_config_path = self.backend_dir / "config" / "LLM" / "deepseek.json"
         self.llm_config_path      = self.backend_dir / "config" / "LLM" / "smalltalk_instructions.json"
 
@@ -61,6 +63,15 @@ class WellBotOrchestrator:
         self.voice_pipeline: Optional[VoicePipeline] = None
         self.smalltalk_activity: Optional[SmallTalkActivity] = None
         self.stt_service: Optional[GoogleSTTService] = None
+
+        # Silence monitoring for wakeword
+        self._silence_timer: Optional[threading.Timer] = None
+        self._silence_lock = threading.Lock()
+        self.wakeword_config: Optional[dict] = None
+        
+        # Mic management for audio playback
+        self._current_mic = None
+        self._mic_lock = threading.Lock()
 
         self.current_activity: Optional[str] = None
         self._activity_thread: Optional[threading.Thread] = None
@@ -73,6 +84,7 @@ class WellBotOrchestrator:
             self.access_key_path,
             self.wakeword_model_path,
             self.intent_model_path,
+            self.wakeword_config_path,
             self.deepseek_config_path,
             self.llm_config_path
         ]
@@ -114,6 +126,7 @@ class WellBotOrchestrator:
                 on_final_transcript=self._on_transcript_received,
                 intent_config_path=str(self.intent_model_path),
                 preference_file_path=str(self.backend_dir / "config" / "user_preference" / "preference.json"),
+                stt_timeout_s=self.wakeword_config.get("stt_timeout_s", 8.0)
             )
 
             logger.info("✓ Voice pipeline initialized")
@@ -137,9 +150,21 @@ class WellBotOrchestrator:
                 return
             logger.info("🎤 Wake word detected – transitioning to PROCESSING state")
             self.state = SystemState.PROCESSING
+        
+        # Track current microphone for muting during audio playback
+        if self.voice_pipeline and hasattr(self.voice_pipeline, '_stt_thread'):
+            # The microphone is managed by the voice pipeline's STT thread
+            # We'll get access to it through the pipeline's internal state
+            pass
+        
+        # Start silence monitoring after wake word detection
+        self._start_wakeword_silence_monitoring()
 
     def _on_transcript_received(self, transcript: str, intent_result: Optional[Dict[str, Any]]):
         """Callback when final transcript and intent are available."""
+        # Stop silence monitoring since we received a transcript
+        self._stop_wakeword_silence_monitoring()
+        
         with self._lock:
             if self.state != SystemState.PROCESSING:
                 logger.warning(f"Transcript received but system in state {self.state.value}, ignoring")
@@ -169,23 +194,23 @@ class WellBotOrchestrator:
         if intent == "smalltalk":
             self._start_smalltalk_activity()
         elif intent == "journaling":
-            logger.info("📖 Journaling intent detected – not implemented yet; falling back to smalltalk")
-            self._fallback_to_smalltalk()
+            logger.info("📖 Journaling intent detected – not implemented yet")
+            self._handle_activity_unavailable("journaling")
         elif intent == "meditation":
-            logger.info("🧘 Meditation intent detected – not implemented yet; falling back to smalltalk")
-            self._fallback_to_smalltalk()
+            logger.info("🧘 Meditation intent detected – not implemented yet")
+            self._handle_activity_unavailable("meditation")
         elif intent == "quote":
-            logger.info("💭 Quote intent detected – not implemented yet; falling back to smalltalk")
-            self._fallback_to_smalltalk()
+            logger.info("💭 Quote intent detected – not implemented yet")
+            self._handle_activity_unavailable("quote")
         elif intent == "gratitude":
-            logger.info("🙏 Gratitude intent detected – not implemented yet; falling back to smalltalk")
-            self._fallback_to_smalltalk()
+            logger.info("🙏 Gratitude intent detected – not implemented yet")
+            self._handle_activity_unavailable("gratitude")
         elif intent == "termination":
             logger.info("👋 Termination intent detected – ending session")
             self._handle_termination()
         else:
-            logger.info(f"❓ Unknown intent '{intent}' – falling back to smalltalk")
-            self._fallback_to_smalltalk()
+            logger.info(f"❓ Unknown intent '{intent}' – prompting user to repeat")
+            self._handle_unknown_intent(transcript)
 
     def _start_smalltalk_activity(self):
         """Start the smalltalk activity thread."""
@@ -299,6 +324,139 @@ class WellBotOrchestrator:
             self.state = SystemState.SHUTTING_DOWN
         self.stop()
 
+    def _start_wakeword_silence_monitoring(self):
+        """Start monitoring silence after wake word detection"""
+        with self._silence_lock:
+            if self._silence_timer:
+                self._silence_timer.cancel()
+            
+            nudge_timeout = self.wakeword_config.get("nudge_timeout_seconds", 15)
+            self._silence_timer = threading.Timer(nudge_timeout, self._handle_wakeword_nudge)
+            self._silence_timer.daemon = True
+            self._silence_timer.start()
+            logger.info(f"Started silence monitoring - nudge in {nudge_timeout}s")
+
+    def _handle_wakeword_nudge(self):
+        """Handle nudge when user is silent after wake word"""
+        logger.info("User silent after wake word, playing nudge audio")
+        
+        # Stop STT session to mute microphone before playing audio
+        self._stop_stt_session()
+        
+        # Play nudge audio
+        preferences = self._load_preferences()
+        nudge_audio_path = self.backend_dir / preferences.get("nudge_audio_path", "assets/ENGLISH/inactivity_nudge_EN_male.wav")
+        self._play_audio_blocking(nudge_audio_path)
+        
+        # Start final timeout timer
+        with self._silence_lock:
+            silence_timeout = self.wakeword_config.get("silence_timeout_seconds", 30)
+            remaining_time = silence_timeout - self.wakeword_config.get("nudge_timeout_seconds", 15)
+            self._silence_timer = threading.Timer(remaining_time, self._handle_wakeword_timeout)
+            self._silence_timer.daemon = True
+            self._silence_timer.start()
+            logger.info(f"Started final timeout timer - timeout in {remaining_time}s")
+
+    def _handle_wakeword_timeout(self):
+        """Handle final timeout after wake word with no user speech"""
+        logger.info("User timeout after wake word, playing termination audio and restarting wake word")
+        
+        # Stop STT session to mute microphone before playing audio
+        self._stop_stt_session()
+        
+        # Play termination audio
+        preferences = self._load_preferences()
+        termination_audio_path = self.backend_dir / preferences.get("termination_audio_path", "assets/ENGLISH/termination_EN_male.wav")
+        self._play_audio_blocking(termination_audio_path)
+        
+        # Reset state and restart wake word detection
+        with self._lock:
+            self.state = SystemState.LISTENING
+        
+        # Restart the wakeword pipeline
+        logger.info("Restarting wake word detection after timeout")
+        self._restart_wakeword_detection()
+
+    def _stop_wakeword_silence_monitoring(self):
+        """Stop silence monitoring"""
+        with self._silence_lock:
+            if self._silence_timer:
+                self._silence_timer.cancel()
+                self._silence_timer = None
+                logger.info("Stopped silence monitoring")
+
+    def _play_audio_blocking(self, audio_path: Path):
+        """Play audio file synchronously"""
+        try:
+            if audio_path.exists():
+                # Use same audio playback method as wakeword pipeline
+                import subprocess
+                if sys.platform == "win32":
+                    ps_cmd = f'powershell -c "(New-Object Media.SoundPlayer \'{audio_path}\').PlaySync()"'
+                    subprocess.run(ps_cmd, shell=True, capture_output=True, timeout=10)
+                    logger.info(f"Played audio: {audio_path}")
+                else:
+                    logger.warning("Audio playback only supported on Windows")
+            else:
+                logger.error(f"Audio file not found: {audio_path}")
+        except Exception as e:
+            logger.error(f"Failed to play audio: {e}")
+
+    def _stop_stt_session(self):
+        """Stop the current STT session to mute microphone"""
+        try:
+            if self.voice_pipeline and hasattr(self.voice_pipeline, '_stt_thread'):
+                # The STT session is running in a separate thread
+                # We can't directly stop it, but we can wait for it to complete
+                # The STT session will timeout naturally after stt_timeout_s
+                logger.debug("STT session will timeout naturally, microphone will be muted")
+        except Exception as e:
+            logger.warning(f"Failed to stop STT session: {e}")
+
+    def _load_preferences(self) -> dict:
+        """Load user preferences"""
+        preference_path = self.backend_dir / "config" / "user_preference" / "preference.json"
+        with open(preference_path, "r") as f:
+            return json.load(f)
+
+    def _handle_unknown_intent(self, transcript: str):
+        """Handle unknown/unrecognized intent with audio feedback"""
+        logger.info(f"Handling unknown intent for transcript: '{transcript}'")
+        
+        # Stop any ongoing STT session
+        self._stop_stt_session()
+        
+        # Play prompt repeat audio
+        preferences = self._load_preferences()
+        prompt_repeat_path = self.backend_dir / preferences.get("prompt_repeat_path", "assets/ENGLISH/prompt_repeat_EN_male.wav")
+        self._play_audio_blocking(prompt_repeat_path)
+        
+        # Reset state and restart wakeword detection (clean restart)
+        with self._lock:
+            self.state = SystemState.LISTENING
+        
+        logger.info("Restarting wakeword detection after unknown intent")
+        self._restart_wakeword_detection()
+
+    def _handle_activity_unavailable(self, activity_name: str):
+        """Handle unavailable activity with audio feedback"""
+        logger.info(f"Handling unavailable activity: {activity_name}")
+        
+        # Stop any ongoing STT session
+        self._stop_stt_session()
+        
+        # Play activity unavailable audio
+        preferences = self._load_preferences()
+        unavailable_path = self.backend_dir / preferences.get("activity_unavailable_path", "assets/ENGLISH/activity_unavailable_EN_male.wav")
+        self._play_audio_blocking(unavailable_path)
+        
+        # Reset state and restart wakeword detection (clean restart)
+        with self._lock:
+            self.state = SystemState.LISTENING
+        
+        logger.info("Restarting wakeword detection after unavailable activity")
+        self._restart_wakeword_detection()
+
     def _restart_wakeword_detection(self):
         """Restart wake word detection after an activity ends."""
         logger.info("🔄 Restarting wake word detection…")
@@ -337,6 +495,7 @@ class WellBotOrchestrator:
                 on_final_transcript=self._on_transcript_received,
                 intent_config_path=str(self.intent_model_path),
                 preference_file_path=str(self.backend_dir / "config" / "user_preference" / "preference.json"),
+                stt_timeout_s=self.wakeword_config.get("stt_timeout_s", 8.0)
             )
             logger.info("✅ Fresh voice pipeline created")
         except Exception as e:
@@ -364,6 +523,15 @@ class WellBotOrchestrator:
 
         if not self._validate_config_files():
             logger.error("Configuration validation failed")
+            return False
+
+        # Load wakeword configuration
+        try:
+            with open(self.wakeword_config_path, "r") as f:
+                self.wakeword_config = json.load(f)
+            logger.info("✓ Wakeword configuration loaded")
+        except Exception as e:
+            logger.error(f"Failed to load wakeword config: {e}")
             return False
 
         if not self._initialize_components():
