@@ -22,7 +22,6 @@ sys.path.append(str(backend_dir))
 from src.components._pipeline_wakeword import create_voice_pipeline, VoicePipeline
 from src.components.stt import GoogleSTTService
 from src.components.mic_stream import MicStream
-from src.components.intent import IntentInference
 from src.activities.smalltalk import SmallTalkActivity
 
 # Configure logging
@@ -54,7 +53,7 @@ class WellBotOrchestrator:
         self.backend_dir = backend_dir
         self.access_key_path      = self.backend_dir / "config" / "WakeWord" / "PorcupineAccessKey.txt"
         self.wakeword_model_path  = self.backend_dir / "config" / "WakeWord" / "WellBot_WakeWordModel.ppn"
-        self.intent_model_path    = self.backend_dir / "config" / "intent_classifier"
+        self.intent_model_path    = self.backend_dir / "config" / "WakeWord" / "intents.json"
         self.deepseek_config_path = self.backend_dir / "config" / "LLM" / "deepseek.json"
         self.llm_config_path      = self.backend_dir / "config" / "LLM" / "smalltalk_instructions.json"
 
@@ -113,7 +112,7 @@ class WellBotOrchestrator:
                 language="en-US",
                 on_wake_callback=self._on_wake_detected,
                 on_final_transcript=self._on_transcript_received,
-                intent_model_path=str(self.intent_model_path),
+                intent_config_path=str(self.intent_model_path),
                 preference_file_path=str(self.backend_dir / "config" / "user_preference" / "preference.json"),
             )
 
@@ -167,14 +166,23 @@ class WellBotOrchestrator:
         """Route the user to proper activity based on intent."""
         logger.info(f"🔄 Routing to activity: {intent}")
 
-        if intent == "small_talk":
+        if intent == "smalltalk":
             self._start_smalltalk_activity()
-        elif intent == "todo_add":
-            logger.info("📝 Todo-Add intent detected – not implemented yet; falling back to smalltalk")
+        elif intent == "journaling":
+            logger.info("📖 Journaling intent detected – not implemented yet; falling back to smalltalk")
             self._fallback_to_smalltalk()
-        elif intent == "journal_write":
-            logger.info("📖 Journal-Write intent detected – not implemented yet; falling back to smalltalk")
+        elif intent == "meditation":
+            logger.info("🧘 Meditation intent detected – not implemented yet; falling back to smalltalk")
             self._fallback_to_smalltalk()
+        elif intent == "quote":
+            logger.info("💭 Quote intent detected – not implemented yet; falling back to smalltalk")
+            self._fallback_to_smalltalk()
+        elif intent == "gratitude":
+            logger.info("🙏 Gratitude intent detected – not implemented yet; falling back to smalltalk")
+            self._fallback_to_smalltalk()
+        elif intent == "termination":
+            logger.info("👋 Termination intent detected – ending session")
+            self._handle_termination()
         else:
             logger.info(f"❓ Unknown intent '{intent}' – falling back to smalltalk")
             self._fallback_to_smalltalk()
@@ -283,6 +291,13 @@ class WellBotOrchestrator:
         """Fallback to smalltalk in absence of specific activity."""
         logger.info("🔄 Falling back to SmallTalk…")
         self._start_smalltalk_activity()
+    
+    def _handle_termination(self):
+        """Handle termination intent by shutting down the system."""
+        logger.info("👋 Termination intent received – shutting down system")
+        with self._lock:
+            self.state = SystemState.SHUTTING_DOWN
+        self.stop()
 
     def _restart_wakeword_detection(self):
         """Restart wake word detection after an activity ends."""
@@ -320,7 +335,7 @@ class WellBotOrchestrator:
                 language="en-US",
                 on_wake_callback=self._on_wake_detected,
                 on_final_transcript=self._on_transcript_received,
-                intent_model_path=str(self.intent_model_path),
+                intent_config_path=str(self.intent_model_path),
                 preference_file_path=str(self.backend_dir / "config" / "user_preference" / "preference.json"),
             )
             logger.info("✅ Fresh voice pipeline created")
