@@ -35,12 +35,12 @@ try:
     from .wakeword import WakeWordDetector, create_wake_word_detector
     from .mic_stream import MicStream
     from .stt import GoogleSTTService
-    from .intent import IntentInference
+    from .intent_detection import IntentDetection
 except ImportError:
     from wakeword import WakeWordDetector, create_wake_word_detector
     from mic_stream import MicStream
     from stt import GoogleSTTService
-    from intent import IntentInference
+    from intent_detection import IntentDetection
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +58,7 @@ class VoicePipeline:
         lang: str = "en-US",
         on_wake_callback: Optional[Callable[[], None]] = None,
         on_final_transcript: Optional[Callable[[str, Optional[dict]], None]] = None,
-        intent_model_path: Optional[str] = None,
+        intent_config_path: Optional[str] = None,
         preference_file_path: Optional[str] = None,
         stt_timeout_s: float = 8.0  # new: timeout for speech after wakeword
     ):
@@ -77,14 +77,14 @@ class VoicePipeline:
                 logger.warning(f"Failed to load wakeword audio path: {e}")
                 self.wakeword_audio_path = None
 
-        self.intent_inference = None
-        if intent_model_path:
+        self.intent_detection = None
+        if intent_config_path:
             try:
-                self.intent_inference = IntentInference(intent_model_path)
-                logger.info("Intent inference initialized")
+                self.intent_detection = IntentDetection(intent_config_path)
+                logger.info("Intent detection initialized")
             except Exception as e:
-                logger.warning(f"Failed to initialize intent inference: {e}")
-                self.intent_inference = None
+                logger.warning(f"Failed to initialize intent detection: {e}")
+                self.intent_detection = None
 
         self.active = False
         self.stt_active = False
@@ -93,7 +93,7 @@ class VoicePipeline:
 
         self.stt_timeout_s = stt_timeout_s  # how many seconds to wait for speech
 
-        logger.info(f"Pipeline initialized | Language: {lang} | Intent: {'Yes' if self.intent_inference else 'No'} | Wakeword Audio: {'Yes' if self.wakeword_audio_path else 'No'}")
+        logger.info(f"Pipeline initialized | Language: {lang} | Intent: {'Yes' if self.intent_detection else 'No'} | Wakeword Audio: {'Yes' if self.wakeword_audio_path else 'No'}")
 
     def _play_audio_file(self, audio_path: str) -> bool:
         """
@@ -241,12 +241,18 @@ class VoicePipeline:
                 logger.warning(f"No user transcript received within {self.stt_timeout_s:.1f}s → timing out STT session")
             else:
                 # We got a transcript
-                if self.intent_inference and final_transcript:
+                if self.intent_detection and final_transcript:
                     try:
-                        intent_result = self.intent_inference.predict_intent(final_transcript)
-                        logger.info(f"Predicted intent: {intent_result.get('intent')} (conf {intent_result.get('confidence',0):.3f})")
+                        intent_result = self.intent_detection.detect_intent(final_transcript)
+                        if intent_result:
+                            intent_name, matched_phrase = intent_result
+                            logger.info(f"Detected intent: {intent_name} (matched phrase: '{matched_phrase}')")
+                            intent_result = {"intent": intent_name, "matched_phrase": matched_phrase, "confidence": 1.0}
+                        else:
+                            logger.info("No intent detected")
+                            intent_result = {"intent": "unknown", "confidence": 0.0}
                     except Exception as e:
-                        logger.error(f"Intent inference error: {e}")
+                        logger.error(f"Intent detection error: {e}")
                         intent_result = {"intent": "unknown", "confidence": 0.0}
 
                 # Invoke callback 
@@ -329,7 +335,7 @@ def create_voice_pipeline(
     language: str = "en-US",
     on_wake_callback: Optional[Callable[[], None]] = None,
     on_final_transcript: Optional[Callable[[str, Optional[dict]], None]] = None,
-    intent_model_path: Optional[str] = None,
+    intent_config_path: Optional[str] = None,
     preference_file_path: Optional[str] = None,
     stt_timeout_s: float = 8.0
 ) -> VoicePipeline:
@@ -341,7 +347,7 @@ def create_voice_pipeline(
         lang=language,
         on_wake_callback=on_wake_callback,
         on_final_transcript=on_final_transcript,
-        intent_model_path=intent_model_path,
+        intent_config_path=intent_config_path,
         preference_file_path=preference_file_path,
         stt_timeout_s=stt_timeout_s
     )
@@ -362,7 +368,7 @@ if __name__ == "__main__":
     current_dir = os.path.dirname(__file__)
     access_key_path = os.path.join(current_dir, '..', '..', 'config', 'WakeWord', 'PorcupineAccessKey.txt')
     custom_keyword_path = os.path.join(current_dir, '..', '..', 'config', 'WakeWord', 'WellBot_WakeWordModel.ppn')
-    intent_model_path = os.path.join(current_dir, '..', '..', 'config', 'intent_classifier')
+    intent_config_path = os.path.join(current_dir, '..', '..', 'config', 'WakeWord', 'intents.json')
     preference_file_path = os.path.join(current_dir, '..', '..', 'config', 'user_preference', 'preference.json')
 
     pipeline = create_voice_pipeline(
@@ -371,7 +377,7 @@ if __name__ == "__main__":
         language="en-US",
         on_wake_callback=lambda: print("Wake detected"),
         on_final_transcript=dummy_callback,
-        intent_model_path=intent_model_path,
+        intent_config_path=intent_config_path,
         preference_file_path=preference_file_path,
         stt_timeout_s=8.0
     )

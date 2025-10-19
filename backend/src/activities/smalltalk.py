@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 SmallTalk Activity Class
-A proper activity class that wraps the SmallTalkManager for use in the orchestration system.
+A direct orchestrator that composes conversation components for SmallTalk functionality.
 """
 
 import os
@@ -9,6 +9,7 @@ import sys
 import logging
 import threading
 import time
+import json
 from pathlib import Path
 from typing import Optional
 
@@ -18,7 +19,9 @@ sys.path.append(str(backend_dir))
 
 from src.components.stt import GoogleSTTService
 from src.components.mic_stream import MicStream
-from src.managers.smalltalk_manager import SmallTalkManager
+from src.components.conversation_audio_manager import ConversationAudioManager
+from src.components.conversation_session import ConversationSession
+from src.components._pipeline_smalltalk import SmallTalkSession, TerminationPhraseDetected, normalize_text
 
 logger = logging.getLogger(__name__)
 
@@ -27,15 +30,22 @@ class SmallTalkActivity:
     """
     SmallTalk Activity Class
     
-    Wraps the SmallTalkManager to provide a clean activity interface
-    for the orchestration system.
+    Direct orchestrator that composes conversation components to provide
+    SmallTalk functionality without the intermediate manager layer.
     """
     
     def __init__(self, backend_dir: Path):
         """Initialize the SmallTalk activity"""
         self.backend_dir = backend_dir
-        self.manager: Optional[SmallTalkManager] = None
+        
+        # Components (initialized in initialize())
+        self.audio_manager: Optional[ConversationAudioManager] = None
+        self.session_manager: Optional[ConversationSession] = None
+        self.llm_pipeline: Optional[SmallTalkSession] = None
         self.stt_service: Optional[GoogleSTTService] = None
+        self.audio_config: Optional[dict] = None
+        
+        # Activity state
         self._active = False
         self._initialized = False
         
@@ -44,7 +54,7 @@ class SmallTalkActivity:
     def initialize(self) -> bool:
         """Initialize the activity components"""
         try:
-            # Paths
+            # Configuration paths
             deepseek_config_path = self.backend_dir / "config" / "LLM" / "deepseek.json"
             llm_config_path = self.backend_dir / "config" / "LLM" / "smalltalk_instructions.json"
             
@@ -62,6 +72,15 @@ class SmallTalkActivity:
                 else:
                     logger.info(f"✓ Found: {file_path}")
             
+            # Load LLM configuration
+            with open(llm_config_path, "r", encoding="utf-8") as f:
+                llm_config = json.load(f)
+            
+            # Load user preferences for audio paths
+            preference_path = self.backend_dir / "config" / "user_preference" / "preference.json"
+            with open(preference_path, "r", encoding="utf-8") as f:
+                preferences = json.load(f)
+            
             # Initialize STT service
             logger.info("Initializing STT service...")
             self.stt_service = GoogleSTTService(language="en-US", sample_rate=16000)
@@ -71,18 +90,53 @@ class SmallTalkActivity:
             def mic_factory():
                 return MicStream()
             
-            # Initialize SmallTalkManager
-            logger.info("Initializing SmallTalkManager...")
-            self.manager = SmallTalkManager(
+            # Prepare audio configuration for ConversationAudioManager
+            audio_config = {
+                "backend_dir": str(self.backend_dir),
+                "silence_timeout_seconds": llm_config.get("silence_timeout_seconds", 30),
+                "nudge_timeout_seconds": llm_config.get("nudge_timeout_seconds", 15),
+                "nudge_pre_delay_ms": llm_config.get("nudge_pre_delay_ms", 200),
+                "nudge_post_delay_ms": llm_config.get("nudge_post_delay_ms", 300),
+                "nudge_audio_path": preferences.get("nudge_audio_path", "assets/ENGLISH/inactivity_nudge_EN_male.wav"),
+                "termination_audio_path": preferences.get("termination_audio_path", "assets/ENGLISH/termination_EN_male.wav"),
+                "end_audio_path": preferences.get("end_audio_path", "assets/ENGLISH/end_smalltalk_EN_male.wav"),
+                "start_audio_path": preferences.get("start_smalltalk_audio_path", "assets/ENGLISH/start_smalltalk_EN_male.wav")
+            }
+            
+            # Initialize ConversationAudioManager
+            logger.info("Initializing ConversationAudioManager...")
+            self.audio_manager = ConversationAudioManager(
+                stt_service=self.stt_service,
+                mic_factory=mic_factory,
+                audio_config=audio_config
+            )
+            logger.info("✓ ConversationAudioManager initialized")
+            
+            # Store audio config for callback methods
+            self.audio_config = audio_config
+            
+            # Initialize ConversationSession
+            logger.info("Initializing ConversationSession...")
+            self.session_manager = ConversationSession(
+                max_turns=llm_config.get("max_turns", 20),
+                system_prompt=llm_config.get("system_prompt", "You are a friendly assistant. Do not use emojis."),
+                language_code=llm_config.get("stt_language_code", "en-US")
+            )
+            logger.info("✓ ConversationSession initialized")
+            
+            # Initialize LLM pipeline
+            logger.info("Initializing SmallTalkSession...")
+            self.llm_pipeline = SmallTalkSession(
                 stt=self.stt_service,
                 mic_factory=mic_factory,
                 deepseek_config_path=str(deepseek_config_path),
-                llm_config_path=str(llm_config_path)
+                llm_config_path=str(llm_config_path),
+                tts_voice_name=llm_config.get("tts_voice_name", "en-US-Chirp3-HD-Charon"),
+                tts_language_code=llm_config.get("tts_language_code", "en-US"),
+                system_prompt=llm_config.get("system_prompt", "You are a friendly assistant. Do not use emojis."),
+                language_code=llm_config.get("stt_language_code", "en-US")
             )
-            logger.info("✓ SmallTalkManager initialized")
-            logger.info(f"✓ TTS Voice: {self.manager.tts_voice_name}")
-            logger.info(f"✓ TTS Language: {self.manager.tts_language_code}")
-            logger.info(f"✓ STT Language: {self.manager.language_code}")
+            logger.info("✓ SmallTalkSession initialized")
             
             self._initialized = True
             return True
@@ -101,20 +155,30 @@ class SmallTalkActivity:
             logger.warning("Activity already active")
             return False
         
-        # Safety check - ensure manager exists
-        if not self.manager:
-            logger.error("❌ Manager is None - cannot start activity")
+        # Safety checks
+        if not all([self.audio_manager, self.session_manager, self.llm_pipeline]):
+            logger.error("❌ Components not properly initialized - cannot start activity")
             return False
         
         try:
             logger.info("🚀 Starting SmallTalk activity...")
             self._active = True
             
-            # Start the manager
-            self.manager.start()
+            # Start session
+            conv_id = self.session_manager.start_session("Small Talk")
+            self.llm_pipeline.conversation_id = conv_id
+            
+            # Play startup audio
+            startup_audio_path = self.backend_dir / self.audio_config["start_audio_path"]
+            self.audio_manager.play_audio_file(str(startup_audio_path))
+            
+            # Start silence monitoring
+            self.audio_manager.start_silence_monitoring(
+                on_nudge=self._handle_nudge,
+                on_timeout=self._handle_timeout
+            )
             
             logger.info("✅ SmallTalk activity started successfully")
-            logger.info(f"🔍 Manager active status: {self.manager.is_active()}")
             return True
             
         except Exception as e:
@@ -131,8 +195,13 @@ class SmallTalkActivity:
         logger.info("🛑 Stopping SmallTalk activity...")
         self._active = False
         
-        if self.manager:
-            self.manager.stop()
+        # Stop silence monitoring
+        if self.audio_manager:
+            self.audio_manager.stop_silence_monitoring()
+        
+        # Stop session
+        if self.session_manager:
+            self.session_manager.stop_session()
         
         logger.info("✅ SmallTalk activity stopped")
     
@@ -144,20 +213,36 @@ class SmallTalkActivity:
         if self._active:
             self.stop()
         
-        # Cleanup manager resources
-        if self.manager:
+        # Cleanup audio manager
+        if self.audio_manager:
             try:
-                logger.info("🧹 Cleaning up manager audio resources...")
-                # The manager's cleanup is handled in its destructor
-                self.manager = None
+                logger.info("🧹 Cleaning up audio manager...")
+                self.audio_manager.cleanup()
+                self.audio_manager = None
             except Exception as e:
-                logger.warning(f"Error during manager cleanup: {e}")
+                logger.warning(f"Error during audio manager cleanup: {e}")
+        
+        # End conversation in database
+        if self.session_manager:
+            try:
+                logger.info("🧹 Ending conversation in database...")
+                self.session_manager.end_conversation()
+                self.session_manager = None
+            except Exception as e:
+                logger.warning(f"Error during session cleanup: {e}")
+        
+        # Cleanup LLM pipeline
+        if self.llm_pipeline:
+            try:
+                logger.info("🧹 Cleaning up LLM pipeline...")
+                self.llm_pipeline = None
+            except Exception as e:
+                logger.warning(f"Error during LLM pipeline cleanup: {e}")
         
         # Cleanup STT service
         if self.stt_service:
             try:
                 logger.info("🧹 Cleaning up STT service...")
-                # STT service cleanup is handled automatically
                 self.stt_service = None
             except Exception as e:
                 logger.warning(f"Error during STT cleanup: {e}")
@@ -180,43 +265,11 @@ class SmallTalkActivity:
     
     def is_active(self) -> bool:
         """Check if the activity is currently active"""
-        return self._active and self.manager and self.manager.is_active()
-    
-    def wait_for_completion(self, timeout: Optional[float] = None) -> bool:
-        """
-        Wait for the activity to complete naturally
-        
-        Args:
-            timeout: Maximum time to wait in seconds (None for no timeout)
-            
-        Returns:
-            True if activity completed naturally, False if timeout or error
-        """
-        if not self._active:
-            logger.warning("Activity not active")
-            return False
-        
-        logger.info("⏳ Waiting for SmallTalk activity to complete...")
-        
-        start_time = time.time()
-        try:
-            while self.is_active():
-                time.sleep(0.5)
-                
-                if timeout and (time.time() - start_time) > timeout:
-                    logger.warning(f"Activity timeout after {timeout}s")
-                    return False
-            
-            logger.info("✅ SmallTalk activity completed naturally")
-            return True
-            
-        except Exception as e:
-            logger.error(f"Error waiting for activity completion: {e}")
-            return False
+        return self._active and self.session_manager and self.session_manager.is_active()
     
     def run(self) -> bool:
         """
-        Run the complete activity: start, wait for completion, and stop
+        Run the complete activity: start, conversation loop, and stop
         
         Returns:
             True if activity completed successfully, False otherwise
@@ -228,8 +281,8 @@ class SmallTalkActivity:
                 logger.error("❌ SmallTalkActivity.run() - Failed to start activity")
                 return False
             
-            # Wait for completion
-            success = self.wait_for_completion()
+            # Run conversation loop
+            success = self._conversation_loop()
             
             # Stop the activity
             self.stop()
@@ -241,12 +294,114 @@ class SmallTalkActivity:
             self.stop()
             return False
     
+    def _conversation_loop(self) -> bool:
+        """Main conversation loop"""
+        logger.info("💬 Starting conversation loop...")
+        
+        try:
+            while self.session_manager.is_active() and self._active:
+                # Capture user speech with timeout
+                user_text = self.audio_manager.capture_user_speech()
+                if not user_text:
+                    logger.debug("No user text captured, continuing...")
+                    continue
+                
+                # Check if activity was stopped during speech capture
+                if not self._active:
+                    logger.info("Activity stopped during speech capture, exiting conversation loop")
+                    break
+                
+                # Log user input
+                logger.info(f"[User] raw_text = '{user_text}'")
+                normalized = normalize_text(user_text)
+                logger.info(f"[User] normalized_text = '{normalized}'")
+                
+                # Add user message to LLM pipeline memory
+                self.llm_pipeline.messages.append({"role": "user", "content": user_text})
+                
+                # Save user message to database
+                self.session_manager.add_message("user", user_text, intent="small_talk")
+                
+                # Check for termination phrases
+                logger.info("Checking for termination BEFORE LLM processing...")
+                try:
+                    self.llm_pipeline.check_termination(user_text)
+                    logger.info("No termination detected, proceeding with conversation...")
+                except TerminationPhraseDetected as e:
+                    logger.info(f"TERMINATION TRIGGERED! {e}")
+                    end_audio_path = self.backend_dir / self.audio_config["end_audio_path"]
+                    self.audio_manager.play_audio_file(str(end_audio_path))
+                    
+                    # Stop both the activity and session manager
+                    if self.session_manager:
+                        self.session_manager.stop_session()
+                    self.stop()
+                    
+                    # Also stop the audio manager to prevent further speech capture
+                    if self.audio_manager:
+                        self.audio_manager.stop()
+                    break
+                
+                # Generate and play response
+                logger.info("[Assistant speaking]")
+                try:
+                    response_chunks = self.llm_pipeline._stream_llm_and_tts()
+                    self.audio_manager.play_tts_stream(response_chunks)
+                except Exception as e:
+                    logger.error(f"Error during LLM/TTS processing: {e}")
+                    continue
+                
+                # Get assistant text and save to database
+                assistant_text = self.llm_pipeline.messages[-1]["content"]
+                self.session_manager.add_message("assistant", assistant_text)
+                
+                # Complete turn and reset silence timer
+                if not self.session_manager.complete_turn(user_text, assistant_text):
+                    logger.info("Max turns reached, ending session")
+                    break
+                
+                self.audio_manager.reset_silence_timer()
+                
+                # Check if activity was stopped after turn completion
+                if not self._active:
+                    logger.info("Activity stopped after turn completion, exiting conversation loop")
+                    break
+            
+            logger.info("✅ Conversation loop completed successfully")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error in conversation loop: {e}", exc_info=True)
+            return False
+    
+    def _handle_nudge(self):
+        """Handle silence nudge callback"""
+        logger.info("🔔 Handling silence nudge...")
+        nudge_audio_path = self.backend_dir / self.audio_config["nudge_audio_path"]
+        self.audio_manager.play_audio_file(str(nudge_audio_path))
+    
+    def _handle_timeout(self):
+        """Handle silence timeout callback"""
+        logger.info("⏰ Handling silence timeout...")
+        termination_audio_path = self.backend_dir / self.audio_config["termination_audio_path"]
+        self.audio_manager.play_audio_file(str(termination_audio_path))
+        
+        # Stop both the activity and session manager
+        if self.session_manager:
+            self.session_manager.stop_session()
+        self.stop()
+        
+        # Also stop the audio manager to prevent further speech capture
+        if self.audio_manager:
+            self.audio_manager.stop()
+    
     def get_status(self) -> dict:
         """Get current activity status"""
         return {
             "initialized": self._initialized,
             "active": self._active,
-            "manager_active": self.manager.is_active() if self.manager else False,
+            "audio_manager_active": self.audio_manager.is_active() if self.audio_manager else False,
+            "session_active": self.session_manager.is_active() if self.session_manager else False,
             "activity_type": "smalltalk"
         }
 
@@ -275,9 +430,9 @@ if __name__ == "__main__":
             
             logger.info("=== SmallTalk Activity Test ===")
             logger.info("The activity will:")
-            logger.info("- Start SmallTalk session")
-            logger.info("- Handle conversation with user")
-            logger.info("- Play TTS responses")
+            logger.info("- Start SmallTalk session with component orchestration")
+            logger.info("- Handle conversation with user using direct components")
+            logger.info("- Play TTS responses with audio coordination")
             logger.info("- Monitor for termination phrases")
             logger.info("- End when user says goodbye or timeout occurs")
             logger.info("- Press Ctrl+C to stop")
