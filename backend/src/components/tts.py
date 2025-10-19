@@ -131,9 +131,9 @@ if __name__ == "__main__":
         sample_width_bytes=2
     )
 
-    # Simulate streaming input
+    # Simulate streaming inputs
     def sample_text_gen():
-        for part in ["Hey, I heard you call me?"]:
+        for part in ["Hey that activity isn't available right now. We could do something else instead."]:
             yield part
 
     # Use streaming and capture
