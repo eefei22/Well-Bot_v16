@@ -36,11 +36,13 @@ try:
     from .mic_stream import MicStream
     from .stt import GoogleSTTService
     from .intent_detection import IntentDetection
+    from ..config_loader import PORCUPINE_ACCESS_KEY
 except ImportError:
     from wakeword import WakeWordDetector, create_wake_word_detector
     from mic_stream import MicStream
     from stt import GoogleSTTService
     from intent_detection import IntentDetection
+    from config_loader import PORCUPINE_ACCESS_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -339,7 +341,7 @@ def create_voice_pipeline(
     preference_file_path: Optional[str] = None,
     stt_timeout_s: float = 8.0
 ) -> VoicePipeline:
-    wakeword_detector = create_wake_word_detector(access_key_file, custom_keyword_file)
+    wakeword_detector = create_wake_word_detector(PORCUPINE_ACCESS_KEY, custom_keyword_file)
     stt_service = GoogleSTTService(language=language)
     pipeline = VoicePipeline(
         wakeword_detector=wakeword_detector,
@@ -368,8 +370,8 @@ if __name__ == "__main__":
     current_dir = os.path.dirname(__file__)
     access_key_path = os.path.join(current_dir, '..', '..', 'config', 'WakeWord', 'PorcupineAccessKey.txt')
     custom_keyword_path = os.path.join(current_dir, '..', '..', 'config', 'WakeWord', 'WellBot_WakeWordModel.ppn')
-    intent_config_path = os.path.join(current_dir, '..', '..', 'config', 'WakeWord', 'intents.json')
-    preference_file_path = os.path.join(current_dir, '..', '..', 'config', 'user_preference', 'preference.json')
+    intent_config_path = os.path.join(current_dir, '..', '..', 'config', 'intents.json')
+    preference_file_path = os.path.join(current_dir, '..', '..', 'config', 'preference.json')
 
     pipeline = create_voice_pipeline(
         access_key_file=access_key_path,

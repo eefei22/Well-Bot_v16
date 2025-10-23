@@ -1,0 +1,65 @@
+services:
+  python-backend:
+    build:
+      context: ./
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    init: true
+    # env_file: ./backend/.env  # Uncomment if .env file exists
+    # Expose port if your backend listens on a port (uncomment if needed)
+    # ports:
+    #   - "8000:8000"
+    #
+    # If your backend requires external services (e.g., database), add depends_on below
+    # depends_on:
+    #   - postgres
+    #   - redis
+    #
+    # Add networks if you have multiple communicating services
+    # networks:
+    #   - backend-net
+
+# Uncomment and configure the following if your backend uses a database or cache
+#  postgres:
+#    image: postgres:latest
+#    restart: unless-stopped
+#    environment:
+#      POSTGRES_USER: wellbot
+#      POSTGRES_PASSWORD: wellbotpassword
+#      POSTGRES_DB: wellbotdb
+#    volumes:
+#      - postgres-data:/var/lib/postgresql/data
+#    healthcheck:
+#      test: ["CMD-SHELL", "pg_isready -U wellbot"]
+#      interval: 10s
+#      timeout: 5s
+#      retries: 5
+#    networks:
+#      - backend-net
+#
+#  redis:
+#    image: redis:latest
+#    restart: unless-stopped
+#    healthcheck:
+#      test: ["CMD", "redis-cli", "ping"]
+#      interval: 10s
+#      timeout: 5s
+#      retries: 5
+#    networks:
+#      - backend-net
+
+# Uncomment to define a custom network if you have multiple services
+#networks:
+#  backend-net:
+#    driver: bridge
+
+# Uncomment to persist database data
+#volumes:
+#  postgres-data:
+#    driver: local
+
+# Notes:
+# - If your backend exposes a port, uncomment the 'ports' section and set the correct port.
+# - If you add external services (e.g., postgres, redis), uncomment and configure them as needed.
+# - If you have a .env file for environment variables, uncomment the 'env_file' line.
+# - If you need to orchestrate more services, add them following the <language>-<service_name> pattern.

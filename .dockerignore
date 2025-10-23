@@ -1,0 +1,86 @@
+# Language-specific ignores (Python)
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.coverage
+
+# Node.js (if any)
+node_modules/
+npm-debug.log
+yarn-debug.log
+
+# Go (if any)
+/vendor/
+*.test
+.go-cache/
+
+# Java (if any)
+target/
+*.class
+.gradle/
+
+# Development artifacts
+.idea/
+.vscode/
+*.swp
+*.swo
+dist/
+build/
+out/
+debug/
+*.log
+
+# Test files and directories
+test/
+tests/
+testing/
+*_test.go
+
+# Version control
+.git/
+.gitignore
+.svn/
+.hg/
+
+# Environment and secrets
+.env*
+*.env
+*.pem
+*.key
+*.crt
+config.local.*
+*.local.yml
+
+# Project-specific patterns
+all_docs/
+docs/
+*.md
+README*
+Dockerfile*
+docker-compose*
+tmp/
+temp/
+*.tmp
+.local/
+local/
+
+# Archive and virtual environment
+archive/
+venv/
+
+# Cursor IDE files
+.cursor/
+
+# OS/Editor temp files
+*.DS_Store
+Thumbs.db
+
+# Exclude bat files (keep for startup scripts)
+!*.bat
+
+# Exclude main source files (keep for build)
+!main.py
+!requirements.txt
+!src/
+!backend/
