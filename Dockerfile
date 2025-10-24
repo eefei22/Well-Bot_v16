@@ -1,43 +1,30 @@
 # syntax=docker/dockerfile:1
+ARG PY_VER=3.11
+FROM python:${PY_VER}-slim
 
-FROM python:3.13-slim AS base
+ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+
+# --- Install required system libs for audio, mic, and ffmpeg ---
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libportaudio2 portaudio19-dev libasound2 libsndfile1 ffmpeg \
+    build-essential pkg-config \
+  && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# Builder stage: install dependencies in a venv
-FROM base AS builder
-WORKDIR /app
+# --- Copy and install Python dependencies ---
+COPY backend/requirements.txt ./requirements.txt
+RUN pip install --upgrade pip setuptools wheel && \
+    pip install -r requirements.txt
 
-# Copy only requirements.txt first for better caching
-COPY --link backend/requirements.txt ./requirements.txt
+# --- Copy backend source code ---
+COPY backend /app/backend
 
-# Create virtual environment and install dependencies
-RUN python -m venv .venv \
-    && .venv/bin/pip install --upgrade pip \
-    && --mount=type=cache,target=/root/.cache/pip \
-       .venv/bin/pip install -r requirements.txt
+# --- Create non-root user (optional but good practice) ---
+RUN useradd -m app && chown -R app:app /app
+USER app
 
-# Copy backend source code and relevant files
-COPY --link backend ./backend
+EXPOSE 8000
 
-# Final stage: minimal runtime image
-FROM base AS final
-WORKDIR /app
-
-# Copy backend source code
-COPY --link backend ./backend
-
-# Copy the virtual environment from builder
-COPY --from=builder /app/.venv /app/.venv
-
-# Set PATH to use the venv
-ENV PATH="/app/.venv/bin:$PATH"
-
-# Create a non-root user
-RUN useradd -m backenduser
-USER backenduser
-
-# Expose port if needed (uncomment if your app listens on a port)
-# EXPOSE 8000
-
-# Set entrypoint to run the backend service
+# --- Launch the application ---
 CMD ["python", "backend/main.py"]

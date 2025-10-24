@@ -36,3 +36,52 @@ This project provides Docker and Docker Compose configurations to run the Python
 
 ---
 *This section was updated to reflect the current Docker setup for the backend. Please ensure your local configuration matches any changes you make to the Docker or Compose files.*
+
+Well-Bot_v16/
+├── 📄 compose.yaml                    # Docker Compose configuration
+├── 📄 Dockerfile                     # Multi-stage Docker build
+├── 📄 README.md                      # Project documentation
+├── 📄 start_backend.bat              # Windows backend startup script
+├── 📄 start_frontend.bat             # Windows frontend startup script
+├──📁 venv/                          # Python virtual environment
+└── backend/
+	├── 📄 main.py                        # Main application entry point (624 lines)
+	├── 📄 requirements.txt               # Python dependencies
+	├── 📄 env_template.txt               # Environment variables template
+	├── 📁 assets/                        # Multi-language audio assets
+	│   ├── 📁 BAHASA/                    # Malay audio files (7 files)
+	│   ├── 📁 ENGLISH/                   # English audio files (11 files)
+	│   └── 📁 MANDARIN/                  # Chinese audio files (7 files)
+	├── 📁 config/                        # Configuration files
+   │   ├── 📄 intents.json               # Intent recognition config
+   │   ├── 📄 preference.json            # User preferences
+   │   ├── 📄 smalltalk_instructions.json # Smalltalk behavior config
+   │   ├── 📁 WakeWord/
+   │   │   └── 📄 WellBot_WakeWordModel.ppn # Porcupine wake word model
+   │   └── 📄 wakeword_config.json       # Wake word configuration
+   ├── 📁 src/                           # Source code modules
+   │   ├── 📁 activities/                # Activity implementations
+   │   │   └── 📄 smalltalk.py           # Smalltalk activity handler
+   │   ├── 📁 components/                # Core system components
+   │   │   ├── 📄 conversation_audio_manager.py # Audio session management
+   │   │   ├── 📄 conversation_session.py # Conversation state management
+   │   │   ├── 📄 intent_detection.py    # Intent classification
+   │   │   ├── 📄 llm.py                 # Large Language Model integration
+   │   │   ├── 📄 mic_stream.py          # Microphone input handling
+   │   │   ├── 📄 stt.py                 # Speech-to-Text processing
+   │   │   ├── 📄 tts.py                 # Text-to-Speech synthesis
+   │   │   └── 📄 wakeword.py            # Wake word detection
+   │   ├── 📄 config_loader.py           # Configuration management
+   │   └── 📁 supabase/                  # Database integration
+   │       ├── 📄 auth.py                # Authentication handling
+   │       ├── 📄 client.py              # Supabase client setup
+   │       ├── 📄 database.py            # Database operations
+   │       └── 📄 schemas.sql            # Database schema
+   └── 📁 testing/                       # Test suite
+       ├── 📄 debug_audio_playback.py    # Audio debugging
+       ├── 📄 smalltalk_manager.py       # Smalltalk testing
+       ├── 📄 test_activity_reinit.py    # Activity reinitialization tests
+       ├── 📄 test_audio_fix.py          # Audio system tests
+       ├── 📄 test_complete_fixes.py     # Comprehensive tests
+       ├── 📄 test_tts.py                # TTS testing
+       └── 📄 websocket.py               # WebSocket testing
