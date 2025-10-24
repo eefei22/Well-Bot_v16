@@ -9,11 +9,10 @@ import os
 import logging
 from google.cloud import speech
 from typing import Callable, Iterable, Optional, Dict, Any
+from ..config_loader import get_google_cloud_credentials_path
 
-# Set up credentials
-os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = os.path.join(
-    os.path.dirname(__file__), '..', '..', 'config', 'STT', 'GoogleCloud.json'
-)
+# Set up credentials from environment variables
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = get_google_cloud_credentials_path()
 
 logger = logging.getLogger(__name__)
 

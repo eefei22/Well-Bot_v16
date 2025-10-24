@@ -22,6 +22,7 @@ from src.components.mic_stream import MicStream
 from src.components.conversation_audio_manager import ConversationAudioManager
 from src.components.conversation_session import ConversationSession
 from src.components._pipeline_smalltalk import SmallTalkSession, TerminationPhraseDetected, normalize_text
+from src.config_loader import get_deepseek_config
 
 logger = logging.getLogger(__name__)
 
@@ -55,29 +56,25 @@ class SmallTalkActivity:
         """Initialize the activity components"""
         try:
             # Configuration paths
-            deepseek_config_path = self.backend_dir / "config" / "LLM" / "deepseek.json"
-            llm_config_path = self.backend_dir / "config" / "LLM" / "smalltalk_instructions.json"
+            llm_config_path = self.backend_dir / "config" / "smalltalk_instructions.json"
             
             logger.info(f"Initializing SmallTalk activity...")
             logger.info(f"Backend directory: {self.backend_dir}")
-            logger.info(f"DeepSeek config: {deepseek_config_path}")
             logger.info(f"LLM config: {llm_config_path}")
             
-            # Check if all required files exist
-            required_files = [deepseek_config_path, llm_config_path]
-            for file_path in required_files:
-                if not file_path.exists():
-                    logger.error(f"Required file not found: {file_path}")
-                    return False
-                else:
-                    logger.info(f"✓ Found: {file_path}")
+            # Check if required files exist
+            if not llm_config_path.exists():
+                logger.error(f"Required file not found: {llm_config_path}")
+                return False
+            else:
+                logger.info(f"✓ Found: {llm_config_path}")
             
             # Load LLM configuration
             with open(llm_config_path, "r", encoding="utf-8") as f:
                 llm_config = json.load(f)
             
             # Load user preferences for audio paths
-            preference_path = self.backend_dir / "config" / "user_preference" / "preference.json"
+            preference_path = self.backend_dir / "config" / "preference.json"
             with open(preference_path, "r", encoding="utf-8") as f:
                 preferences = json.load(f)
             
@@ -126,10 +123,11 @@ class SmallTalkActivity:
             
             # Initialize LLM pipeline
             logger.info("Initializing SmallTalkSession...")
+            deepseek_config = get_deepseek_config()
             self.llm_pipeline = SmallTalkSession(
                 stt=self.stt_service,
                 mic_factory=mic_factory,
-                deepseek_config_path=str(deepseek_config_path),
+                deepseek_config=deepseek_config,
                 llm_config_path=str(llm_config_path),
                 tts_voice_name=llm_config.get("tts_voice_name", "en-US-Chirp3-HD-Charon"),
                 tts_language_code=llm_config.get("tts_language_code", "en-US"),

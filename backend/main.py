@@ -14,6 +14,10 @@ import json
 from pathlib import Path
 from enum import Enum
 from typing import Optional, Dict, Any
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Add the backend directory to the path (so we can import src.components etc.)
 backend_dir = Path(__file__).parent
@@ -52,12 +56,10 @@ class WellBotOrchestrator:
 
         # Paths to configuration
         self.backend_dir = backend_dir
-        self.access_key_path      = self.backend_dir / "config" / "WakeWord" / "PorcupineAccessKey.txt"
         self.wakeword_model_path  = self.backend_dir / "config" / "WakeWord" / "WellBot_WakeWordModel.ppn"
-        self.intent_model_path    = self.backend_dir / "config" / "WakeWord" / "intents.json"
-        self.wakeword_config_path = self.backend_dir / "config" / "WakeWord" / "wakeword_config.json"
-        self.deepseek_config_path = self.backend_dir / "config" / "LLM" / "deepseek.json"
-        self.llm_config_path      = self.backend_dir / "config" / "LLM" / "smalltalk_instructions.json"
+        self.intent_model_path    = self.backend_dir / "config" / "intents.json"
+        self.wakeword_config_path = self.backend_dir / "config" / "wakeword_config.json"
+        self.llm_config_path      = self.backend_dir / "config" / "smalltalk_instructions.json"
 
         # Components
         self.voice_pipeline: Optional[VoicePipeline] = None
@@ -81,11 +83,9 @@ class WellBotOrchestrator:
     def _validate_config_files(self) -> bool:
         """Validate that all required config files exist."""
         required = [
-            self.access_key_path,
             self.wakeword_model_path,
             self.intent_model_path,
             self.wakeword_config_path,
-            self.deepseek_config_path,
             self.llm_config_path
         ]
         missing = []
@@ -119,13 +119,13 @@ class WellBotOrchestrator:
 
             logger.info("Initializing voice pipeline (wake word)…")
             self.voice_pipeline = create_voice_pipeline(
-                access_key_file=str(self.access_key_path),
+                access_key_file="",  # Deprecated - now uses environment variable
                 custom_keyword_file=str(self.wakeword_model_path),
                 language="en-US",
                 on_wake_callback=self._on_wake_detected,
                 on_final_transcript=self._on_transcript_received,
                 intent_config_path=str(self.intent_model_path),
-                preference_file_path=str(self.backend_dir / "config" / "user_preference" / "preference.json"),
+                preference_file_path=str(self.backend_dir / "config" / "preference.json"),
                 stt_timeout_s=self.wakeword_config.get("stt_timeout_s", 8.0)
             )
 
@@ -415,7 +415,7 @@ class WellBotOrchestrator:
 
     def _load_preferences(self) -> dict:
         """Load user preferences"""
-        preference_path = self.backend_dir / "config" / "user_preference" / "preference.json"
+        preference_path = self.backend_dir / "config" / "preference.json"
         with open(preference_path, "r") as f:
             return json.load(f)
 
@@ -488,13 +488,13 @@ class WellBotOrchestrator:
         logger.info("🔄 Recreating voice pipeline fresh...")
         try:
             self.voice_pipeline = create_voice_pipeline(
-                access_key_file=str(self.access_key_path),
+                access_key_file="",  # Deprecated - now uses environment variable
                 custom_keyword_file=str(self.wakeword_model_path),
                 language="en-US",
                 on_wake_callback=self._on_wake_detected,
                 on_final_transcript=self._on_transcript_received,
                 intent_config_path=str(self.intent_model_path),
-                preference_file_path=str(self.backend_dir / "config" / "user_preference" / "preference.json"),
+                preference_file_path=str(self.backend_dir / "config" / "preference.json"),
                 stt_timeout_s=self.wakeword_config.get("stt_timeout_s", 8.0)
             )
             logger.info("✅ Fresh voice pipeline created")

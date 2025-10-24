@@ -17,6 +17,11 @@ import logging
 # Add the backend directory to the path to import config
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
+try:
+    from ..config_loader import PORCUPINE_ACCESS_KEY
+except ImportError:
+    from config_loader import PORCUPINE_ACCESS_KEY
+
 logger = logging.getLogger(__name__)
 
 
@@ -232,18 +237,15 @@ def create_wake_word_detector(access_key_file: str, custom_keyword_file: Optiona
     Factory function to create a wake word detector.
     
     Args:
-        access_key_file: Path to file containing Picovoice access key
+        access_key_file: Path to file containing Picovoice access key (deprecated, now uses env var)
         custom_keyword_file: Path to custom wake word model file
         
     Returns:
         WakeWordDetector instance
     """
     try:
-        # Read access key
-        with open(access_key_file, 'r') as f:
-            access_key = f.read().strip()
-        
-        return WakeWordDetector(access_key, custom_keyword_file)
+        # Use access key from environment variables
+        return WakeWordDetector(PORCUPINE_ACCESS_KEY, custom_keyword_file)
         
     except Exception as e:
         logger.error(f"Failed to create wake word detector: {e}")

@@ -17,12 +17,14 @@ try:
     from .llm import DeepSeekClient
     from .tts import GoogleTTSClient
     from ..supabase.database import start_conversation, add_message, end_conversation
+    from ..config_loader import get_deepseek_config
 except ImportError:
     from mic_stream import MicStream
     from stt import GoogleSTTService
     from llm import DeepSeekClient
     from tts import GoogleTTSClient
     from src.supabase.database import start_conversation, add_message, end_conversation
+    from config_loader import get_deepseek_config
 
 
 logger = logging.getLogger(__name__)
@@ -64,7 +66,7 @@ class SmallTalkSession:
         self,
         stt: GoogleSTTService,
         mic_factory: Callable[[], MicStream],
-        deepseek_config_path: str,
+        deepseek_config: dict,
         llm_config_path: str,
         tts_voice_name: str,
         tts_language_code: str = "en-US",
@@ -77,13 +79,11 @@ class SmallTalkSession:
         self.language_code = language_code
         self.min_confidence = min_confidence
 
-        # Load DeepSeek config
-        with open(deepseek_config_path, "r", encoding="utf-8") as f:
-            cfg = json.load(f)
+        # Initialize DeepSeek client with config from environment
         self.llm = DeepSeekClient(
-            api_key=cfg["api_key"],
-            base_url=cfg.get("base_url", "https://api.deepseek.com"),
-            model=cfg.get("model", "deepseek-chat"),
+            api_key=deepseek_config["api_key"],
+            base_url=deepseek_config.get("base_url", "https://api.deepseek.com"),
+            model=deepseek_config.get("model", "deepseek-chat"),
         )
 
         # Load termination phrases from LLM config

@@ -3,11 +3,6 @@
 # Archive folder
 archive/
 
-# Third-party dependencies
-porcupine/
-
-# Configuration folder with sensitive data
-backend/config/
 
 # Python
 __pycache__/
