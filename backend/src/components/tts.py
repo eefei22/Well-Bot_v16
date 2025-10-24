@@ -12,7 +12,7 @@ class GoogleTTSClient:
         self,
         voice_name: str = "en-US-Chirp3-HD-Charon",
         language_code: str = "en-US",
-        audio_encoding: texttospeech.AudioEncoding = texttospeech.AudioEncoding.PCM,
+        audio_encoding: texttospeech.AudioEncoding = texttospeech.AudioEncoding.LINEAR16,
         sample_rate_hertz: Optional[int] = None,
         num_channels: int = 1,
         sample_width_bytes: int = 2
@@ -125,7 +125,7 @@ if __name__ == "__main__":
     client = GoogleTTSClient(
         voice_name="en-US-Chirp3-HD-Charon",
         language_code="en-US",
-        audio_encoding=texttospeech.AudioEncoding.PCM,
+        audio_encoding=texttospeech.AudioEncoding.LINEAR16,
         sample_rate_hertz=24000,
         num_channels=1,
         sample_width_bytes=2

@@ -35,7 +35,7 @@ def test_wakeword_audio_fix():
         
         # Create a test pipeline
         access_key_path = backend_dir / "config" / "WakeWord" / "PorcupineAccessKey.txt"
-        wakeword_model_path = backend_dir / "config" / "WakeWord" / "WellBot_WakeWordModel.ppn"
+        wakeword_model_path = backend_dir / "config" / "WakeWord" / "Well-Bot_en_raspberry-pi_v3_0_0.ppn"
         intent_model_path = backend_dir / "config" / "intent_classifier"
         preference_file_path = backend_dir / "config" / "user_preference" / "preference.json"
         
@@ -77,7 +77,7 @@ def test_resource_cleanup():
         # Test 1: Create and cleanup pipeline
         logger.info("Test 1: Pipeline creation and cleanup...")
         access_key_path = backend_dir / "config" / "WakeWord" / "PorcupineAccessKey.txt"
-        wakeword_model_path = backend_dir / "config" / "WakeWord" / "WellBot_WakeWordModel.ppn"
+        wakeword_model_path = backend_dir / "config" / "WakeWord" / "Well-Bot_en_raspberry-pi_v3_0_0.ppn"
         intent_model_path = backend_dir / "config" / "intent_classifier"
         preference_file_path = backend_dir / "config" / "user_preference" / "preference.json"
         
@@ -144,7 +144,7 @@ def test_integration():
         
         # 1. Create initial pipeline
         access_key_path = backend_dir / "config" / "WakeWord" / "PorcupineAccessKey.txt"
-        wakeword_model_path = backend_dir / "config" / "WakeWord" / "WellBot_WakeWordModel.ppn"
+        wakeword_model_path = backend_dir / "config" / "WakeWord" / "Well-Bot_en_raspberry-pi_v3_0_0.ppn"
         intent_model_path = backend_dir / "config" / "intent_classifier"
         preference_file_path = backend_dir / "config" / "user_preference" / "preference.json"
         

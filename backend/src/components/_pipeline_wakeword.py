@@ -369,7 +369,7 @@ if __name__ == "__main__":
 
     current_dir = os.path.dirname(__file__)
     access_key_path = os.path.join(current_dir, '..', '..', 'config', 'WakeWord', 'PorcupineAccessKey.txt')
-    custom_keyword_path = os.path.join(current_dir, '..', '..', 'config', 'WakeWord', 'WellBot_WakeWordModel.ppn')
+    custom_keyword_path = os.path.join(current_dir, '..', '..', 'config', 'WakeWord', 'Well-Bot_en_raspberry-pi_v3_0_0.ppn')
     intent_config_path = os.path.join(current_dir, '..', '..', 'config', 'intents.json')
     preference_file_path = os.path.join(current_dir, '..', '..', 'config', 'preference.json')
 

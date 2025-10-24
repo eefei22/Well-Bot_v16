@@ -56,7 +56,7 @@ class WellBotOrchestrator:
 
         # Paths to configuration
         self.backend_dir = backend_dir
-        self.wakeword_model_path  = self.backend_dir / "config" / "WakeWord" / "WellBot_WakeWordModel.ppn"
+        self.wakeword_model_path  = self.backend_dir / "config" / "WakeWord" / "Well-Bot_en_raspberry-pi_v3_0_0.ppn"
         self.intent_model_path    = self.backend_dir / "config" / "intents.json"
         self.wakeword_config_path = self.backend_dir / "config" / "wakeword_config.json"
         self.llm_config_path      = self.backend_dir / "config" / "smalltalk_instructions.json"
