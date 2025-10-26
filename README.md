@@ -35,7 +35,6 @@ This project provides Docker and Docker Compose configurations to run the Python
 - For environment-specific configuration, use a `.env` file and reference it in the compose file.
 
 ---
-*This section was updated to reflect the current Docker setup for the backend. Please ensure your local configuration matches any changes you make to the Docker or Compose files.*
 
 Well-Bot_v16/
 ├── 📄 compose.yaml                    # Docker Compose configuration
@@ -47,7 +46,7 @@ Well-Bot_v16/
 └── backend/
 	├── 📄 main.py                        # Main application entry point (624 lines)
 	├── 📄 requirements.txt               # Python dependencies
-	├── 📄 env_template.txt               # Environment variables template
+	├── 📄 .env                           # Environment variables 
 	├── 📁 assets/                        # Multi-language audio assets
 	│   ├── 📁 BAHASA/                    # Malay audio files (7 files)
 	│   ├── 📁 ENGLISH/                   # English audio files (11 files)

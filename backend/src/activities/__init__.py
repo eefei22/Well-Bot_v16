@@ -6,7 +6,8 @@ Each activity is a self-contained component with its own configuration and lifec
 """
 
 from .smalltalk import SmallTalkActivity
+from .journal import JournalActivity
 
-__all__ = ['SmallTalkActivity']
+__all__ = ['SmallTalkActivity', 'JournalActivity']
 
 

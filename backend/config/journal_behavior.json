@@ -1,0 +1,29 @@
+{
+  "silence_timeout_seconds": 10,
+  "nudge_timeout_seconds": 10,
+  "pause_finalization_seconds": 2.5,
+  "max_duration_seconds": 150,
+  "nudge_pre_delay_ms": 200,
+  "nudge_post_delay_ms": 300,
+  "termination_phrases": [
+    "stop journal",
+    "save journal",
+    "end entry",
+    "that's all",
+    "finish journal",
+    "done journaling",
+    "end journal",
+    "stop recording"
+  ],
+  "default_mood": 3,
+  "min_words_threshold": 5,
+  "prompts": {
+    "start": "Ready to journal. Start speaking after the tone. You can pause anytime to think. Say 'stop journal' when you're finished.",
+    "nudge": "Are you still there? Continue speaking or say 'stop journal' to finish.",
+    "saving": "Saving your journal entry now.",
+    "saved": "Journal entry saved with {word_count} words.",
+    "timeout": "Saving your journal entry now."
+  },
+  "use_audio_files": false
+}
+

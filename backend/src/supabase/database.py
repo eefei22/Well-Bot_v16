@@ -35,3 +35,30 @@ def list_conversations(limit: int = 20, user_id: str = DEV_USER_ID) -> List[Dict
 def list_messages(conversation_id: str, limit: int = 100) -> List[Dict[str, Any]]:
     res = sb.table("wb_message").select("*").eq("conversation_id", conversation_id).order("id", desc=False).limit(limit).execute()
     return res.data
+
+def upsert_journal(user_id: str, title: str, body: str, mood: int,
+                   topics: List[str], is_draft: bool) -> Dict[str, Any]:
+    """
+    Create a new journal entry.
+    
+    Args:
+        user_id: User ID
+        title: Journal entry title
+        body: Journal entry body text
+        mood: Mood score (1-5)
+        topics: List of topic strings
+        is_draft: Whether the entry is a draft
+    
+    Returns:
+        Dictionary with inserted journal data
+    """
+    payload = {
+        "user_id": user_id,
+        "title": title,
+        "body": body,
+        "mood": mood,
+        "topics": topics,
+        "is_draft": is_draft,
+    }
+    res = sb.table("wb_journal").insert(payload).execute()
+    return res.data[0]
