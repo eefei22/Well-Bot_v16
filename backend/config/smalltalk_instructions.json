@@ -5,6 +5,13 @@
   "nudge_timeout_seconds": 15,
   "max_turns": 20,
   "nudge_pre_delay_ms": 200,
-  "nudge_post_delay_ms": 300
+  "nudge_post_delay_ms": 300,
+  "prompts": {
+    "start": "What's on your mind?",
+    "nudge": "Hey are you still there? Feel free to continue our conversation.",
+    "timeout": "It seems like you're not there. I'll go take a break now. Just call me when you're ready to talk again.",
+    "end": "Okay talk later, bye for now!"
+  },
+  "use_audio_files": false
 }
 

@@ -73,6 +73,9 @@ class SmallTalkActivity:
             with open(llm_config_path, "r", encoding="utf-8") as f:
                 llm_config = json.load(f)
             
+            # Store llm_config for access in methods
+            self.llm_config = llm_config
+            
             # Load user preferences for audio paths
             preference_path = self.backend_dir / "config" / "preference.json"
             with open(preference_path, "r", encoding="utf-8") as f:
@@ -166,9 +169,23 @@ class SmallTalkActivity:
             conv_id = self.session_manager.start_session("Small Talk")
             self.llm_pipeline.conversation_id = conv_id
             
-            # Play startup audio
-            startup_audio_path = self.backend_dir / self.audio_config["start_audio_path"]
-            self.audio_manager.play_audio_file(str(startup_audio_path))
+            # Check if audio files should be used
+            use_audio_files = self.llm_config.get("use_audio_files", False)
+            
+            # Play startup audio if enabled
+            if use_audio_files:
+                startup_audio_path = self.backend_dir / self.audio_config["start_audio_path"]
+                self.audio_manager.play_audio_file(str(startup_audio_path))
+            
+            # TTS prompt from config
+            try:
+                prompts = self.llm_config.get("prompts", {})
+                start_prompt = prompts.get("start", "Hello! I'm here to chat with you. What's on your mind?")
+            except Exception as e:
+                logger.warning(f"Failed to load start prompt from config: {e}")
+                start_prompt = "Hello! I'm here to chat with you. What's on your mind?"
+            
+            self._speak(start_prompt)
             
             # Start silence monitoring
             self.audio_manager.start_silence_monitoring(
@@ -250,6 +267,23 @@ class SmallTalkActivity:
         
         logger.info("✅ SmallTalk activity cleanup completed")
     
+    def _speak(self, text: str):
+        """Speak text using TTS"""
+        if not self.llm_pipeline or not self.llm_pipeline.tts:
+            return
+        
+        try:
+            def text_gen():
+                yield text
+            
+            # Generate PCM chunks
+            pcm_chunks = self.llm_pipeline.tts.stream_synthesize(text_gen())
+            
+            # Play chunks
+            self.audio_manager.play_tts_stream(pcm_chunks)
+        except Exception as e:
+            logger.error(f"TTS error: {e}")
+    
     def reinitialize(self) -> bool:
         """Re-initialize the activity for subsequent runs"""
         logger.info("🔄 Re-initializing SmallTalk activity...")
@@ -327,8 +361,23 @@ class SmallTalkActivity:
                     logger.info("No termination detected, proceeding with conversation...")
                 except TerminationPhraseDetected as e:
                     logger.info(f"TERMINATION TRIGGERED! {e}")
-                    end_audio_path = self.backend_dir / self.audio_config["end_audio_path"]
-                    self.audio_manager.play_audio_file(str(end_audio_path))
+                    
+                    use_audio_files = self.llm_config.get("use_audio_files", False)
+                    
+                    # Play end audio if enabled
+                    if use_audio_files:
+                        end_audio_path = self.backend_dir / self.audio_config["end_audio_path"]
+                        self.audio_manager.play_audio_file(str(end_audio_path))
+                    
+                    # TTS prompt from config
+                    try:
+                        prompts = self.llm_config.get("prompts", {})
+                        end_prompt = prompts.get("end", "Goodbye! Take care and talk to you soon.")
+                    except Exception as e:
+                        logger.warning(f"Failed to load end prompt from config: {e}")
+                        end_prompt = "Goodbye! Take care and talk to you soon."
+                    
+                    self._speak(end_prompt)
                     
                     # Stop both the activity and session manager
                     if self.session_manager:
@@ -375,14 +424,44 @@ class SmallTalkActivity:
     def _handle_nudge(self):
         """Handle silence nudge callback"""
         logger.info("🔔 Handling silence nudge...")
-        nudge_audio_path = self.backend_dir / self.audio_config["nudge_audio_path"]
-        self.audio_manager.play_audio_file(str(nudge_audio_path))
+        
+        use_audio_files = self.llm_config.get("use_audio_files", False)
+        
+        # Play nudge audio if enabled
+        if use_audio_files:
+            nudge_audio_path = self.backend_dir / self.audio_config["nudge_audio_path"]
+            self.audio_manager.play_audio_file(str(nudge_audio_path))
+        
+        # TTS prompt from config
+        try:
+            prompts = self.llm_config.get("prompts", {})
+            nudge_prompt = prompts.get("nudge", "Are you still there? Feel free to continue our conversation.")
+        except Exception as e:
+            logger.warning(f"Failed to load nudge prompt from config: {e}")
+            nudge_prompt = "Are you still there? Feel free to continue our conversation."
+        
+        self._speak(nudge_prompt)
     
     def _handle_timeout(self):
         """Handle silence timeout callback"""
         logger.info("⏰ Handling silence timeout...")
-        termination_audio_path = self.backend_dir / self.audio_config["termination_audio_path"]
-        self.audio_manager.play_audio_file(str(termination_audio_path))
+        
+        use_audio_files = self.llm_config.get("use_audio_files", False)
+        
+        # Play termination audio if enabled
+        if use_audio_files:
+            termination_audio_path = self.backend_dir / self.audio_config["termination_audio_path"]
+            self.audio_manager.play_audio_file(str(termination_audio_path))
+        
+        # TTS prompt from config
+        try:
+            prompts = self.llm_config.get("prompts", {})
+            timeout_prompt = prompts.get("timeout", "It seems you've stepped away. I'll be here when you're ready to talk again.")
+        except Exception as e:
+            logger.warning(f"Failed to load timeout prompt from config: {e}")
+            timeout_prompt = "It seems you've stepped away. I'll be here when you're ready to talk again."
+        
+        self._speak(timeout_prompt)
         
         # Stop both the activity and session manager
         if self.session_manager:
