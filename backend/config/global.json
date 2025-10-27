@@ -23,8 +23,8 @@
     "nudge_timeout_seconds": 10,
     "pause_finalization_seconds": 2.5,
     "max_duration_seconds": 150,
-    "nudge_pre_delay_ms": 200,
-    "nudge_post_delay_ms": 300,
+    "nudge_pre_delay_ms": 100,
+    "nudge_post_delay_ms": 100,
     "default_mood": 3,
     "min_words_threshold": 5,
     "use_audio_files": false
