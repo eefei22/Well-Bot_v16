@@ -25,7 +25,8 @@ from src.components.mic_stream import MicStream
 from src.components.conversation_audio_manager import ConversationAudioManager
 from src.components.tts import GoogleTTSClient
 from src.supabase.database import upsert_journal, DEV_USER_ID
-from src.utils.config_loader import load_global_config, load_language_config
+from src.utils.config_resolver import get_global_config_for_user, get_language_config
+from src.supabase.auth import get_current_user_id
 from google.cloud import texttospeech
 
 logger = logging.getLogger(__name__)
@@ -66,10 +67,10 @@ class JournalActivity:
     and automatically saves journal entries to the database.
     """
     
-    def __init__(self, backend_dir: Path, user_id: str = DEV_USER_ID):
+    def __init__(self, backend_dir: Path, user_id: Optional[str] = None):
         """Initialize the Journal activity"""
         self.backend_dir = backend_dir
-        self.user_id = user_id
+        self.user_id = user_id or get_current_user_id()
         
         # Components (initialized in initialize())
         self.audio_manager: Optional[ConversationAudioManager] = None
@@ -101,14 +102,18 @@ class JournalActivity:
             logger.info(f"Initializing Journal activity...")
             logger.info(f"Backend directory: {self.backend_dir}")
             
-            # Load configurations
-            self.global_config = load_global_config()
-            language_config = load_language_config('en')
+            # Load user-specific configurations
+            logger.info(f"Loading configs for user {self.user_id}")
+            self.global_config = get_global_config_for_user(self.user_id)
+            language_config = get_language_config(self.user_id)
             
             # Extract journal config and audio paths
             self.config = language_config.get("journal", {})
             audio_paths = language_config.get("audio_paths", {})
             self.global_journal_config = self.global_config.get("journal", {})
+            
+            logger.info(f"Configs loaded - Language: {language_config.get('_resolved_language', 'unknown')}")
+            logger.info(f"Journal config keys: {list(self.config.keys())}")
             
             logger.info("✓ Loaded journal configuration")
             

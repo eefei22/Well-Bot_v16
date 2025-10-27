@@ -36,13 +36,13 @@ try:
     from .mic_stream import MicStream
     from .stt import GoogleSTTService
     from .intent_detection import IntentDetection, normalize_text
-    from ..utils.config_loader import PORCUPINE_ACCESS_KEY, load_language_config, load_global_config
+    from ..utils.config_loader import PORCUPINE_ACCESS_KEY
 except ImportError:
     from wakeword import WakeWordDetector, create_wake_word_detector
     from mic_stream import MicStream
     from stt import GoogleSTTService
     from intent_detection import IntentDetection, normalize_text
-    from utils.config_loader import PORCUPINE_ACCESS_KEY, load_language_config, load_global_config
+    from utils.config_loader import PORCUPINE_ACCESS_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +58,7 @@ class VoicePipeline:
         wakeword_detector: WakeWordDetector,
         stt_service: GoogleSTTService,
         lang: str = "en-US",
+        user_id: Optional[str] = None,
         on_wake_callback: Optional[Callable[[], None]] = None,
         on_final_transcript: Optional[Callable[[str, Optional[dict]], None]] = None,
         intent_config_path: Optional[str] = None,
@@ -69,17 +70,23 @@ class VoicePipeline:
         self.lang = lang
         self.on_wake_callback = on_wake_callback
         self.on_final_transcript = on_final_transcript
-
-        # Load configurations
-        self.language_config = load_language_config('en')
-        self.global_config = load_global_config()
+        
+        # Resolve user ID
+        from ..supabase.auth import get_current_user_id
+        self.user_id = user_id if user_id is not None else get_current_user_id()
+        logger.info(f"VoicePipeline initialized for user: {self.user_id}")
+        
+        # Load user-specific configurations
+        from ..utils.config_resolver import get_global_config_for_user, get_language_config
+        self.global_config = get_global_config_for_user(self.user_id)
+        self.language_config = get_language_config(self.user_id)
 
         self.wakeword_audio_path = self.language_config["audio_paths"].get("wokeword_audio_path")
         logger.info(f"Wakeword audio path loaded: {self.wakeword_audio_path}")
 
         # Initialize intent detection from language config
         self.intent_phrases = self.language_config.get("intents", {})
-        logger.info("Intent phrases loaded from language config")
+        logger.info(f"Intent phrases loaded for user {self.user_id}")
 
         self.active = False
         self.stt_active = False
@@ -321,6 +328,7 @@ def create_voice_pipeline(
     access_key_file: str,
     custom_keyword_file: Optional[str] = None,
     language: str = "en-US",
+    user_id: Optional[str] = None,
     on_wake_callback: Optional[Callable[[], None]] = None,
     on_final_transcript: Optional[Callable[[str, Optional[dict]], None]] = None,
     intent_config_path: Optional[str] = None,
@@ -333,6 +341,7 @@ def create_voice_pipeline(
         wakeword_detector=wakeword_detector,
         stt_service=stt_service,
         lang=language,
+        user_id=user_id,
         on_wake_callback=on_wake_callback,
         on_final_transcript=on_final_transcript,
         intent_config_path=intent_config_path,

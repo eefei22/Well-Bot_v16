@@ -28,7 +28,8 @@ from src.components._pipeline_wakeword import create_voice_pipeline, VoicePipeli
 from src.components.stt import GoogleSTTService
 from src.components.mic_stream import MicStream
 from src.activities.smalltalk import SmallTalkActivity
-from src.utils.config_loader import load_global_config, load_language_config, GLOBAL_CONFIG, LANGUAGE_CONFIG
+from src.utils.config_resolver import get_global_config_for_user, resolve_language
+from src.supabase.auth import get_current_user_id
 
 # Configure logging
 logging.basicConfig(
@@ -59,9 +60,12 @@ class WellBotOrchestrator:
         self.backend_dir = backend_dir
         self.wakeword_model_path  = self.backend_dir / "config" / "WakeWord" / "WellBot_WakeWordModel.ppn"
         
-        # Load new config structure
-        self.global_config = GLOBAL_CONFIG
-        self.language_config = LANGUAGE_CONFIG
+        # Get current user at startup
+        self.user_id = get_current_user_id()
+        logger.info(f"Orchestrator initialized for user: {self.user_id}")
+        
+        # Load user-specific config (will be loaded in _initialize_components)
+        self.global_config = None
 
         # Components
         self.voice_pipeline: Optional[VoicePipeline] = None
@@ -109,15 +113,24 @@ class WellBotOrchestrator:
     def _initialize_components(self) -> bool:
         """Initialize STT, voice pipeline, activities."""
         try:
+            # Resolve user language and load configs
+            user_lang = resolve_language(self.user_id)
+            logger.info(f"Resolved language '{user_lang}' for user {self.user_id}")
+            
+            self.global_config = get_global_config_for_user(self.user_id)
+            logger.info(f"Loaded global config for user")
+            
             logger.info("Initializing STT service…")
-            self.stt_service = GoogleSTTService(language="en-US", sample_rate=16000)
-            logger.info("✓ STT service initialized")
+            stt_language = self.global_config["language_codes"]["stt_language_code"]
+            self.stt_service = GoogleSTTService(language=stt_language, sample_rate=16000)
+            logger.info(f"✓ STT service initialized with language: {stt_language}")
 
             logger.info("Initializing voice pipeline (wake word)…")
             self.voice_pipeline = create_voice_pipeline(
                 access_key_file="",  # Deprecated - now uses environment variable
                 custom_keyword_file=str(self.wakeword_model_path),
                 language=self.global_config["language_codes"]["stt_language_code"],
+                user_id=self.user_id,  # Pass user_id
                 on_wake_callback=self._on_wake_detected,
                 on_final_transcript=self._on_transcript_received,
                 intent_config_path=None,  # Now loaded from language_config
@@ -128,7 +141,7 @@ class WellBotOrchestrator:
             logger.info("✓ Voice pipeline initialized")
 
             logger.info("Initializing SmallTalk activity…")
-            self.smalltalk_activity = SmallTalkActivity(backend_dir=self.backend_dir)
+            self.smalltalk_activity = SmallTalkActivity(backend_dir=self.backend_dir, user_id=self.user_id)
             if not self.smalltalk_activity.initialize():
                 raise RuntimeError("Failed to initialize SmallTalk activity")
             logger.info("✓ SmallTalk activity initialized")
@@ -339,8 +352,10 @@ class WellBotOrchestrator:
         # Stop STT session to mute microphone before playing audio
         self._stop_stt_session()
         
-        # Play nudge audio
-        nudge_audio_path = self.backend_dir / self.language_config["audio_paths"]["nudge_audio_path"]
+        # Play nudge audio (load user-specific config)
+        from src.utils.config_resolver import get_language_config
+        language_config = get_language_config(self.user_id)
+        nudge_audio_path = self.backend_dir / language_config["audio_paths"]["nudge_audio_path"]
         self._play_audio_blocking(nudge_audio_path)
         
         # Start final timeout timer
@@ -360,8 +375,10 @@ class WellBotOrchestrator:
         # Stop STT session to mute microphone before playing audio
         self._stop_stt_session()
         
-        # Play termination audio
-        termination_audio_path = self.backend_dir / self.language_config["audio_paths"]["termination_audio_path"]
+        # Play termination audio (load user-specific config)
+        from src.utils.config_resolver import get_language_config
+        language_config = get_language_config(self.user_id)
+        termination_audio_path = self.backend_dir / language_config["audio_paths"]["termination_audio_path"]
         self._play_audio_blocking(termination_audio_path)
         
         # Reset state and restart wake word detection
@@ -415,8 +432,10 @@ class WellBotOrchestrator:
         # Stop any ongoing STT session
         self._stop_stt_session()
         
-        # Play prompt repeat audio
-        prompt_repeat_path = self.backend_dir / self.language_config["audio_paths"]["prompt_repeat_path"]
+        # Play prompt repeat audio (load user-specific config)
+        from src.utils.config_resolver import get_language_config
+        language_config = get_language_config(self.user_id)
+        prompt_repeat_path = self.backend_dir / language_config["audio_paths"]["prompt_repeat_path"]
         self._play_audio_blocking(prompt_repeat_path)
         
         # Reset state and restart wakeword detection (clean restart)
@@ -433,8 +452,10 @@ class WellBotOrchestrator:
         # Stop any ongoing STT session
         self._stop_stt_session()
         
-        # Play activity unavailable audio
-        unavailable_path = self.backend_dir / self.language_config["audio_paths"]["activity_unavailable_path"]
+        # Play activity unavailable audio (load user-specific config)
+        from src.utils.config_resolver import get_language_config
+        language_config = get_language_config(self.user_id)
+        unavailable_path = self.backend_dir / language_config["audio_paths"]["activity_unavailable_path"]
         self._play_audio_blocking(unavailable_path)
         
         # Reset state and restart wakeword detection (clean restart)
@@ -478,6 +499,7 @@ class WellBotOrchestrator:
                 access_key_file="",  # Deprecated - now uses environment variable
                 custom_keyword_file=str(self.wakeword_model_path),
                 language=self.global_config["language_codes"]["stt_language_code"],
+                user_id=self.user_id,  # Pass user_id for user-specific config
                 on_wake_callback=self._on_wake_detected,
                 on_final_transcript=self._on_transcript_received,
                 intent_config_path=None,  # Now loaded from language_config

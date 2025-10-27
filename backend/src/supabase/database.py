@@ -1,10 +1,29 @@
 from typing import Optional, Dict, Any, List
-from .client import get_supabase
+from .client import get_supabase, fetch_user_by_id
+import logging
 
-# If you’re running everything locally now, hardcode your dev user_id here:
+logger = logging.getLogger(__name__)
+
+# If you're running everything locally now, hardcode your dev user_id here:
 DEV_USER_ID = "8517c97f-66ef-4955-86ed-531013d33d3e"
 
 sb = get_supabase(service=True)
+
+def get_user_language(user_id: str) -> Optional[str]:
+    """
+    Fetch user's language preference from database.
+    Returns language code ('en', 'cn', 'bm') or None if not found.
+    """
+    user = fetch_user_by_id(user_id)
+    if user and 'language' in user:
+        logger.info(f"Found language '{user['language']}' for user {user_id}")
+        return user['language']
+    logger.warning(f"No language found for user {user_id}")
+    return None
+
+def get_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
+    """Get full user record by ID."""
+    return fetch_user_by_id(user_id)
 
 def start_conversation(user_id: str = DEV_USER_ID, title: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> str:
     data = {

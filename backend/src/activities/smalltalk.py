@@ -22,7 +22,9 @@ from src.components.mic_stream import MicStream
 from src.components.conversation_audio_manager import ConversationAudioManager
 from src.components.conversation_session import ConversationSession
 from src.components._pipeline_smalltalk import SmallTalkSession, TerminationPhraseDetected, normalize_text
-from src.utils.config_loader import get_deepseek_config, load_global_config, load_language_config
+from src.utils.config_loader import get_deepseek_config
+from src.utils.config_resolver import get_global_config_for_user, get_language_config
+from src.supabase.auth import get_current_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +37,10 @@ class SmallTalkActivity:
     SmallTalk functionality without the intermediate manager layer.
     """
     
-    def __init__(self, backend_dir: Path):
+    def __init__(self, backend_dir: Path, user_id: Optional[str] = None):
         """Initialize the SmallTalk activity"""
         self.backend_dir = backend_dir
+        self.user_id = user_id or get_current_user_id()
         
         # Components (initialized in initialize())
         self.audio_manager: Optional[ConversationAudioManager] = None
@@ -50,7 +53,7 @@ class SmallTalkActivity:
         self._active = False
         self._initialized = False
         
-        logger.info("SmallTalkActivity initialized")
+        logger.info(f"SmallTalkActivity initialized for user {self.user_id}")
     
     def initialize(self) -> bool:
         """Initialize the activity components"""
@@ -58,14 +61,18 @@ class SmallTalkActivity:
             logger.info(f"Initializing SmallTalk activity...")
             logger.info(f"Backend directory: {self.backend_dir}")
             
-            # Load configurations
-            self.global_config = load_global_config()
-            self.language_config = load_language_config('en')
+            # Load user-specific configurations
+            logger.info(f"Loading configs for user {self.user_id}")
+            self.global_config = get_global_config_for_user(self.user_id)
+            self.language_config = get_language_config(self.user_id)
             
             # Extract configs
             self.smalltalk_config = self.language_config.get("smalltalk", {})
             self.audio_paths = self.language_config.get("audio_paths", {})
             self.global_smalltalk_config = self.global_config.get("smalltalk", {})
+            
+            logger.info(f"Configs loaded - Global section keys: {list(self.global_config.keys())}")
+            logger.info(f"Language config section keys: {list(self.language_config.keys())}")
             
             # Initialize STT service
             logger.info("Initializing STT service...")
