@@ -113,3 +113,4 @@ except ValueError as e:
     print(f"Configuration Error: {e}")
     print("Please check your .env file and ensure all required variables are set.")
     print("See env_template.txt for reference.")
+

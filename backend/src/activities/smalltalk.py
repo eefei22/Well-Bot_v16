@@ -22,7 +22,7 @@ from src.components.mic_stream import MicStream
 from src.components.conversation_audio_manager import ConversationAudioManager
 from src.components.conversation_session import ConversationSession
 from src.components._pipeline_smalltalk import SmallTalkSession, TerminationPhraseDetected, normalize_text
-from src.config_loader import get_deepseek_config
+from src.utils.config_loader import get_deepseek_config
 
 logger = logging.getLogger(__name__)
 

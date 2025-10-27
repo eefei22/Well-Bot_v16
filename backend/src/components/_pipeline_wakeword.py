@@ -36,13 +36,13 @@ try:
     from .mic_stream import MicStream
     from .stt import GoogleSTTService
     from .intent_detection import IntentDetection
-    from ..config_loader import PORCUPINE_ACCESS_KEY
+    from ..utils.config_loader import PORCUPINE_ACCESS_KEY
 except ImportError:
     from wakeword import WakeWordDetector, create_wake_word_detector
     from mic_stream import MicStream
     from stt import GoogleSTTService
     from intent_detection import IntentDetection
-    from config_loader import PORCUPINE_ACCESS_KEY
+    from utils.config_loader import PORCUPINE_ACCESS_KEY
 
 logger = logging.getLogger(__name__)
 

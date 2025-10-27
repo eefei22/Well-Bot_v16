@@ -1,5 +1,5 @@
 from supabase import create_client, Client
-from ..config_loader import get_supabase_config
+from ..utils.config_loader import get_supabase_config
 
 def get_supabase(service: bool = True) -> Client:
     """Get Supabase client using environment variables."""

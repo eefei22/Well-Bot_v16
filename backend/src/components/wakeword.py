@@ -18,9 +18,9 @@ import logging
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 try:
-    from ..config_loader import PORCUPINE_ACCESS_KEY
+    from ..utils.config_loader import PORCUPINE_ACCESS_KEY
 except ImportError:
-    from config_loader import PORCUPINE_ACCESS_KEY
+    from utils.config_loader import PORCUPINE_ACCESS_KEY
 
 logger = logging.getLogger(__name__)
 

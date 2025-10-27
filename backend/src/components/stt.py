@@ -9,7 +9,7 @@ import os
 import logging
 from google.cloud import speech
 from typing import Callable, Iterable, Optional, Dict, Any
-from ..config_loader import get_google_cloud_credentials_path
+from ..utils.config_loader import get_google_cloud_credentials_path
 
 # Set up credentials from environment variables
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = get_google_cloud_credentials_path()

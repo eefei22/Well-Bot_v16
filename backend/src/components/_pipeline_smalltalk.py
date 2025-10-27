@@ -17,14 +17,14 @@ try:
     from .llm import DeepSeekClient
     from .tts import GoogleTTSClient
     from ..supabase.database import start_conversation, add_message, end_conversation
-    from ..config_loader import get_deepseek_config
+    from ..utils.config_loader import get_deepseek_config
 except ImportError:
     from mic_stream import MicStream
     from stt import GoogleSTTService
     from llm import DeepSeekClient
     from tts import GoogleTTSClient
     from src.supabase.database import start_conversation, add_message, end_conversation
-    from config_loader import get_deepseek_config
+    from utils.config_loader import get_deepseek_config
 
 
 logger = logging.getLogger(__name__)
