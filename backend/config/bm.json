@@ -113,6 +113,15 @@
       "timeout": "Menyimpan entri jurnal anda sekarang."
     }
   },
+  "wakeword_responses": {
+    "prompts": {
+      "wakeword_detected": "Hey, saya dengar anda memanggil saya. Apa yang boleh saya bantu?",
+      "nudge": "Saya sedang mendengar. Apakah yang anda mahu lakukan?",
+      "timeout": "Saya akan berada di sini apabila anda memerlukan saya. Hanya panggil nama saya.",
+      "unknown_intent": "Saya tidak begitu faham. Bolehkah anda mengulanginya?",
+      "activity_unavailable": "Fungsi itu belum tersedia lagi. Apa lagi yang boleh saya bantu?"
+    }
+  },
   "audio_paths": {
     "wokeword_audio_path": "assets/BAHASA/wokeword_MY_male.wav",
     "start_smalltalk_audio_path": "assets/BAHASA/start_smalltalk_MY_male.wav",

@@ -113,6 +113,15 @@
       "timeout": "Saving your journal entry now."
     }
   },
+  "wakeword_responses": {
+    "prompts": {
+      "wakeword_detected": "Hey, I heard you called me. What can I help you with?",
+      "nudge": "I'm listening. What would you like to do?",
+      "timeout": "I'll be here when you need me. Just say my name.",
+      "unknown_intent": "I didn't quite catch that. Could you please repeat?",
+      "activity_unavailable": "That feature isn't available yet. What else can I help you with?"
+    }
+  },
   "audio_paths": {
     "wokeword_audio_path": "assets/ENGLISH/wokeword_EN_male.wav",
     "start_smalltalk_audio_path": "assets/ENGLISH/start_smalltalk_EN_male.wav",

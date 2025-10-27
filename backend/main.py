@@ -26,6 +26,7 @@ sys.path.append(str(backend_dir))
 # Import pipeline / components
 from src.components._pipeline_wakeword import create_voice_pipeline, VoicePipeline
 from src.components.stt import GoogleSTTService
+from src.components.tts import GoogleTTSClient
 from src.components.mic_stream import MicStream
 from src.activities.smalltalk import SmallTalkActivity
 from src.utils.config_resolver import get_global_config_for_user, resolve_language
@@ -71,6 +72,7 @@ class WellBotOrchestrator:
         self.voice_pipeline: Optional[VoicePipeline] = None
         self.smalltalk_activity: Optional[SmallTalkActivity] = None
         self.stt_service: Optional[GoogleSTTService] = None
+        self.tts_service: Optional[GoogleTTSClient] = None
 
         # Silence monitoring for wakeword
         self._silence_timer: Optional[threading.Timer] = None
@@ -124,6 +126,18 @@ class WellBotOrchestrator:
             stt_language = self.global_config["language_codes"]["stt_language_code"]
             self.stt_service = GoogleSTTService(language=stt_language, sample_rate=16000)
             logger.info(f"✓ STT service initialized with language: {stt_language}")
+
+            logger.info("Initializing TTS service for wakeword responses…")
+            from google.cloud import texttospeech
+            self.tts_service = GoogleTTSClient(
+                voice_name=self.global_config["language_codes"]["tts_voice_name"],
+                language_code=self.global_config["language_codes"]["tts_language_code"],
+                audio_encoding=texttospeech.AudioEncoding.PCM,
+                sample_rate_hertz=24000,
+                num_channels=1,
+                sample_width_bytes=2
+            )
+            logger.info("✓ TTS service initialized")
 
             logger.info("Initializing voice pipeline (wake word)…")
             self.voice_pipeline = create_voice_pipeline(
@@ -347,16 +361,32 @@ class WellBotOrchestrator:
 
     def _handle_wakeword_nudge(self):
         """Handle nudge when user is silent after wake word"""
-        logger.info("User silent after wake word, playing nudge audio")
+        logger.info("User silent after wake word, playing nudge")
         
         # Stop STT session to mute microphone before playing audio
         self._stop_stt_session()
         
-        # Play nudge audio (load user-specific config)
+        # Load user-specific config
         from src.utils.config_resolver import get_language_config
         language_config = get_language_config(self.user_id)
-        nudge_audio_path = self.backend_dir / language_config["audio_paths"]["nudge_audio_path"]
-        self._play_audio_blocking(nudge_audio_path)
+        wakeword_config = language_config.get("wakeword_responses", {})
+        use_audio_files = self.global_config["wakeword"].get("use_audio_files", False)
+        
+        # Play nudge audio if enabled
+        if use_audio_files:
+            nudge_audio_path = self.backend_dir / language_config["audio_paths"]["nudge_audio_path"]
+            if nudge_audio_path.exists():
+                self._play_audio_blocking(nudge_audio_path)
+        
+        # TTS prompt from config
+        try:
+            prompts = wakeword_config.get("prompts", {})
+            nudge_prompt = prompts.get("nudge", "I'm listening. What would you like to do?")
+        except Exception as e:
+            logger.warning(f"Failed to load nudge prompt from config: {e}")
+            nudge_prompt = "I'm listening. What would you like to do?"
+        
+        self._speak(nudge_prompt)
         
         # Start final timeout timer
         with self._silence_lock:
@@ -370,22 +400,37 @@ class WellBotOrchestrator:
 
     def _handle_wakeword_timeout(self):
         """Handle final timeout after wake word with no user speech"""
-        logger.info("User timeout after wake word, playing termination audio and restarting wake word")
+        logger.info("User timeout after wake word, playing termination and restarting")
         
         # Stop STT session to mute microphone before playing audio
         self._stop_stt_session()
         
-        # Play termination audio (load user-specific config)
+        # Load user-specific config
         from src.utils.config_resolver import get_language_config
         language_config = get_language_config(self.user_id)
-        termination_audio_path = self.backend_dir / language_config["audio_paths"]["termination_audio_path"]
-        self._play_audio_blocking(termination_audio_path)
+        wakeword_config = language_config.get("wakeword_responses", {})
+        use_audio_files = self.global_config["wakeword"].get("use_audio_files", False)
+        
+        # Play termination audio if enabled
+        if use_audio_files:
+            termination_audio_path = self.backend_dir / language_config["audio_paths"]["termination_audio_path"]
+            if termination_audio_path.exists():
+                self._play_audio_blocking(termination_audio_path)
+        
+        # TTS prompt from config
+        try:
+            prompts = wakeword_config.get("prompts", {})
+            timeout_prompt = prompts.get("timeout", "I'll be here when you need me. Just say my name.")
+        except Exception as e:
+            logger.warning(f"Failed to load timeout prompt from config: {e}")
+            timeout_prompt = "I'll be here when you need me. Just say my name."
+        
+        self._speak(timeout_prompt)
         
         # Reset state and restart wake word detection
         with self._lock:
             self.state = SystemState.LISTENING
         
-        # Restart the wakeword pipeline
         logger.info("Restarting wake word detection after timeout")
         self._restart_wakeword_detection()
 
@@ -414,6 +459,40 @@ class WellBotOrchestrator:
         except Exception as e:
             logger.error(f"Failed to play audio: {e}")
 
+    def _speak(self, text: str):
+        """Speak text using TTS (for wakeword responses)"""
+        if not self.tts_service:
+            logger.warning("TTS service not available")
+            return
+        
+        try:
+            def text_gen():
+                yield text
+            
+            # Generate PCM chunks
+            pcm_chunks = self.tts_service.stream_synthesize(text_gen())
+            
+            # Play PCM chunks using PyAudio
+            import pyaudio
+            pa = pyaudio.PyAudio()
+            stream = pa.open(
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=24000,
+                output=True
+            )
+            
+            for chunk in pcm_chunks:
+                stream.write(chunk)
+            
+            stream.stop_stream()
+            stream.close()
+            pa.terminate()
+            
+            logger.info(f"TTS played: {text[:50]}...")
+        except Exception as e:
+            logger.error(f"TTS error: {e}")
+
     def _stop_stt_session(self):
         """Stop the current STT session to mute microphone"""
         try:
@@ -432,11 +511,27 @@ class WellBotOrchestrator:
         # Stop any ongoing STT session
         self._stop_stt_session()
         
-        # Play prompt repeat audio (load user-specific config)
+        # Load user-specific config
         from src.utils.config_resolver import get_language_config
         language_config = get_language_config(self.user_id)
-        prompt_repeat_path = self.backend_dir / language_config["audio_paths"]["prompt_repeat_path"]
-        self._play_audio_blocking(prompt_repeat_path)
+        wakeword_config = language_config.get("wakeword_responses", {})
+        use_audio_files = self.global_config["wakeword"].get("use_audio_files", False)
+        
+        # Play prompt repeat audio if enabled
+        if use_audio_files:
+            prompt_repeat_path = self.backend_dir / language_config["audio_paths"]["prompt_repeat_path"]
+            if prompt_repeat_path.exists():
+                self._play_audio_blocking(prompt_repeat_path)
+        
+        # TTS prompt from config
+        try:
+            prompts = wakeword_config.get("prompts", {})
+            unknown_prompt = prompts.get("unknown_intent", "I didn't quite catch that. Could you please repeat?")
+        except Exception as e:
+            logger.warning(f"Failed to load unknown intent prompt from config: {e}")
+            unknown_prompt = "I didn't quite catch that. Could you please repeat?"
+        
+        self._speak(unknown_prompt)
         
         # Reset state and restart wakeword detection (clean restart)
         with self._lock:
@@ -452,11 +547,27 @@ class WellBotOrchestrator:
         # Stop any ongoing STT session
         self._stop_stt_session()
         
-        # Play activity unavailable audio (load user-specific config)
+        # Load user-specific config
         from src.utils.config_resolver import get_language_config
         language_config = get_language_config(self.user_id)
-        unavailable_path = self.backend_dir / language_config["audio_paths"]["activity_unavailable_path"]
-        self._play_audio_blocking(unavailable_path)
+        wakeword_config = language_config.get("wakeword_responses", {})
+        use_audio_files = self.global_config["wakeword"].get("use_audio_files", False)
+        
+        # Play activity unavailable audio if enabled
+        if use_audio_files:
+            unavailable_path = self.backend_dir / language_config["audio_paths"]["activity_unavailable_path"]
+            if unavailable_path.exists():
+                self._play_audio_blocking(unavailable_path)
+        
+        # TTS prompt from config
+        try:
+            prompts = wakeword_config.get("prompts", {})
+            unavailable_prompt = prompts.get("activity_unavailable", "That feature isn't available yet. What else can I help you with?")
+        except Exception as e:
+            logger.warning(f"Failed to load activity unavailable prompt from config: {e}")
+            unavailable_prompt = "That feature isn't available yet. What else can I help you with?"
+        
+        self._speak(unavailable_prompt)
         
         # Reset state and restart wakeword detection (clean restart)
         with self._lock:
@@ -572,6 +683,11 @@ class WellBotOrchestrator:
                 self.voice_pipeline.cleanup()
             except Exception:
                 pass
+
+        # Cleanup TTS service
+        if self.tts_service:
+            logger.info("Cleaning up TTS service…")
+            self.tts_service = None
 
         logger.info("✅ Well-Bot Orchestrator stopped")
 

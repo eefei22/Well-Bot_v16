@@ -35,12 +35,14 @@ try:
     from .wakeword import WakeWordDetector, create_wake_word_detector
     from .mic_stream import MicStream
     from .stt import GoogleSTTService
+    from .tts import GoogleTTSClient
     from .intent_detection import IntentDetection, normalize_text
     from ..utils.config_loader import PORCUPINE_ACCESS_KEY
 except ImportError:
     from wakeword import WakeWordDetector, create_wake_word_detector
     from mic_stream import MicStream
     from stt import GoogleSTTService
+    from tts import GoogleTTSClient
     from intent_detection import IntentDetection, normalize_text
     from utils.config_loader import PORCUPINE_ACCESS_KEY
 
@@ -83,6 +85,22 @@ class VoicePipeline:
 
         self.wakeword_audio_path = self.language_config["audio_paths"].get("wokeword_audio_path")
         logger.info(f"Wakeword audio path loaded: {self.wakeword_audio_path}")
+
+        # Initialize TTS service for wakeword responses
+        try:
+            from google.cloud import texttospeech
+            self.tts_service = GoogleTTSClient(
+                voice_name=self.global_config["language_codes"]["tts_voice_name"],
+                language_code=self.global_config["language_codes"]["tts_language_code"],
+                audio_encoding=texttospeech.AudioEncoding.PCM,
+                sample_rate_hertz=24000,
+                num_channels=1,
+                sample_width_bytes=2
+            )
+            logger.info("TTS service initialized for wakeword")
+        except Exception as e:
+            logger.warning(f"Failed to initialize TTS service for wakeword: {e}")
+            self.tts_service = None
 
         # Initialize intent detection from language config
         self.intent_phrases = self.language_config.get("intents", {})
@@ -149,6 +167,40 @@ class VoicePipeline:
         logger.error(f"All audio playback methods failed for: {audio_path}")
         return False
 
+    def _speak(self, text: str):
+        """Speak text using TTS"""
+        if not self.tts_service:
+            logger.warning("TTS service not available")
+            return
+        
+        try:
+            def text_gen():
+                yield text
+            
+            # Generate PCM chunks
+            pcm_chunks = self.tts_service.stream_synthesize(text_gen())
+            
+            # Play PCM chunks using PyAudio
+            import pyaudio
+            pa = pyaudio.PyAudio()
+            stream = pa.open(
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=24000,
+                output=True
+            )
+            
+            for chunk in pcm_chunks:
+                stream.write(chunk)
+            
+            stream.stop_stream()
+            stream.close()
+            pa.terminate()
+            
+            logger.info(f"TTS played: {text[:50]}...")
+        except Exception as e:
+            logger.error(f"TTS error: {e}")
+
     def _detect_intent_from_config(self, user_text: str) -> Optional[dict]:
         """Detect intent from user text using config phrases"""
         if not user_text or not self.intent_phrases:
@@ -176,8 +228,12 @@ class VoicePipeline:
                 return
             self.stt_active = True
 
-        # Play feedback (blocking) if configured
-        if self.wakeword_audio_path:
+        # Load wakeword response config
+        wakeword_config = self.language_config.get("wakeword_responses", {})
+        use_audio_files = self.global_config["wakeword"].get("use_audio_files", False)
+        
+        # Play feedback audio if enabled
+        if use_audio_files and self.wakeword_audio_path:
             try:
                 logger.info(f"Playing wakeword feedback audio: {self.wakeword_audio_path}")
                 success = self._play_audio_file(self.wakeword_audio_path)
@@ -188,7 +244,18 @@ class VoicePipeline:
             except Exception as e:
                 logger.error(f"Error playing wakeword audio: {e}")
         else:
-            logger.debug("No wakeword feedback audio configured")
+            logger.debug("No wakeword feedback audio configured or audio files disabled")
+
+        # TTS prompt from config
+        try:
+            prompts = wakeword_config.get("prompts", {})
+            wakeword_prompt = prompts.get("wakeword_detected", "Hey, I heard you called me. What can I help you with?")
+        except Exception as e:
+            logger.warning(f"Failed to load wakeword detected prompt from config: {e}")
+            wakeword_prompt = "Hey, I heard you called me. What can I help you with?"
+        
+        # Speak the prompt
+        self._speak(wakeword_prompt)
 
         # Callback to orchestrator
         if self.on_wake_callback:
