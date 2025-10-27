@@ -1,0 +1,130 @@
+{
+  "intents": {
+    "smalltalk": [
+      "bercakap",
+      "saya bosan",
+      "saya sangat bosan",
+      "mari berbual",
+      "cakap dengan saya",
+      "mempunyai perbualan",
+      "perbualan santai",
+      "chat dengan saya",
+      "saya mahu bercakap",
+      "mula bercakap",
+      "mulakan perbualan"
+    ],
+    "journaling": [
+      "entri jurnal",
+      "mula menulis jurnal",
+      "mulakan jurnal",
+      "tulis jurnal",
+      "sesi jurnal",
+      "catat pemikiran saya",
+      "rakam hari saya",
+      "jurnal harian",
+      "masa jurnal",
+      "tuliskan pemikiran saya"
+    ],
+    "meditation": [
+      "sesi meditasi",
+      "mulakan meditasi",
+      "mula bermeditasi",
+      "masa meditasi",
+      "meditasi berpandu",
+      "sesi kesedaran",
+      "menenangkan fikiran",
+      "latihan meditasi",
+      "sesi relaksasi",
+      "meditasi"
+    ],
+    "quote": [
+      "petikan hari",
+      "petikan harian",
+      "petikan inspirasi",
+      "petikan motivasi",
+      "beri saya petikan",
+      "kongsi petikan",
+      "petikan kebijaksanaan",
+      "petikan tolong",
+      "beri inspirasi",
+      "motivasikan saya"
+    ],
+    "gratitude": [
+      "amalan kesyukuran",
+      "sesi kesyukuran",
+      "amalkan kesyukuran",
+      "pemikiran bersyukur",
+      "amalan bersyukur",
+      "latihan kesyukuran",
+      "kira berkat",
+      "jurnal kesyukuran",
+      "amalan penghargaan",
+      "masa kesyukuran"
+    ],
+    "termination": [
+      "selamat tinggal",
+      "bye",
+      "jumpa nanti",
+      "bual nanti",
+      "itu sahaja",
+      "tamat perbualan",
+      "berhenti bercakap",
+      "selesai",
+      "sudah",
+      "keluar",
+      "quit",
+      "berhenti",
+      "tamat",
+      "tutup"
+    ]
+  },
+  "smalltalk": {
+    "system_prompt": "Anda adalah Well-Bot, penolong kesejahteraan emosi yang mesra menjalankan perbualan santai dengan pengguna anda. Kekalkan respons anda kasual, pendek dan ringkas. Jangan gunakan emoji. Berikut adalah apa yang pengguna katakan:",
+    "termination_phrases": [
+      "Okay, bye",
+      "Saya kena pergi sekarang",
+      "Bual nanti",
+      "Berhenti bercakap",
+      "Keluar"
+    ],
+    "prompts": {
+      "start": "Apa yang ada dalam fikiran anda?",
+      "nudge": "Hei, adakah anda masih di situ? Teruskan perbualan kami.",
+      "timeout": "Nampaknya anda tiada di situ. Saya akan berehat sekarang. Panggil saya apabila anda sudah bersedia untuk bercakap lagi.",
+      "end": "Okay bual nanti, bye untuk sekarang!"
+    }
+  },
+  "journal": {
+    "termination_phrases": [
+      "henti jurnal",
+      "simpan jurnal",
+      "tamat entri",
+      "itu sahaja",
+      "selesai jurnal",
+      "selesai menulis jurnal",
+      "tamat jurnal",
+      "berhenti rakaman"
+    ],
+    "prompts": {
+      "start": "Bersedia untuk menulis jurnal. Mulakan bercakap selepas nada. Anda boleh berhenti seketika untuk berfikir pada bila-bila masa. Katakan 'henti jurnal' apabila anda selesai.",
+      "nudge": "Adakah anda masih di situ? Teruskan bercakap atau katakan 'henti jurnal' untuk selesai.",
+      "saving": "Menyimpan entri jurnal anda sekarang.",
+      "saved": "Entri jurnal disimpan dengan {word_count} perkataan.",
+      "timeout": "Menyimpan entri jurnal anda sekarang."
+    }
+  },
+  "audio_paths": {
+    "wokeword_audio_path": "assets/BAHASA/wokeword_MY_male.wav",
+    "start_smalltalk_audio_path": "assets/BAHASA/start_smalltalk_MY_male.wav",
+    "start_journal_audio_path": "assets/BAHASA/start_journal_MY_male.wav",
+    "start_gratitude_audio_path": "assets/BAHASA/start_gratitude_MY_male.wav",
+    "start_meditation_audio_path": "assets/BAHASA/start_meditation_MY_male.wav",
+    "start__quote_audio_path": "assets/BAHASA/start_quote_MY_male.wav",
+    "nudge_audio_path": "assets/BAHASA/inactivity_nudge_MY_male.wav",
+    "termination_audio_path": "assets/BAHASA/termination_MY_male.wav",
+    "end_audio_path": "assets/BAHASA/end_smalltalk_MY_male.wav",
+    "prompt_repeat_path": "assets/BAHASA/prompt_repeat_MY_male.wav",
+    "activity_unavailable_path": "assets/BAHASA/activity_unavailable_MY_male.wav"
+  }
+}
+

@@ -28,6 +28,7 @@ from src.components._pipeline_wakeword import create_voice_pipeline, VoicePipeli
 from src.components.stt import GoogleSTTService
 from src.components.mic_stream import MicStream
 from src.activities.smalltalk import SmallTalkActivity
+from src.utils.config_loader import load_global_config, load_language_config, GLOBAL_CONFIG, LANGUAGE_CONFIG
 
 # Configure logging
 logging.basicConfig(
@@ -57,9 +58,10 @@ class WellBotOrchestrator:
         # Paths to configuration
         self.backend_dir = backend_dir
         self.wakeword_model_path  = self.backend_dir / "config" / "WakeWord" / "WellBot_WakeWordModel.ppn"
-        self.intent_model_path    = self.backend_dir / "config" / "intents.json"
-        self.wakeword_config_path = self.backend_dir / "config" / "wakeword_config.json"
-        self.llm_config_path      = self.backend_dir / "config" / "smalltalk_instructions.json"
+        
+        # Load new config structure
+        self.global_config = GLOBAL_CONFIG
+        self.language_config = LANGUAGE_CONFIG
 
         # Components
         self.voice_pipeline: Optional[VoicePipeline] = None
@@ -69,7 +71,6 @@ class WellBotOrchestrator:
         # Silence monitoring for wakeword
         self._silence_timer: Optional[threading.Timer] = None
         self._silence_lock = threading.Lock()
-        self.wakeword_config: Optional[dict] = None
         
         # Mic management for audio playback
         self._current_mic = None
@@ -82,12 +83,7 @@ class WellBotOrchestrator:
 
     def _validate_config_files(self) -> bool:
         """Validate that all required config files exist."""
-        required = [
-            self.wakeword_model_path,
-            self.intent_model_path,
-            self.wakeword_config_path,
-            self.llm_config_path
-        ]
+        required = [self.wakeword_model_path]
         missing = []
         for f in required:
             if not f.exists():
@@ -121,12 +117,12 @@ class WellBotOrchestrator:
             self.voice_pipeline = create_voice_pipeline(
                 access_key_file="",  # Deprecated - now uses environment variable
                 custom_keyword_file=str(self.wakeword_model_path),
-                language="en-US",
+                language=self.global_config["language_codes"]["stt_language_code"],
                 on_wake_callback=self._on_wake_detected,
                 on_final_transcript=self._on_transcript_received,
-                intent_config_path=str(self.intent_model_path),
-                preference_file_path=str(self.backend_dir / "config" / "preference.json"),
-                stt_timeout_s=self.wakeword_config.get("stt_timeout_s", 8.0)
+                intent_config_path=None,  # Now loaded from language_config
+                preference_file_path=None,  # Now loaded from language_config
+                stt_timeout_s=self.global_config["wakeword"]["stt_timeout_s"]
             )
 
             logger.info("✓ Voice pipeline initialized")
@@ -330,7 +326,7 @@ class WellBotOrchestrator:
             if self._silence_timer:
                 self._silence_timer.cancel()
             
-            nudge_timeout = self.wakeword_config.get("nudge_timeout_seconds", 15)
+            nudge_timeout = self.global_config["wakeword"]["nudge_timeout_seconds"]
             self._silence_timer = threading.Timer(nudge_timeout, self._handle_wakeword_nudge)
             self._silence_timer.daemon = True
             self._silence_timer.start()
@@ -344,14 +340,14 @@ class WellBotOrchestrator:
         self._stop_stt_session()
         
         # Play nudge audio
-        preferences = self._load_preferences()
-        nudge_audio_path = self.backend_dir / preferences.get("nudge_audio_path", "assets/ENGLISH/inactivity_nudge_EN_male.wav")
+        nudge_audio_path = self.backend_dir / self.language_config["audio_paths"]["nudge_audio_path"]
         self._play_audio_blocking(nudge_audio_path)
         
         # Start final timeout timer
         with self._silence_lock:
-            silence_timeout = self.wakeword_config.get("silence_timeout_seconds", 30)
-            remaining_time = silence_timeout - self.wakeword_config.get("nudge_timeout_seconds", 15)
+            silence_timeout = self.global_config["wakeword"]["silence_timeout_seconds"]
+            nudge_timeout = self.global_config["wakeword"]["nudge_timeout_seconds"]
+            remaining_time = silence_timeout - nudge_timeout
             self._silence_timer = threading.Timer(remaining_time, self._handle_wakeword_timeout)
             self._silence_timer.daemon = True
             self._silence_timer.start()
@@ -365,8 +361,7 @@ class WellBotOrchestrator:
         self._stop_stt_session()
         
         # Play termination audio
-        preferences = self._load_preferences()
-        termination_audio_path = self.backend_dir / preferences.get("termination_audio_path", "assets/ENGLISH/termination_EN_male.wav")
+        termination_audio_path = self.backend_dir / self.language_config["audio_paths"]["termination_audio_path"]
         self._play_audio_blocking(termination_audio_path)
         
         # Reset state and restart wake word detection
@@ -413,12 +408,6 @@ class WellBotOrchestrator:
         except Exception as e:
             logger.warning(f"Failed to stop STT session: {e}")
 
-    def _load_preferences(self) -> dict:
-        """Load user preferences"""
-        preference_path = self.backend_dir / "config" / "preference.json"
-        with open(preference_path, "r") as f:
-            return json.load(f)
-
     def _handle_unknown_intent(self, transcript: str):
         """Handle unknown/unrecognized intent with audio feedback"""
         logger.info(f"Handling unknown intent for transcript: '{transcript}'")
@@ -427,8 +416,7 @@ class WellBotOrchestrator:
         self._stop_stt_session()
         
         # Play prompt repeat audio
-        preferences = self._load_preferences()
-        prompt_repeat_path = self.backend_dir / preferences.get("prompt_repeat_path", "assets/ENGLISH/prompt_repeat_EN_male.wav")
+        prompt_repeat_path = self.backend_dir / self.language_config["audio_paths"]["prompt_repeat_path"]
         self._play_audio_blocking(prompt_repeat_path)
         
         # Reset state and restart wakeword detection (clean restart)
@@ -446,8 +434,7 @@ class WellBotOrchestrator:
         self._stop_stt_session()
         
         # Play activity unavailable audio
-        preferences = self._load_preferences()
-        unavailable_path = self.backend_dir / preferences.get("activity_unavailable_path", "assets/ENGLISH/activity_unavailable_EN_male.wav")
+        unavailable_path = self.backend_dir / self.language_config["audio_paths"]["activity_unavailable_path"]
         self._play_audio_blocking(unavailable_path)
         
         # Reset state and restart wakeword detection (clean restart)
@@ -490,12 +477,12 @@ class WellBotOrchestrator:
             self.voice_pipeline = create_voice_pipeline(
                 access_key_file="",  # Deprecated - now uses environment variable
                 custom_keyword_file=str(self.wakeword_model_path),
-                language="en-US",
+                language=self.global_config["language_codes"]["stt_language_code"],
                 on_wake_callback=self._on_wake_detected,
                 on_final_transcript=self._on_transcript_received,
-                intent_config_path=str(self.intent_model_path),
-                preference_file_path=str(self.backend_dir / "config" / "preference.json"),
-                stt_timeout_s=self.wakeword_config.get("stt_timeout_s", 8.0)
+                intent_config_path=None,  # Now loaded from language_config
+                preference_file_path=None,  # Now loaded from language_config
+                stt_timeout_s=self.global_config["wakeword"]["stt_timeout_s"]
             )
             logger.info("✅ Fresh voice pipeline created")
         except Exception as e:
@@ -525,14 +512,7 @@ class WellBotOrchestrator:
             logger.error("Configuration validation failed")
             return False
 
-        # Load wakeword configuration
-        try:
-            with open(self.wakeword_config_path, "r") as f:
-                self.wakeword_config = json.load(f)
-            logger.info("✓ Wakeword configuration loaded")
-        except Exception as e:
-            logger.error(f"Failed to load wakeword config: {e}")
-            return False
+        logger.info("✓ Global and language configurations loaded")
 
         if not self._initialize_components():
             logger.error("Component initialization failed")

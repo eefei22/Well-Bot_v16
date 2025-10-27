@@ -1,0 +1,32 @@
+{
+  "language_codes": {
+    "tts_voice_name": "en-US-Chirp3-HD-Charon",
+    "tts_language_code": "en-US",
+    "stt_language_code": "en-US"
+  },
+  "wakeword": {
+    "silence_timeout_seconds": 10,
+    "nudge_timeout_seconds": 15,
+    "stt_timeout_s": 8.0
+  },
+  "smalltalk": {
+    "silence_timeout_seconds": 10,
+    "nudge_timeout_seconds": 15,
+    "max_turns": 20,
+    "nudge_pre_delay_ms": 200,
+    "nudge_post_delay_ms": 300,
+    "use_audio_files": false
+  },
+  "journal": {
+    "silence_timeout_seconds": 10,
+    "nudge_timeout_seconds": 10,
+    "pause_finalization_seconds": 2.5,
+    "max_duration_seconds": 150,
+    "nudge_pre_delay_ms": 200,
+    "nudge_post_delay_ms": 300,
+    "default_mood": 3,
+    "min_words_threshold": 5,
+    "use_audio_files": false
+  }
+}
+

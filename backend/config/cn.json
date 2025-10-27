@@ -1,0 +1,129 @@
+{
+  "intents": {
+    "smalltalk": [
+      "聊天",
+      "我很无聊",
+      "我觉得无聊",
+      "聊聊天",
+      "跟我说话",
+      "谈话",
+      "闲聊",
+      "和我聊天",
+      "我想说话",
+      "开始说话",
+      "开始对话"
+    ],
+    "journaling": [
+      "写日记",
+      "开始写日记",
+      "开始日记",
+      "写日记",
+      "日记时间",
+      "记录我的想法",
+      "记录我的一天",
+      "每日日记",
+      "写日记时间",
+      "写下我的想法"
+    ],
+    "meditation": [
+      "冥想",
+      "开始冥想",
+      "冥想时间",
+      "指导冥想",
+      "正念训练",
+      "放松",
+      "冥想练习",
+      "放松训练",
+      "冥想"
+    ],
+    "quote": [
+      "每日名言",
+      "名言",
+      "励志名言",
+      "励志语录",
+      "给我一句名言",
+      "分享一句名言",
+      "智慧名言",
+      "给我一句",
+      "鼓励我",
+      "激励我"
+    ],
+    "gratitude": [
+      "感恩练习",
+      "感恩时间",
+      "感恩",
+      "感恩想法",
+      "感恩练习",
+      "感恩练习",
+      "感恩",
+      "感恩日记",
+      "感恩",
+      "感恩时间"
+    ],
+    "termination": [
+      "再见",
+      "拜拜",
+      "待会见",
+      "回头见",
+      "就这样",
+      "结束对话",
+      "停止说话",
+      "完成",
+      "结束",
+      "退出",
+      "离开",
+      "停止",
+      "结束",
+      "关闭"
+    ]
+  },
+  "smalltalk": {
+    "system_prompt": "你是Well-Bot，一个友好的情感健康助手，正在与用户进行闲聊。保持你的回复随意、简短和简洁。不要使用表情符号。以下是用户说的：",
+    "termination_phrases": [
+      "好的，再见",
+      "我现在要走了",
+      "回头聊",
+      "停止说话",
+      "退出"
+    ],
+    "prompts": {
+      "start": "你想聊什么？",
+      "nudge": "嘿，你还在吗？随时继续我们的对话。",
+      "timeout": "看起来你不在。我先休息一下。等你准备好了，随时叫我。",
+      "end": "好的，回头聊，再见！"
+    }
+  },
+  "journal": {
+    "termination_phrases": [
+      "停止写日记",
+      "保存日记",
+      "结束记录",
+      "就这样",
+      "完成写日记",
+      "写日记完成",
+      "结束日记",
+      "停止录音"
+    ],
+    "prompts": {
+      "start": "准备开始写日记。提示音后开始说话。你可以随时暂停思考。说完时说'停止写日记'。",
+      "nudge": "你还在吗？继续说话或说'停止写日记'来完成。",
+      "saving": "正在保存你的日记条目。",
+      "saved": "日记条目已保存，共{word_count}字。",
+      "timeout": "正在保存你的日记条目。"
+    }
+  },
+  "audio_paths": {
+    "wokeword_audio_path": "assets/MANDARIN/wokeword_CN_male.wav",
+    "start_smalltalk_audio_path": "assets/MANDARIN/start_smalltalk_CN_male.wav",
+    "start_journal_audio_path": "assets/MANDARIN/start_journal_CN_male.wav",
+    "start_gratitude_audio_path": "assets/MANDARIN/start_gratitude_CN_male.wav",
+    "start_meditation_audio_path": "assets/MANDARIN/start_meditation_CN_male.wav",
+    "start__quote_audio_path": "assets/MANDARIN/start_quote_CN_male.wav",
+    "nudge_audio_path": "assets/MANDARIN/inactivity_nudge_CN_male.wav",
+    "termination_audio_path": "assets/MANDARIN/termination_CN_male.wav",
+    "end_audio_path": "assets/MANDARIN/end_smalltalk_CN_male.wav",
+    "prompt_repeat_path": "assets/MANDARIN/prompt_repeat_CN_male.wav",
+    "activity_unavailable_path": "assets/MANDARIN/activity_unavailable_CN_male.wav"
+  }
+}
+

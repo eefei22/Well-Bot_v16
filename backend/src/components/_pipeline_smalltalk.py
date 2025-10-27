@@ -7,7 +7,7 @@ import threading
 import time
 import logging
 import string
-from typing import Optional, Callable, List, Dict, Iterator
+from typing import Optional, Callable, List, Dict, Iterator, Tuple
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
@@ -67,8 +67,9 @@ class SmallTalkSession:
         stt: GoogleSTTService,
         mic_factory: Callable[[], MicStream],
         deepseek_config: dict,
-        llm_config_path: str,
-        tts_voice_name: str,
+        llm_config_path: Optional[str] = None,
+        llm_config_dict: Optional[dict] = None,
+        tts_voice_name: str = "",
         tts_language_code: str = "en-US",
         system_prompt: Optional[str] = "You are a friendly, concise wellness assistant. Keep responses short unless asked.",
         language_code: str = "en-US",
@@ -86,10 +87,19 @@ class SmallTalkSession:
             model=deepseek_config.get("model", "deepseek-chat"),
         )
 
-        # Load termination phrases from LLM config
-        with open(llm_config_path, "r", encoding="utf-8") as f:
-            llm_cfg = json.load(f)
-        self.termination_phrases = [p.lower() for p in llm_cfg.get("termination_phrases", [])]
+        # Load termination phrases from language config
+        if llm_config_dict is not None:
+            # Use provided dict config (new structure)
+            cfg = llm_config_dict
+        elif llm_config_path and os.path.exists(llm_config_path):
+            # Load from file path (legacy)
+            with open(llm_config_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        else:
+            # No config provided, use empty dict
+            cfg = {}
+        
+        self.termination_phrases = [p.lower() for p in cfg.get("termination_phrases", [])]
 
         # Initialize TTS client
         self.tts = GoogleTTSClient(

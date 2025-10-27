@@ -35,14 +35,14 @@ try:
     from .wakeword import WakeWordDetector, create_wake_word_detector
     from .mic_stream import MicStream
     from .stt import GoogleSTTService
-    from .intent_detection import IntentDetection
-    from ..utils.config_loader import PORCUPINE_ACCESS_KEY
+    from .intent_detection import IntentDetection, normalize_text
+    from ..utils.config_loader import PORCUPINE_ACCESS_KEY, load_language_config, load_global_config
 except ImportError:
     from wakeword import WakeWordDetector, create_wake_word_detector
     from mic_stream import MicStream
     from stt import GoogleSTTService
-    from intent_detection import IntentDetection
-    from utils.config_loader import PORCUPINE_ACCESS_KEY
+    from intent_detection import IntentDetection, normalize_text
+    from utils.config_loader import PORCUPINE_ACCESS_KEY, load_language_config, load_global_config
 
 logger = logging.getLogger(__name__)
 
@@ -70,23 +70,16 @@ class VoicePipeline:
         self.on_wake_callback = on_wake_callback
         self.on_final_transcript = on_final_transcript
 
-        self.wakeword_audio_path = None
-        if preference_file_path:
-            try:
-                self.wakeword_audio_path = self._load_wakeword_audio_path(preference_file_path)
-                logger.info(f"Wakeword audio path loaded: {self.wakeword_audio_path}")
-            except Exception as e:
-                logger.warning(f"Failed to load wakeword audio path: {e}")
-                self.wakeword_audio_path = None
+        # Load configurations
+        self.language_config = load_language_config('en')
+        self.global_config = load_global_config()
 
-        self.intent_detection = None
-        if intent_config_path:
-            try:
-                self.intent_detection = IntentDetection(intent_config_path)
-                logger.info("Intent detection initialized")
-            except Exception as e:
-                logger.warning(f"Failed to initialize intent detection: {e}")
-                self.intent_detection = None
+        self.wakeword_audio_path = self.language_config["audio_paths"].get("wokeword_audio_path")
+        logger.info(f"Wakeword audio path loaded: {self.wakeword_audio_path}")
+
+        # Initialize intent detection from language config
+        self.intent_phrases = self.language_config.get("intents", {})
+        logger.info("Intent phrases loaded from language config")
 
         self.active = False
         self.stt_active = False
@@ -95,7 +88,7 @@ class VoicePipeline:
 
         self.stt_timeout_s = stt_timeout_s  # how many seconds to wait for speech
 
-        logger.info(f"Pipeline initialized | Language: {lang} | Intent: {'Yes' if self.intent_detection else 'No'} | Wakeword Audio: {'Yes' if self.wakeword_audio_path else 'No'}")
+        logger.info(f"Pipeline initialized | Language: {lang} | Intent: {'Yes' if self.intent_phrases else 'No'} | Wakeword Audio: {'Yes' if self.wakeword_audio_path else 'No'}")
 
     def _play_audio_file(self, audio_path: str) -> bool:
         """
@@ -149,22 +142,23 @@ class VoicePipeline:
         logger.error(f"All audio playback methods failed for: {audio_path}")
         return False
 
-    def _load_wakeword_audio_path(self, preference_file_path: str) -> Optional[str]:
-        try:
-            with open(preference_file_path, 'r') as f:
-                preferences = json.load(f)
-            wakeword_path = preferences.get('wokeword_audio_path')
-            if wakeword_path:
-                backend_dir = os.path.join(os.path.dirname(__file__), '..', '..')
-                absolute_path = os.path.join(backend_dir, wakeword_path)
-                if os.path.exists(absolute_path):
-                    return absolute_path
-                else:
-                    logger.warning(f"Wakeword audio file not found: {absolute_path}")
-            else:
-                logger.warning("No 'wokeword_audio_path' key in preferences")
-        except Exception as e:
-            logger.error(f"Error loading wakeword preferences: {e}")
+    def _detect_intent_from_config(self, user_text: str) -> Optional[dict]:
+        """Detect intent from user text using config phrases"""
+        if not user_text or not self.intent_phrases:
+            return None
+        
+        normalized_user = normalize_text(user_text)
+        
+        # Check each intent category
+        for intent_name, phrases in self.intent_phrases.items():
+            for phrase in phrases:
+                normalized_phrase = normalize_text(phrase)
+                if (normalized_user == normalized_phrase or 
+                    normalized_user.startswith(normalized_phrase + " ") or
+                    normalized_phrase in normalized_user):
+                    logger.info(f"Intent detected: {intent_name} (matched phrase: '{phrase}')")
+                    return {"intent": intent_name, "matched_phrase": phrase, "confidence": 1.0}
+        
         return None
 
     def _on_wake(self):
@@ -242,22 +236,14 @@ class VoicePipeline:
             if not transcript_received:
                 logger.warning(f"No user transcript received within {self.stt_timeout_s:.1f}s → timing out STT session")
             else:
-                # We got a transcript
-                if self.intent_detection and final_transcript:
-                    try:
-                        intent_result = self.intent_detection.detect_intent(final_transcript)
-                        if intent_result:
-                            intent_name, matched_phrase = intent_result
-                            logger.info(f"Detected intent: {intent_name} (matched phrase: '{matched_phrase}')")
-                            intent_result = {"intent": intent_name, "matched_phrase": matched_phrase, "confidence": 1.0}
-                        else:
-                            logger.info("No intent detected")
-                            intent_result = {"intent": "unknown", "confidence": 0.0}
-                    except Exception as e:
-                        logger.error(f"Intent detection error: {e}")
-                        intent_result = {"intent": "unknown", "confidence": 0.0}
+                # We got a transcript - invoke callback
+                intent_result = None
+                if final_transcript:
+                    intent_result = self._detect_intent_from_config(final_transcript)
+                else:
+                    intent_result = {"intent": "unknown", "confidence": 0.0}
 
-                # Invoke callback 
+                # Invoke callback
                 if self.on_final_transcript:
                     try:
                         self.on_final_transcript(final_transcript, intent_result)

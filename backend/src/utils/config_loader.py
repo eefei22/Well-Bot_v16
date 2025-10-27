@@ -106,6 +106,27 @@ def get_supabase_config():
         "service_role_key": SUPABASE_SERVICE_ROLE_KEY
     }
 
+def load_global_config():
+    """Load global numerical configuration."""
+    config_path = Path(__file__).parent.parent.parent / "config" / "global.json"
+    with open(config_path, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+def load_language_config(language='en'):
+    """Load language-specific configuration."""
+    config_path = Path(__file__).parent.parent.parent / "config" / f"{language}.json"
+    with open(config_path, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+# Load default configurations
+try:
+    GLOBAL_CONFIG = load_global_config()
+    LANGUAGE_CONFIG = load_language_config('en')  # Default to English
+except Exception as e:
+    print(f"Error loading config files: {e}")
+    GLOBAL_CONFIG = {}
+    LANGUAGE_CONFIG = {}
+
 # Validate configuration on import
 try:
     validate_required_config()

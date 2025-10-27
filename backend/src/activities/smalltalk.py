@@ -22,7 +22,7 @@ from src.components.mic_stream import MicStream
 from src.components.conversation_audio_manager import ConversationAudioManager
 from src.components.conversation_session import ConversationSession
 from src.components._pipeline_smalltalk import SmallTalkSession, TerminationPhraseDetected, normalize_text
-from src.utils.config_loader import get_deepseek_config
+from src.utils.config_loader import get_deepseek_config, load_global_config, load_language_config
 
 logger = logging.getLogger(__name__)
 
@@ -55,35 +55,22 @@ class SmallTalkActivity:
     def initialize(self) -> bool:
         """Initialize the activity components"""
         try:
-            # Configuration paths
-            llm_config_path = self.backend_dir / "config" / "smalltalk_instructions.json"
-            
             logger.info(f"Initializing SmallTalk activity...")
             logger.info(f"Backend directory: {self.backend_dir}")
-            logger.info(f"LLM config: {llm_config_path}")
             
-            # Check if required files exist
-            if not llm_config_path.exists():
-                logger.error(f"Required file not found: {llm_config_path}")
-                return False
-            else:
-                logger.info(f"✓ Found: {llm_config_path}")
+            # Load configurations
+            self.global_config = load_global_config()
+            self.language_config = load_language_config('en')
             
-            # Load LLM configuration
-            with open(llm_config_path, "r", encoding="utf-8") as f:
-                llm_config = json.load(f)
-            
-            # Store llm_config for access in methods
-            self.llm_config = llm_config
-            
-            # Load user preferences for audio paths
-            preference_path = self.backend_dir / "config" / "preference.json"
-            with open(preference_path, "r", encoding="utf-8") as f:
-                preferences = json.load(f)
+            # Extract configs
+            self.smalltalk_config = self.language_config.get("smalltalk", {})
+            self.audio_paths = self.language_config.get("audio_paths", {})
+            self.global_smalltalk_config = self.global_config.get("smalltalk", {})
             
             # Initialize STT service
             logger.info("Initializing STT service...")
-            self.stt_service = GoogleSTTService(language="en-US", sample_rate=16000)
+            stt_lang = self.global_config["language_codes"]["stt_language_code"]
+            self.stt_service = GoogleSTTService(language=stt_lang, sample_rate=16000)
             logger.info("✓ STT service initialized")
             
             # Create mic factory
@@ -93,14 +80,14 @@ class SmallTalkActivity:
             # Prepare audio configuration for ConversationAudioManager
             audio_config = {
                 "backend_dir": str(self.backend_dir),
-                "silence_timeout_seconds": llm_config.get("silence_timeout_seconds", 30),
-                "nudge_timeout_seconds": llm_config.get("nudge_timeout_seconds", 15),
-                "nudge_pre_delay_ms": llm_config.get("nudge_pre_delay_ms", 200),
-                "nudge_post_delay_ms": llm_config.get("nudge_post_delay_ms", 300),
-                "nudge_audio_path": preferences.get("nudge_audio_path", "assets/ENGLISH/inactivity_nudge_EN_male.wav"),
-                "termination_audio_path": preferences.get("termination_audio_path", "assets/ENGLISH/termination_EN_male.wav"),
-                "end_audio_path": preferences.get("end_audio_path", "assets/ENGLISH/end_smalltalk_EN_male.wav"),
-                "start_audio_path": preferences.get("start_smalltalk_audio_path", "assets/ENGLISH/start_smalltalk_EN_male.wav")
+                "silence_timeout_seconds": self.global_smalltalk_config.get("silence_timeout_seconds", 30),
+                "nudge_timeout_seconds": self.global_smalltalk_config.get("nudge_timeout_seconds", 15),
+                "nudge_pre_delay_ms": self.global_smalltalk_config.get("nudge_pre_delay_ms", 200),
+                "nudge_post_delay_ms": self.global_smalltalk_config.get("nudge_post_delay_ms", 300),
+                "nudge_audio_path": self.audio_paths.get("nudge_audio_path"),
+                "termination_audio_path": self.audio_paths.get("termination_audio_path"),
+                "end_audio_path": self.audio_paths.get("end_audio_path"),
+                "start_audio_path": self.audio_paths.get("start_smalltalk_audio_path")
             }
             
             # Initialize ConversationAudioManager
@@ -118,9 +105,9 @@ class SmallTalkActivity:
             # Initialize ConversationSession
             logger.info("Initializing ConversationSession...")
             self.session_manager = ConversationSession(
-                max_turns=llm_config.get("max_turns", 20),
-                system_prompt=llm_config.get("system_prompt", "You are a friendly assistant. Do not use emojis."),
-                language_code=llm_config.get("stt_language_code", "en-US")
+                max_turns=self.global_smalltalk_config.get("max_turns", 20),
+                system_prompt=self.smalltalk_config.get("system_prompt", "You are a friendly assistant. Do not use emojis."),
+                language_code=stt_lang
             )
             logger.info("✓ ConversationSession initialized")
             
@@ -131,11 +118,12 @@ class SmallTalkActivity:
                 stt=self.stt_service,
                 mic_factory=mic_factory,
                 deepseek_config=deepseek_config,
-                llm_config_path=str(llm_config_path),
-                tts_voice_name=llm_config.get("tts_voice_name", "en-US-Chirp3-HD-Charon"),
-                tts_language_code=llm_config.get("tts_language_code", "en-US"),
-                system_prompt=llm_config.get("system_prompt", "You are a friendly assistant. Do not use emojis."),
-                language_code=llm_config.get("stt_language_code", "en-US")
+                llm_config_path=None,  # No longer needed
+                llm_config_dict=self.smalltalk_config,  # Pass config dict directly
+                tts_voice_name=self.global_config["language_codes"]["tts_voice_name"],
+                tts_language_code=self.global_config["language_codes"]["tts_language_code"],
+                system_prompt=self.smalltalk_config.get("system_prompt", "You are a friendly assistant. Do not use emojis."),
+                language_code=stt_lang
             )
             logger.info("✓ SmallTalkSession initialized")
             
@@ -170,7 +158,7 @@ class SmallTalkActivity:
             self.llm_pipeline.conversation_id = conv_id
             
             # Check if audio files should be used
-            use_audio_files = self.llm_config.get("use_audio_files", False)
+            use_audio_files = self.global_smalltalk_config.get("use_audio_files", False)
             
             # Play startup audio if enabled
             if use_audio_files:
@@ -179,7 +167,7 @@ class SmallTalkActivity:
             
             # TTS prompt from config
             try:
-                prompts = self.llm_config.get("prompts", {})
+                prompts = self.smalltalk_config.get("prompts", {})
                 start_prompt = prompts.get("start", "Hello! I'm here to chat with you. What's on your mind?")
             except Exception as e:
                 logger.warning(f"Failed to load start prompt from config: {e}")
@@ -362,7 +350,7 @@ class SmallTalkActivity:
                 except TerminationPhraseDetected as e:
                     logger.info(f"TERMINATION TRIGGERED! {e}")
                     
-                    use_audio_files = self.llm_config.get("use_audio_files", False)
+                    use_audio_files = self.global_smalltalk_config.get("use_audio_files", False)
                     
                     # Play end audio if enabled
                     if use_audio_files:
@@ -371,7 +359,7 @@ class SmallTalkActivity:
                     
                     # TTS prompt from config
                     try:
-                        prompts = self.llm_config.get("prompts", {})
+                        prompts = self.smalltalk_config.get("prompts", {})
                         end_prompt = prompts.get("end", "Goodbye! Take care and talk to you soon.")
                     except Exception as e:
                         logger.warning(f"Failed to load end prompt from config: {e}")
@@ -425,7 +413,7 @@ class SmallTalkActivity:
         """Handle silence nudge callback"""
         logger.info("🔔 Handling silence nudge...")
         
-        use_audio_files = self.llm_config.get("use_audio_files", False)
+        use_audio_files = self.global_smalltalk_config.get("use_audio_files", False)
         
         # Play nudge audio if enabled
         if use_audio_files:
@@ -434,7 +422,7 @@ class SmallTalkActivity:
         
         # TTS prompt from config
         try:
-            prompts = self.llm_config.get("prompts", {})
+            prompts = self.smalltalk_config.get("prompts", {})
             nudge_prompt = prompts.get("nudge", "Are you still there? Feel free to continue our conversation.")
         except Exception as e:
             logger.warning(f"Failed to load nudge prompt from config: {e}")
@@ -446,7 +434,7 @@ class SmallTalkActivity:
         """Handle silence timeout callback"""
         logger.info("⏰ Handling silence timeout...")
         
-        use_audio_files = self.llm_config.get("use_audio_files", False)
+        use_audio_files = self.global_smalltalk_config.get("use_audio_files", False)
         
         # Play termination audio if enabled
         if use_audio_files:
@@ -455,7 +443,7 @@ class SmallTalkActivity:
         
         # TTS prompt from config
         try:
-            prompts = self.llm_config.get("prompts", {})
+            prompts = self.smalltalk_config.get("prompts", {})
             timeout_prompt = prompts.get("timeout", "It seems you've stepped away. I'll be here when you're ready to talk again.")
         except Exception as e:
             logger.warning(f"Failed to load timeout prompt from config: {e}")

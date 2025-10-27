@@ -25,6 +25,7 @@ from src.components.mic_stream import MicStream
 from src.components.conversation_audio_manager import ConversationAudioManager
 from src.components.tts import GoogleTTSClient
 from src.supabase.database import upsert_journal, DEV_USER_ID
+from src.utils.config_loader import load_global_config, load_language_config
 from google.cloud import texttospeech
 
 logger = logging.getLogger(__name__)
@@ -74,8 +75,8 @@ class JournalActivity:
         self.audio_manager: Optional[ConversationAudioManager] = None
         self.stt_service: Optional[GoogleSTTService] = None
         self.tts_service: Optional[GoogleTTSClient] = None
-        self.config: Optional[dict] = None
-        self.preferences: Optional[dict] = None
+        self.config: Optional[dict] = None  # journal config from language_config
+        self.global_config: Optional[dict] = None  # global numerical config
         
         # Activity state
         self.state = "INIT"
@@ -97,32 +98,19 @@ class JournalActivity:
     def initialize(self) -> bool:
         """Initialize the activity components"""
         try:
-            # Configuration paths
-            journal_config_path = self.backend_dir / "config" / "journal_behavior.json"
-            preferences_path = self.backend_dir / "config" / "preference.json"
-            
             logger.info(f"Initializing Journal activity...")
             logger.info(f"Backend directory: {self.backend_dir}")
-            logger.info(f"Journal config: {journal_config_path}")
             
-            # Check if required files exist
-            if not journal_config_path.exists():
-                logger.error(f"Required file not found: {journal_config_path}")
-                return False
+            # Load configurations
+            self.global_config = load_global_config()
+            language_config = load_language_config('en')
             
-            if not preferences_path.exists():
-                logger.error(f"Required file not found: {preferences_path}")
-                return False
+            # Extract journal config and audio paths
+            self.config = language_config.get("journal", {})
+            audio_paths = language_config.get("audio_paths", {})
+            self.global_journal_config = self.global_config.get("journal", {})
             
-            # Load journal configuration
-            with open(journal_config_path, "r", encoding="utf-8") as f:
-                self.config = json.load(f)
-                logger.info("✓ Loaded journal configuration")
-            
-            # Load user preferences for audio paths
-            with open(preferences_path, "r", encoding="utf-8") as f:
-                self.preferences = json.load(f)
-                logger.info("✓ Loaded preferences")
+            logger.info("✓ Loaded journal configuration")
             
             # Initialize STT service
             logger.info("Initializing STT service...")
@@ -136,8 +124,8 @@ class JournalActivity:
             # Initialize TTS service
             logger.info("Initializing TTS service...")
             self.tts_service = GoogleTTSClient(
-                voice_name=self.preferences.get("tts_voice_name", "en-US-Chirp3-HD-Charon"),
-                language_code=self.preferences.get("tts_language_code", "en-US"),
+                voice_name=self.global_config["language_codes"]["tts_voice_name"],
+                language_code=self.global_config["language_codes"]["tts_language_code"],
                 audio_encoding=texttospeech.AudioEncoding.PCM,
                 sample_rate_hertz=24000,
                 num_channels=1,
@@ -148,15 +136,18 @@ class JournalActivity:
             # Prepare audio configuration for ConversationAudioManager
             audio_config = {
                 "backend_dir": str(self.backend_dir),
-                "silence_timeout_seconds": self.config.get("silence_timeout_seconds", 90),
-                "nudge_timeout_seconds": self.config.get("nudge_timeout_seconds", 20),
-                "nudge_pre_delay_ms": self.config.get("nudge_pre_delay_ms", 200),
-                "nudge_post_delay_ms": self.config.get("nudge_post_delay_ms", 300),
-                "nudge_audio_path": self.preferences.get("nudge_audio_path", "assets/ENGLISH/inactivity_nudge_EN_male.wav"),
-                "termination_audio_path": self.preferences.get("termination_audio_path", "assets/ENGLISH/termination_EN_male.wav"),
+                "silence_timeout_seconds": self.global_journal_config.get("silence_timeout_seconds", 90),
+                "nudge_timeout_seconds": self.global_journal_config.get("nudge_timeout_seconds", 20),
+                "nudge_pre_delay_ms": self.global_journal_config.get("nudge_pre_delay_ms", 200),
+                "nudge_post_delay_ms": self.global_journal_config.get("nudge_post_delay_ms", 300),
+                "nudge_audio_path": audio_paths.get("nudge_audio_path"),
+                "termination_audio_path": audio_paths.get("termination_audio_path"),
                 "end_audio_path": "",
-                "start_audio_path": self.preferences.get("start_journal_audio_path", "assets/ENGLISH/start_journal_EN_male.wav")
+                "start_audio_path": audio_paths.get("start_journal_audio_path")
             }
+            
+            # Store audio paths for later use
+            self.audio_paths = audio_paths
             
             # Initialize ConversationAudioManager
             logger.info("Initializing audio manager...")
@@ -234,11 +225,11 @@ class JournalActivity:
         """Play start audio and TTS prompt"""
         self.state = "PROMPT_START"
         
-        use_audio_files = self.config.get("use_audio_files", False)
+        use_audio_files = self.global_journal_config.get("use_audio_files", False)
         
         # Play start audio if enabled
         if use_audio_files:
-            start_audio_path = self.preferences.get("start_journal_audio_path", "assets/ENGLISH/start_journal_EN_male.wav")
+            start_audio_path = self.audio_paths.get("start_journal_audio_path")
             full_audio_path = self.backend_dir / start_audio_path
             
             if full_audio_path.exists():
@@ -298,7 +289,7 @@ class JournalActivity:
                 current_time = time.time()
                 if self.last_final_time:
                     elapsed = current_time - self.last_final_time
-                    pause_threshold = self.config.get("pause_finalization_seconds", 2.5)
+                    pause_threshold = self.global_journal_config.get("pause_finalization_seconds", 2.5)
                     
                     if elapsed > pause_threshold:
                         logger.info(f"Long pause detected ({elapsed:.1f}s), finalizing paragraph")
@@ -371,7 +362,7 @@ class JournalActivity:
         """Check if there's any content to save"""
         all_content = " ".join(self.buffers) + " " + self.current_buffer
         words = all_content.split()
-        return len(words) >= self.config.get("min_words_threshold", 5)
+        return len(words) >= self.global_journal_config.get("min_words_threshold", 5)
     
     def _save(self):
         """Save journal entry to database"""
@@ -396,7 +387,7 @@ class JournalActivity:
         title = self._generate_title()
         
         # Get mood
-        mood = self.config.get("default_mood", 3)
+        mood = self.global_journal_config.get("default_mood", 3)
         
         # Extract topics (placeholder for future)
         topics = self._extract_topics(body)
@@ -468,11 +459,11 @@ class JournalActivity:
             """Called when silence timeout reached"""
             logger.info("Silence nudge triggered")
             
-            use_audio_files = self.config.get("use_audio_files", False)
+            use_audio_files = self.global_journal_config.get("use_audio_files", False)
             
             # Play nudge audio if enabled
             if use_audio_files:
-                nudge_audio_path = self.preferences.get("nudge_audio_path", "assets/ENGLISH/inactivity_nudge_EN_male.wav")
+                nudge_audio_path = self.audio_paths.get("nudge_audio_path")
                 full_audio_path = self.backend_dir / nudge_audio_path
                 
                 if full_audio_path.exists():
