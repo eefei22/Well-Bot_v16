@@ -821,10 +821,122 @@ INSERT INTO users (id, email, language) VALUES
 - `use_audio_files` setting in global.json is enabled
 
 ---
+---
 
-## References
+so moving forward from now, i just need to make sure all new downstream components / activities accept user_id such that the user preference will be known as long as the user_id is passed ?
 
-- Phase 3 Implementation Plan: `all_docs/Phase3.md`
-- Original Config Restructuring: `config-file-restructuring.plan.md`
-- Implementation completed: 2024-12-XX
+---
+
+Yes. Passing `user_id` to new components/activities is sufficient; `config_resolver.py` will resolve the user-specific configs.
+
+
+[1 tool called]
+
+## Pattern to follow
+
+Add `user_id` as an optional parameter that falls back to the current user:
+
+```python
+from src.supabase.auth import get_current_user_id
+from src.utils.config_resolver import get_language_config, get_global_config_for_user
+
+class YourNewActivity:
+    def __init__(self, backend_dir: Path, user_id: Optional[str] = None):
+        self.backend_dir = backend_dir
+        self.user_id = user_id or get_current_user_id()  # ← Use this pattern
+        # ... rest of init
+    
+    def initialize(self) -> bool:
+        # Load user-specific configs
+        self.global_config = get_global_config_for_user(self.user_id)  # ← Gets language codes
+        language_config = get_language_config(self.user_id)  # ← Gets en/cn/bm content
+        
+        # Use the configs...
+        your_config = language_config.get("your_feature", {})
+        
+        return True
+```
+
+## Functions to call
+
+### 1. `get_global_config_for_user(user_id)` 
+Returns global config with correct language codes:
+```python
+config = get_global_config_for_user(self.user_id)
+# Returns:
+{
+    "language_codes": {
+        "tts_voice_name": "en-US-Chirp3-HD-Charon",  # or cn/bm
+        "tts_language_code": "en-US",
+        "stt_language_code": "en-US"
+    },
+    "your_feature": {
+        "timeout": 30,
+        "threshold": 0.5
+    }
+}
+```
+
+### 2. `get_language_config(user_id)`
+Returns language-specific config:
+```python
+config = get_language_config(self.user_id)
+# Returns en.json, cn.json, or bm.json based on user's database language
+# Contains prompts, phrases, audio paths in user's language
+```
+
+## How it resolves preferences
+
+The resolver:
+1. Receives `user_id`
+2. Queries `users.language` (cached 300s)
+3. Loads `en.json`/`cn.json`/`bm.json` accordingly
+4. Updates global config with language-specific TTS/STT codes
+5. Returns the merged configs
+
+The system handles:
+- Caching
+- DB queries
+- Language file loading
+- Error fallback to 'en'
+- Thread safety
+
+## Example: new activity
+
+```python
+class NewFeatureActivity:
+    def __init__(self, backend_dir: Path, user_id: Optional[str] = None):
+        self.backend_dir = backend_dir
+        self.user_id = user_id or get_current_user_id()
+        # No need to know HOW user_id is resolved!
+        # Just store it and use it later
+    
+    def initialize(self) -> bool:
+        # Get user's configs (language already resolved)
+        self.global_config = get_global_config_for_user(self.user_id)
+        language_config = get_language_config(self.user_id)
+        
+        # Extract your feature config
+        self.feature_config = language_config.get("new_feature", {})
+        self.audio_paths = language_config.get("audio_paths", {})
+        
+        # Get language-specific TTS codes
+        tts_voice = self.global_config["language_codes"]["tts_voice_name"]
+        tts_lang = self.global_config["language_codes"]["tts_language_code"]
+        
+        # Initialize your components with correct language
+        self.tts = GoogleTTSClient(voice_name=tts_voice, language_code=tts_lang)
+        
+        return True
+```
+
+## Summary
+
+- Accept `user_id` (or `None`) in `__init__`
+- Use `self.user_id = user_id or get_current_user_id()`
+- Call `get_global_config_for_user(self.user_id)` and `get_language_config(self.user_id)`
+- Read language-specific prompts/phrases/audio from the returned config
+- Use the correct TTS/STT codes from the global config
+
+`config_resolver.py` handles preference resolution. Components stay decoupled from auth details.
 
