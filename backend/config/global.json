@@ -1,8 +1,8 @@
 {
   "language_codes": {
-    "tts_voice_name": "en-US-Chirp3-HD-Charon",
-    "tts_language_code": "en-US",
-    "stt_language_code": "en-US"
+    "tts_voice_name": "cm-CN-Chirp3-HD-Charon",
+    "tts_language_code": "cm-CN",
+    "stt_language_code": "cm-CN"
   },
   "wakeword": {
     "silence_timeout_seconds": 10,

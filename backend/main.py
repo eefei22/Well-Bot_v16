@@ -29,6 +29,7 @@ from src.components.stt import GoogleSTTService
 from src.components.tts import GoogleTTSClient
 from src.components.mic_stream import MicStream
 from src.activities.smalltalk import SmallTalkActivity
+from src.activities.journal import JournalActivity
 from src.utils.config_resolver import get_global_config_for_user, resolve_language
 from src.supabase.auth import get_current_user_id
 
@@ -71,6 +72,7 @@ class WellBotOrchestrator:
         # Components
         self.voice_pipeline: Optional[VoicePipeline] = None
         self.smalltalk_activity: Optional[SmallTalkActivity] = None
+        self.journal_activity: Optional[JournalActivity] = None
         self.stt_service: Optional[GoogleSTTService] = None
         self.tts_service: Optional[GoogleTTSClient] = None
 
@@ -160,6 +162,12 @@ class WellBotOrchestrator:
                 raise RuntimeError("Failed to initialize SmallTalk activity")
             logger.info("✓ SmallTalk activity initialized")
 
+            logger.info("Initializing Journal activity…")
+            self.journal_activity = JournalActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+            if not self.journal_activity.initialize():
+                raise RuntimeError("Failed to initialize Journal activity")
+            logger.info("✓ Journal activity initialized")
+
             return True
         except Exception as e:
             logger.error(f"Component initialization failed: {e}", exc_info=True)
@@ -217,8 +225,7 @@ class WellBotOrchestrator:
         if intent == "smalltalk":
             self._start_smalltalk_activity()
         elif intent == "journaling":
-            logger.info("📖 Journaling intent detected – not implemented yet")
-            self._handle_activity_unavailable("journaling")
+            self._start_journal_activity()
         elif intent == "meditation":
             logger.info("🧘 Meditation intent detected – not implemented yet")
             self._handle_activity_unavailable("meditation")
@@ -576,6 +583,106 @@ class WellBotOrchestrator:
         logger.info("Restarting wakeword detection after unavailable activity")
         self._restart_wakeword_detection()
 
+    def _start_journal_activity(self):
+        """Start the journal activity thread."""
+        logger.info("📖 Starting Journal activity…")
+        
+        # Safety check - ensure journal_activity is initialized
+        if self.journal_activity is None:
+            logger.error("❌ Journal activity is None - cannot start")
+            return
+        
+        with self._lock:
+            self.state = SystemState.ACTIVITY_ACTIVE
+            self.current_activity = "journaling"
+
+        # 1) Stop wake word pipeline first (this triggers Picovoice/Porcupine cleanup)
+        if self.voice_pipeline:
+            logger.info("🔇 Pausing wake word pipeline before Journal…")
+            try:
+                logger.info("🔍 Calling voice_pipeline.stop()...")
+                
+                # Force stop with timeout
+                import threading
+                stop_success = threading.Event()
+                
+                def force_stop():
+                    try:
+                        self.voice_pipeline.stop()
+                        stop_success.set()
+                    except Exception as e:
+                        logger.error(f"Error in stop thread: {e}")
+                        stop_success.set()
+                
+                stop_thread = threading.Thread(target=force_stop, daemon=True)
+                stop_thread.start()
+                
+                # Wait for stop to complete with timeout
+                if stop_success.wait(timeout=5.0):
+                    logger.info("✅ voice_pipeline.stop() completed successfully")
+                else:
+                    logger.warning("⚠️ voice_pipeline.stop() timed out after 5s - forcing continuation")
+                    
+            except Exception as e:
+                logger.warning(f"Ignoring error while stopping voice pipeline: {e}")
+                logger.info("⚠️ Continuing despite stop error...")
+
+        # 2) Wait until STT/wakeword fully release audio devices
+        if self.voice_pipeline:
+            logger.info("⏳ Waiting for STT teardown (mic/device release)…")
+            ok = self._wait_for_stt_teardown(timeout_s=3.0)
+            if not ok:
+                logger.warning("⚠️ STT teardown wait timed out; proceeding anyway")
+
+        # 3) Add a tiny guard delay (Windows USB audio sometimes needs this)
+        logger.info("⏱️ Adding guard delay for Windows audio device release...")
+        time.sleep(0.15)
+
+        # 4) Sanity check - verify device state before activity starts
+        logger.info(f"🔍 Device state check - Wake active: {self.voice_pipeline.is_active() if self.voice_pipeline else None} | "
+                   f"STT active: {self.voice_pipeline.is_stt_active() if self.voice_pipeline else None}")
+
+        def run_activity():
+            try:
+                # Extra visibility
+                logger.info("🚀 Launching JournalActivity.run()…")
+                
+                # Safety check - ensure journal_activity exists
+                if self.journal_activity is None:
+                    logger.error("❌ Journal activity is None - cannot run")
+                    return
+                
+                success = self.journal_activity.run()
+                if success:
+                    logger.info("✅ Journal activity completed successfully")
+                else:
+                    logger.error("❌ Journal activity ended with failure or abnormal termination")
+            except Exception as e:
+                logger.error(f"Error in Journal activity: {e}", exc_info=True)
+            finally:
+                # Cleanup activity resources before restarting wakeword
+                logger.info("🧹 Cleaning up Journal activity resources...")
+                if self.journal_activity:
+                    try:
+                        self.journal_activity.cleanup()
+                        logger.info("✅ Journal activity cleanup completed")
+                        
+                        # Re-initialize for next run
+                        logger.info("🔄 Re-initializing Journal activity for next run...")
+                        if not self.journal_activity.reinitialize():
+                            logger.error("❌ Failed to re-initialize Journal activity")
+                        else:
+                            logger.info("✅ Journal activity re-initialized successfully")
+                            
+                    except Exception as e:
+                        logger.warning(f"Error during activity cleanup/reinit: {e}")
+                
+                # When activity ends, restart wake word detection
+                self._restart_wakeword_detection()
+
+        self._activity_thread = threading.Thread(target=run_activity, daemon=True)
+        self._activity_thread.start()
+
     def _restart_wakeword_detection(self):
         """Restart wake word detection after an activity ends."""
         logger.info("🔄 Restarting wake word detection…")
@@ -674,6 +781,12 @@ class WellBotOrchestrator:
         if self.current_activity == "smalltalk" and self.smalltalk_activity:
             logger.info("Stopping SmallTalk activity…")
             self.smalltalk_activity.stop()
+        elif self.current_activity == "journaling" and self.journal_activity:
+            logger.info("Stopping Journal activity…")
+            if self.journal_activity.is_active():
+                # Journal activity's _cleanup will be called automatically when start() completes
+                # But we can trigger cleanup if needed
+                self.journal_activity.cleanup()
 
         # Stop voice pipeline
         if self.voice_pipeline:
@@ -703,7 +816,8 @@ class WellBotOrchestrator:
                 "state": self.state.value,
                 "current_activity": self.current_activity,
                 "wakeword_active": bool(self.voice_pipeline and self.voice_pipeline.is_active()),
-                "smalltalk_active": bool(self.smalltalk_activity and self.smalltalk_activity.is_active())
+                "smalltalk_active": bool(self.smalltalk_activity and self.smalltalk_activity.is_active()),
+                "journal_active": bool(self.journal_activity and self.journal_activity.is_active())
             }
 
 def main():

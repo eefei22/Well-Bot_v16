@@ -11,6 +11,7 @@ import logging
 import threading
 import time
 import json
+import re
 from pathlib import Path
 from typing import Optional, List, Callable
 from datetime import datetime
@@ -119,8 +120,9 @@ class JournalActivity:
             
             # Initialize STT service
             logger.info("Initializing STT service...")
-            self.stt_service = GoogleSTTService(language="en-US", sample_rate=16000)
-            logger.info("✓ STT service initialized")
+            stt_language = self.global_config.get("language_codes", {}).get("stt_language_code", "en-US")
+            self.stt_service = GoogleSTTService(language=stt_language, sample_rate=16000)
+            logger.info(f"✓ STT service initialized with language: {stt_language}")
             
             # Create mic factory
             def mic_factory():
@@ -206,9 +208,15 @@ class JournalActivity:
             
         except TerminationPhraseDetected:
             logger.info("Termination phrase detected, saving journal entry...")
-            if self._has_content():
+            logger.info(f"Content check - buffers: {len(self.buffers)}, current_buffer length: {len(self.current_buffer)}")
+            has_content = self._has_content()
+            logger.info(f"_has_content() returned: {has_content}")
+            if has_content:
+                logger.info("Content validated, proceeding to save...")
                 self.state = "SAVING"
                 self._save()
+            else:
+                logger.warning("No content to save (below word threshold or empty)")
         except KeyboardInterrupt:
             logger.info("Journal session interrupted by user")
             if self._has_content():
@@ -276,6 +284,11 @@ class JournalActivity:
                 mic.stop()
                 return
             
+            # Skip processing if termination already detected (avoid race conditions)
+            if self._termination_detected:
+                logger.debug(f"Skipping transcript after termination: '{text}'")
+                return
+            
             # Reset silence timer on any transcript
             if self.audio_manager:
                 self.audio_manager.reset_silence_timer()
@@ -317,12 +330,23 @@ class JournalActivity:
         
         try:
             # Start STT streaming
+            logger.debug("Starting STT streaming recognition...")
             self.stt_service.stream_recognize(
                 mic.generator(),
                 on_transcript,
                 interim_results=True,
                 single_utterance=False
             )
+            logger.debug("STT streaming completed normally")
+        except TerminationPhraseDetected:
+            logger.info("TerminationPhraseDetected caught in _record_loop")
+            # Re-raise so it's caught by the outer handler in start()
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error in _record_loop during STT streaming: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
         finally:
             mic.stop()
             
@@ -366,8 +390,30 @@ class JournalActivity:
     def _has_content(self) -> bool:
         """Check if there's any content to save"""
         all_content = " ".join(self.buffers) + " " + self.current_buffer
-        words = all_content.split()
-        return len(words) >= self.global_journal_config.get("min_words_threshold", 5)
+        all_content = all_content.strip()
+        
+        if not all_content:
+            logger.debug("_has_content: empty content")
+            return False
+        
+        # For Chinese/Japanese text (no spaces), count characters instead of words
+        # Check if text contains Chinese characters (Unicode range)
+        has_chinese = any('\u4e00' <= char <= '\u9fff' for char in all_content)
+        
+        if has_chinese:
+            # Count characters (excluding punctuation/whitespace) for Chinese
+            chinese_chars = re.findall(r'[\u4e00-\u9fff]', all_content)
+            char_count = len(chinese_chars)
+            threshold = self.global_journal_config.get("min_words_threshold", 5)
+            logger.debug(f"_has_content (Chinese): {char_count} characters, threshold: {threshold}")
+            return char_count >= threshold
+        else:
+            # Count words (split by spaces) for languages with spaces
+            words = all_content.split()
+            word_count = len(words)
+            threshold = self.global_journal_config.get("min_words_threshold", 5)
+            logger.debug(f"_has_content (non-Chinese): {word_count} words, threshold: {threshold}")
+            return word_count >= threshold
     
     def _save(self):
         """Save journal entry to database"""
@@ -377,16 +423,29 @@ class JournalActivity:
             return
         
         logger.info("Saving journal entry to database...")
+        logger.info(f"Current state - buffers count: {len(self.buffers)}, current_buffer: '{self.current_buffer[:50]}...'")
         
         # Build entry content
         self._finalize_paragraph()  # Finalize any remaining buffer
+        logger.info(f"After finalize - buffers count: {len(self.buffers)}")
         
         if not self.buffers:
-            logger.warning("No content to save")
+            logger.warning("No content to save - buffers are empty")
+            logger.warning(f"current_buffer was: '{self.current_buffer}'")
             return
         
         body = "\n\n".join(self.buffers).strip()
-        word_count = len(body.split())
+        
+        # Count appropriately for Chinese vs other languages
+        has_chinese = any('\u4e00' <= char <= '\u9fff' for char in body)
+        if has_chinese:
+            chinese_chars = re.findall(r'[\u4e00-\u9fff]', body)
+            char_count = len(chinese_chars)
+            word_count = char_count  # Use char count for Chinese
+            logger.info(f"Prepared journal body: {len(body)} chars, {char_count} Chinese characters (first 100 chars: {body[:100]})")
+        else:
+            word_count = len(body.split())
+            logger.info(f"Prepared journal body: {len(body)} chars, {word_count} words (first 100 chars: {body[:100]})")
         
         # Generate title
         title = self._generate_title()
@@ -506,7 +565,7 @@ class JournalActivity:
             self.audio_manager.stop_silence_monitoring()
     
     def _cleanup(self):
-        """Cleanup resources"""
+        """Internal cleanup during session end"""
         self.state = "DONE"
         self._active = False
         
@@ -516,6 +575,86 @@ class JournalActivity:
             self.audio_manager.stop()
         
         logger.info("Journal activity cleanup completed")
+    
+    def cleanup(self):
+        """Complete cleanup of all resources (public method for orchestrator)"""
+        logger.info("🧹 Cleaning up Journal activity resources...")
+        
+        # Stop if still active
+        if self._active:
+            self._cleanup()
+        
+        # Cleanup audio manager
+        if self.audio_manager:
+            try:
+                logger.info("🧹 Cleaning up audio manager...")
+                self.audio_manager.cleanup()
+                self.audio_manager = None
+            except Exception as e:
+                logger.warning(f"Error during audio manager cleanup: {e}")
+        
+        # Cleanup STT service
+        if self.stt_service:
+            try:
+                logger.info("🧹 Cleaning up STT service...")
+                self.stt_service = None
+            except Exception as e:
+                logger.warning(f"Error during STT cleanup: {e}")
+        
+        # Cleanup TTS service
+        if self.tts_service:
+            try:
+                logger.info("🧹 Cleaning up TTS service...")
+                self.tts_service = None
+            except Exception as e:
+                logger.warning(f"Error during TTS cleanup: {e}")
+        
+        # Reset state
+        self.buffers = []
+        self.current_buffer = ""
+        self.last_final_time = None
+        self._termination_detected = False
+        self._saved = False
+        
+        # Reset initialization state
+        self._initialized = False
+        
+        logger.info("✅ Journal activity cleanup completed")
+    
+    def reinitialize(self) -> bool:
+        """Re-initialize the activity for subsequent runs"""
+        logger.info("🔄 Re-initializing Journal activity...")
+        
+        # Reset state
+        self._active = False
+        self._initialized = False
+        self.buffers = []
+        self.current_buffer = ""
+        self.last_final_time = None
+        self._termination_detected = False
+        self._saved = False
+        
+        # Re-initialize components
+        return self.initialize()
+    
+    def run(self) -> bool:
+        """
+        Run the complete activity: start and execute journal session
+        
+        Returns:
+            True if activity completed successfully, False otherwise
+        """
+        logger.info("🎬 JournalActivity.run() - Starting activity execution")
+        try:
+            # Start the activity (runs the full session synchronously)
+            self.start()
+            
+            # start() handles everything including cleanup, so we just return success
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error running Journal activity: {e}", exc_info=True)
+            return False
     
     def is_active(self) -> bool:
         """Check if journal session is active"""
@@ -536,7 +675,8 @@ if __name__ == "__main__":
     # Configure logging
     logging.basicConfig(
         level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        datefmt='%H:%M:%S'
     )
     
     # Get backend directory
