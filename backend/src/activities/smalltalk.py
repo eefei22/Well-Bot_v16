@@ -141,7 +141,12 @@ class SmallTalkActivity:
             logger.error(f"Failed to initialize SmallTalk activity: {e}", exc_info=True)
             return False
     
-    def start(self) -> bool:
+    def add_system_message(self, content: str):
+        """Inject a system message into the LLM pipeline before starting."""
+        if self.llm_pipeline:
+            self.llm_pipeline.messages.append({"role": "system", "content": content})
+
+    def start(self, *, seed_system_prompt: Optional[str] = None, custom_start_prompt: Optional[str] = None) -> bool:
         """Start the SmallTalk activity"""
         if not self._initialized:
             logger.error("Activity not initialized")
@@ -172,13 +177,18 @@ class SmallTalkActivity:
                 startup_audio_path = self.backend_dir / self.audio_config["start_audio_path"]
                 self.audio_manager.play_audio_file(str(startup_audio_path))
             
-            # TTS prompt from config
+            # Optionally inject a system message for context seeding
+            if seed_system_prompt:
+                self.add_system_message(seed_system_prompt)
+
+            # TTS prompt from config or custom override
             try:
                 prompts = self.smalltalk_config.get("prompts", {})
-                start_prompt = prompts.get("start", "Hello! I'm here to chat with you. What's on your mind?")
+                default_start = prompts.get("start", "Hello! I'm here to chat with you. What's on your mind?")
+                start_prompt = custom_start_prompt or default_start
             except Exception as e:
                 logger.warning(f"Failed to load start prompt from config: {e}")
-                start_prompt = "Hello! I'm here to chat with you. What's on your mind?"
+                start_prompt = custom_start_prompt or "Hello! I'm here to chat with you. What's on your mind?"
             
             self._speak(start_prompt)
             

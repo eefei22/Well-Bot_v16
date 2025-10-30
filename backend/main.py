@@ -30,6 +30,7 @@ from src.components.tts import GoogleTTSClient
 from src.components.mic_stream import MicStream
 from src.activities.smalltalk import SmallTalkActivity
 from src.activities.journal import JournalActivity
+from src.activities.spiritual_quote import SpiritualQuoteActivity
 from src.utils.config_resolver import get_global_config_for_user, resolve_language
 from src.supabase.auth import get_current_user_id
 
@@ -73,6 +74,7 @@ class WellBotOrchestrator:
         self.voice_pipeline: Optional[VoicePipeline] = None
         self.smalltalk_activity: Optional[SmallTalkActivity] = None
         self.journal_activity: Optional[JournalActivity] = None
+        self.spiritual_quote_activity: Optional[SpiritualQuoteActivity] = None
         self.stt_service: Optional[GoogleSTTService] = None
         self.tts_service: Optional[GoogleTTSClient] = None
 
@@ -168,6 +170,12 @@ class WellBotOrchestrator:
                 raise RuntimeError("Failed to initialize Journal activity")
             logger.info("✓ Journal activity initialized")
 
+            logger.info("Initializing Spiritual Quote activity…")
+            self.spiritual_quote_activity = SpiritualQuoteActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+            if not self.spiritual_quote_activity.initialize():
+                raise RuntimeError("Failed to initialize Spiritual Quote activity")
+            logger.info("✓ Spiritual Quote activity initialized")
+            
             return True
         except Exception as e:
             logger.error(f"Component initialization failed: {e}", exc_info=True)
@@ -230,8 +238,7 @@ class WellBotOrchestrator:
             logger.info("🧘 Meditation intent detected – not implemented yet")
             self._handle_activity_unavailable("meditation")
         elif intent == "quote":
-            logger.info("💭 Quote intent detected – not implemented yet")
-            self._handle_activity_unavailable("quote")
+            self._start_spiritual_quote_activity()
         elif intent == "gratitude":
             logger.info("🙏 Gratitude intent detected – not implemented yet")
             self._handle_activity_unavailable("gratitude")
@@ -683,6 +690,60 @@ class WellBotOrchestrator:
         self._activity_thread = threading.Thread(target=run_activity, daemon=True)
         self._activity_thread.start()
 
+    def _start_spiritual_quote_activity(self):
+        """Start the spiritual quote activity thread."""
+        logger.info("🧘 Starting Spiritual Quote activity…")
+
+        if self.spiritual_quote_activity is None:
+            logger.error("❌ Spiritual Quote activity is None - cannot start")
+            return
+
+        with self._lock:
+            self.state = SystemState.ACTIVITY_ACTIVE
+            self.current_activity = "spiritual_quote"
+
+        # Stop wake word pipeline first
+        if self.voice_pipeline:
+            logger.info("🔇 Pausing wake word pipeline before Spiritual Quote…")
+            try:
+                import threading
+                stop_success = threading.Event()
+                def force_stop():
+                    try:
+                        self.voice_pipeline.stop()
+                        stop_success.set()
+                    except Exception:
+                        stop_success.set()
+                threading.Thread(target=force_stop, daemon=True).start()
+                stop_success.wait(timeout=5.0)
+            except Exception as e:
+                logger.warning(f"Ignoring error while stopping voice pipeline: {e}")
+
+        def run_activity():
+            try:
+                if self.spiritual_quote_activity is None:
+                    logger.error("❌ Spiritual Quote activity is None - cannot run")
+                    return
+                ok = self.spiritual_quote_activity.run()
+                if ok:
+                    logger.info("✅ Spiritual Quote activity completed")
+                else:
+                    logger.error("❌ Spiritual Quote activity ended with failure")
+            except Exception as e:
+                logger.error(f"Error in Spiritual Quote activity: {e}", exc_info=True)
+            finally:
+                # Re-initialize for next run
+                try:
+                    self.spiritual_quote_activity = SpiritualQuoteActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+                    self.spiritual_quote_activity.initialize()
+                except Exception:
+                    pass
+                # Restart wakeword
+                self._restart_wakeword_detection()
+
+        self._activity_thread = threading.Thread(target=run_activity, daemon=True)
+        self._activity_thread.start()
+
     def _restart_wakeword_detection(self):
         """Restart wake word detection after an activity ends."""
         logger.info("🔄 Restarting wake word detection…")
@@ -787,6 +848,10 @@ class WellBotOrchestrator:
                 # Journal activity's _cleanup will be called automatically when start() completes
                 # But we can trigger cleanup if needed
                 self.journal_activity.cleanup()
+        elif self.current_activity == "quote" and self.spiritual_quote_activity:
+            logger.info("Stopping Spiritual Quote activity…")
+            if self.spiritual_quote_activity.is_active():
+                self.spiritual_quote_activity.cleanup()
 
         # Stop voice pipeline
         if self.voice_pipeline:
@@ -817,7 +882,8 @@ class WellBotOrchestrator:
                 "current_activity": self.current_activity,
                 "wakeword_active": bool(self.voice_pipeline and self.voice_pipeline.is_active()),
                 "smalltalk_active": bool(self.smalltalk_activity and self.smalltalk_activity.is_active()),
-                "journal_active": bool(self.journal_activity and self.journal_activity.is_active())
+                "journal_active": bool(self.journal_activity and self.journal_activity.is_active()),
+                "quote_active": bool(self.spiritual_quote_activity and self.spiritual_quote_activity.is_active())
             }
 
 def main():

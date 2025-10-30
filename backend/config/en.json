@@ -113,6 +113,11 @@
       "timeout": "Saving your journal entry now."
     }
   },
+  "quote": {
+    "preamble": "Here is a quote for you.",
+    "seed_system_prompt": "You just shared this quote with the user. Transition into a warm, brief small talk. Quote: '{quote}'. Ask one inviting, open question related to the theme.",
+    "opener": "What are your thoughts on that quote?"
+  },
   "wakeword_responses": {
     "prompts": {
       "wakeword_detected": "Hey, I heard you called me. What can I help you with?",

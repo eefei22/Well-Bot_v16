@@ -113,6 +113,11 @@
       "timeout": "Menyimpan entri jurnal anda sekarang."
     }
   },
+  "quote": {
+    "preamble": "Ini satu petikan untuk anda.",
+    "seed_system_prompt": "Anda baru berkongsi petikan ini dengan pengguna. Beralihlah secara semula jadi ke perbualan santai yang ringkas dan mesra. Petikan: '{quote}'. Tanyakan satu soalan terbuka yang mengajak pengguna berkongsi pandangan.",
+    "opener": "Apa pendapat anda tentang petikan itu?"
+  },
   "wakeword_responses": {
     "prompts": {
       "wakeword_detected": "Hey, saya dengar anda memanggil saya. Apa yang boleh saya bantu?",

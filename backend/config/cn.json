@@ -112,6 +112,11 @@
       "timeout": "正在保存你的日记条目。"
     }
   },
+  "quote": {
+    "preamble": "给你一句名言。",
+    "seed_system_prompt": "你刚刚向用户分享了这句名言。请自然过渡到简短而温暖的闲聊。名言：‘{quote}’。请提出一个开放、友好的问题，邀请用户分享看法。",
+    "opener": "你对这句名言有什么想法？"
+  },
   "wakeword_responses": {
     "prompts": {
       "wakeword_detected": "嘿，我听到你叫我。我能帮你什么？",

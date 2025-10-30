@@ -1,6 +1,7 @@
 from typing import Optional, Dict, Any, List
 from .client import get_supabase, fetch_user_by_id
 import logging
+import random
 
 logger = logging.getLogger(__name__)
 
@@ -81,3 +82,95 @@ def upsert_journal(user_id: str, title: str, body: str, mood: int,
     }
     res = sb.table("wb_journal").insert(payload).execute()
     return res.data[0]
+
+
+# ---------- Spiritual Quote helpers ----------
+
+def _normalize_religion(value: Optional[str]) -> str:
+    """Map free-form beliefs to wb_quote categories."""
+    if not value:
+        return "general"
+    v = value.strip().lower()
+    if "budd" in v:
+        return "buddhist"
+    if "christ" in v:
+        return "christian"
+    if "islam" in v or "muslim" in v:
+        return "islamic"
+    if "hind" in v:
+        return "hindu"
+    return "general"
+
+
+def get_user_religion(user_id: str) -> Optional[str]:
+    """
+    Resolve the user's religion for quote filtering.
+    Priority: wb_preferences.religion → users.spiritual_beliefs → "general".
+    Returns a normalized category used by wb_quote.category.
+    """
+    try:
+        pref = sb.table("wb_preferences").select("religion").eq("user_id", user_id).limit(1).execute()
+        if pref.data and pref.data[0].get("religion"):
+            return _normalize_religion(pref.data[0]["religion"])
+    except Exception as e:
+        logger.warning(f"Failed to fetch wb_preferences for {user_id}: {e}")
+
+    try:
+        user_resp = sb.table("users").select("spiritual_beliefs").eq("id", user_id).limit(1).execute()
+        if user_resp.data and user_resp.data[0].get("spiritual_beliefs"):
+            return _normalize_religion(user_resp.data[0]["spiritual_beliefs"])
+    except Exception as e:
+        logger.warning(f"Failed to fetch users.spiritual_beliefs for {user_id}: {e}")
+
+    return "general"
+
+
+def fetch_next_quote(user_id: str, religion: Optional[str] = None, language: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    """
+    Fetch a single unseen quote for the user.
+    - Filters by category in (religion, 'general').
+    - Excludes quotes already seen by the user.
+    - Randomizes client-side among a small candidate set.
+    Returns {id, category, text} or None.
+    """
+    try:
+        # Gather seen ids
+        seen_resp = sb.table("wb_quote_seen").select("quote_id").eq("user_id", user_id).execute()
+        seen_ids = {row["quote_id"] for row in (seen_resp.data or [])}
+
+        category = religion or get_user_religion(user_id) or "general"
+        lang = language or get_user_language(user_id) or "en"
+        categories = [category, "general"] if category != "general" else ["general"]
+
+        # Pull a reasonable pool from DB and then filter locally
+        q = (
+            sb.table("wb_quote")
+            .select("id, category, language, text")
+            .in_("category", categories)
+            .eq("language", lang)
+            .limit(50)
+        )
+        pool_resp = q.execute()
+        pool = [row for row in (pool_resp.data or []) if row["id"] not in seen_ids]
+
+        if not pool:
+            logger.info("No unseen quotes available; resetting seen list fallback")
+            # Fallback: allow repeats if absolutely necessary
+            pool = pool_resp.data or []
+            if not pool:
+                return None
+
+        return random.choice(pool)
+    except Exception as e:
+        logger.error(f"Failed to fetch next quote: {e}")
+        return None
+
+
+def mark_quote_seen(user_id: str, quote_id: str) -> bool:
+    """Record that the user has been served this quote."""
+    try:
+        sb.table("wb_quote_seen").insert({"user_id": user_id, "quote_id": quote_id}).execute()
+        return True
+    except Exception as e:
+        logger.warning(f"Failed to mark quote {quote_id} seen for {user_id}: {e}")
+        return False

@@ -110,7 +110,7 @@ CREATE TABLE public.wb_journal (
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT wb_journal_pkey PRIMARY KEY (id),
-  CONSTRAINT wb_journal_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+  CONSTRAINT wb_journal_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
 );
 CREATE TABLE public.wb_meditation_log (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -158,6 +158,7 @@ CREATE TABLE public.wb_quote (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   category USER-DEFINED NOT NULL,
   text text NOT NULL,
+  language text NOT NULL DEFAULT 'en'::text,
   CONSTRAINT wb_quote_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.wb_quote_seen (
