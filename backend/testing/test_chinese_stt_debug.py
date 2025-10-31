@@ -86,7 +86,7 @@ def test_chinese_text_encoding():
         "亲子写日记。",
     ]
     
-    from src.activities.journal import normalize_text
+    from src.components.termination_phrase import normalize_text
     
     logger.info("Testing normalization of termination phrases:")
     for phrase in chinese_phrases:
@@ -127,7 +127,7 @@ def test_termination_phrase_detection():
             logger.info(f"  - '{phrase}'")
         
         # Import the termination check function
-        from src.activities.journal import normalize_text
+        from src.components.termination_phrase import normalize_text
         
         # Test cases from actual logs
         test_cases = [

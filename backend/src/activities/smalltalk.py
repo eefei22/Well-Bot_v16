@@ -21,7 +21,8 @@ from src.components.stt import GoogleSTTService
 from src.components.mic_stream import MicStream
 from src.components.conversation_audio_manager import ConversationAudioManager
 from src.components.conversation_session import ConversationSession
-from src.components._pipeline_smalltalk import SmallTalkSession, TerminationPhraseDetected, normalize_text
+from src.components._pipeline_smalltalk import SmallTalkSession
+from src.components.termination_phrase import TerminationPhraseDetected, normalize_text
 from src.utils.config_loader import get_deepseek_config
 from src.utils.config_resolver import get_global_config_for_user, get_language_config
 from src.supabase.auth import get_current_user_id

@@ -25,39 +25,13 @@ from src.components.stt import GoogleSTTService
 from src.components.mic_stream import MicStream
 from src.components.conversation_audio_manager import ConversationAudioManager
 from src.components.tts import GoogleTTSClient
+from src.components.termination_phrase import TerminationPhraseDetector, TerminationPhraseDetected
 from src.supabase.database import upsert_journal, DEV_USER_ID
 from src.utils.config_resolver import get_global_config_for_user, get_language_config
 from src.supabase.auth import get_current_user_id
 from google.cloud import texttospeech
 
 logger = logging.getLogger(__name__)
-
-
-def normalize_text(text: str) -> str:
-    """
-    Normalize text for robust matching:
-    - Convert to lowercase
-    - Remove punctuation
-    - Collapse whitespace
-    """
-    if not text:
-        return ""
-    
-    # Convert to lowercase and strip
-    normalized = text.strip().lower()
-    
-    # Remove punctuation
-    normalized = normalized.translate(str.maketrans("", "", string.punctuation))
-    
-    # Collapse multiple spaces into single space
-    normalized = " ".join(normalized.split())
-    
-    return normalized
-
-
-class TerminationPhraseDetected(Exception):
-    """Raised when user utterance matches a termination phrase"""
-    pass
 
 
 class JournalActivity:
@@ -91,7 +65,7 @@ class JournalActivity:
         self.last_final_time = None
         
         # Termination detection
-        self.termination_phrases: List[str] = []
+        self.termination_detector: Optional[TerminationPhraseDetector] = None
         self._termination_detected = False
         self._saved = False  # Track if journal has already been saved
         
@@ -168,9 +142,10 @@ class JournalActivity:
             )
             logger.info("✓ Audio manager initialized")
             
-            # Load termination phrases
-            self.termination_phrases = self.config.get("termination_phrases", [])
-            logger.info(f"✓ Loaded {len(self.termination_phrases)} termination phrases")
+            # Initialize termination phrase detector
+            phrases = self.config.get("termination_phrases", [])
+            self.termination_detector = TerminationPhraseDetector(phrases, require_active=True)
+            logger.info(f"✓ Loaded {len(phrases)} termination phrases")
             
             self._initialized = True
             logger.info("✓ Journal activity fully initialized")
@@ -297,7 +272,7 @@ class JournalActivity:
                 logger.info(f"Final transcript: {text}")
                 
                 # Check for termination phrase
-                if self._is_termination_phrase(text):
+                if self.termination_detector.is_termination_phrase(text, active=self._active):
                     logger.info(f"Termination phrase detected in: {text}")
                     self._termination_detected = True
                     mic.stop()
@@ -322,7 +297,7 @@ class JournalActivity:
                 logger.debug(f"Interim transcript: {text}")
                 if text:
                     # Check interim for termination phrase
-                    if self._is_termination_phrase(text):
+                    if self.termination_detector.is_termination_phrase(text, active=self._active):
                         logger.info(f"Termination phrase detected in interim: {text}")
                         self._termination_detected = True
                         mic.stop()
@@ -359,26 +334,6 @@ class JournalActivity:
             # Finalize any remaining buffer
             if self.current_buffer:
                 self._finalize_paragraph()
-    
-    def _is_termination_phrase(self, user_text: str) -> bool:
-        """Check if user text contains termination phrases with robust matching"""
-        if not user_text or not self._active:
-            return False
-        
-        normalized_user = normalize_text(user_text)
-        logger.debug(f"Checking termination - user_text='{user_text}' -> normalized='{normalized_user}'")
-        
-        for phrase in self.termination_phrases:
-            normalized_phrase = normalize_text(phrase)
-            
-            # Multiple matching strategies for robustness
-            if (normalized_user == normalized_phrase or 
-                normalized_user.startswith(normalized_phrase + " ") or
-                normalized_phrase in normalized_user):
-                logger.info(f"Termination phrase matched! '{phrase}' in '{user_text}'")
-                return True
-        
-        return False
     
     def _finalize_paragraph(self):
         """Add current buffer to accumulated paragraphs"""
