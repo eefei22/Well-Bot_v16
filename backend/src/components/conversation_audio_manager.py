@@ -127,12 +127,34 @@ class ConversationAudioManager:
         try:
             mic.start()
             final_text: Optional[str] = None
+            last_audio_chunk_time = time.time()
             
             def on_transcript(text: str, is_final: bool):
-                nonlocal final_text
+                nonlocal final_text, last_audio_chunk_time
+                # Reset silence timer when any transcript arrives (interim or final)
+                # This prevents timeout during slow STT processing
+                if text:
+                    self.reset_silence_timer()
+                    last_audio_chunk_time = time.time()
+                
                 if is_final:
                     final_text = text
                     mic.stop()
+            
+            # Track audio chunks to detect actual speech activity
+            # This helps when STT is slow to process but audio is actively coming in
+            def audio_activity_tracker(generator):
+                nonlocal last_audio_chunk_time
+                for chunk in generator:
+                    if chunk and len(chunk) > 0:
+                        # Reset silence timer when we receive audio chunks
+                        # This prevents timeout when user is speaking but STT hasn't processed yet
+                        current_time = time.time()
+                        # Only reset if significant time has passed (avoid spam)
+                        if current_time - last_audio_chunk_time > 0.5:
+                            self.reset_silence_timer()
+                            last_audio_chunk_time = current_time
+                    yield chunk
             
             # Add timeout and check for activity state during STT
             import threading
@@ -142,7 +164,9 @@ class ConversationAudioManager:
             def run_stt():
                 nonlocal stt_error
                 try:
-                    self.stt.stream_recognize(mic.generator(), on_transcript)
+                    # Use audio activity tracker to detect when mic is receiving audio
+                    # This helps prevent timeout when STT processing is slow
+                    self.stt.stream_recognize(audio_activity_tracker(mic.generator()), on_transcript)
                 except Exception as e:
                     stt_error = e
                 finally:

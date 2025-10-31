@@ -117,6 +117,19 @@
     "seed_system_prompt": "你刚刚向用户分享了这句名言。请自然过渡到简短而温暖的闲聊。名言：‘{quote}’。请提出一个开放、友好的问题，邀请用户分享看法。",
     "opener": "你对这句名言有什么想法？"
   },
+  "meditation": {
+    "termination_phrases": [
+      "停止冥想",
+      "结束冥想",
+      "够了",
+      "完成冥想"
+    ],
+    "start_prompt": "现在开始你的冥想课程。",
+    "seed_system_prompt_completed": "你刚刚与用户完成了一次引导冥想。请自然过渡到简短而温暖的闲聊。提出一个开放、友好的问题，询问冥想的感觉或体验。",
+    "seed_system_prompt_stopped": "用户中途停止了引导冥想。请自然过渡到简短而温暖的闲聊。提出一个开放、友好的问题，询问他们的感受或是否一切正常。",
+    "opener_completed": "这次冥想感觉如何？",
+    "opener_stopped": "我注意到你停止了冥想。你感觉怎么样？"
+  },
   "wakeword_responses": {
     "prompts": {
       "wakeword_detected": "嘿，我听到你叫我。我能帮你什么？",

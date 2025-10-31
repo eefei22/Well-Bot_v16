@@ -11,7 +11,7 @@
     "use_audio_files": false
   },
   "smalltalk": {
-    "silence_timeout_seconds": 10,
+    "silence_timeout_seconds": 20,
     "nudge_timeout_seconds": 15,
     "max_turns": 20,
     "nudge_pre_delay_ms": 200,

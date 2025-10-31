@@ -118,6 +118,19 @@
     "seed_system_prompt": "You just shared this quote with the user. Transition into a warm, brief small talk. Quote: '{quote}'. Ask one inviting, open question related to the theme.",
     "opener": "What are your thoughts on that quote?"
   },
+  "meditation": {
+    "termination_phrases": [
+      "stop meditation",
+      "end meditation",
+      "that's enough",
+      "finish meditation"
+    ],
+    "start_prompt": "Starting your meditation session now.",
+    "seed_system_prompt_completed": "You just completed a guided meditation session with the user. Transition into a warm, brief small talk. Ask one inviting, open question about how the meditation felt or what they experienced.",
+    "seed_system_prompt_stopped": "The user stopped a guided meditation session halfway. Transition into a warm, brief small talk. Ask one inviting, open question about how they're feeling or if everything is okay.",
+    "opener_completed": "How did that meditation feel?",
+    "opener_stopped": "I noticed you stopped the meditation. How are you feeling?"
+  },
   "wakeword_responses": {
     "prompts": {
       "wakeword_detected": "Hey, I heard you called me. What can I help you with?",

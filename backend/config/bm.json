@@ -118,6 +118,19 @@
     "seed_system_prompt": "Anda baru berkongsi petikan ini dengan pengguna. Beralihlah secara semula jadi ke perbualan santai yang ringkas dan mesra. Petikan: '{quote}'. Tanyakan satu soalan terbuka yang mengajak pengguna berkongsi pandangan.",
     "opener": "Apa pendapat anda tentang petikan itu?"
   },
+  "meditation": {
+    "termination_phrases": [
+      "henti meditasi",
+      "tamat meditasi",
+      "cukup",
+      "selesai meditasi"
+    ],
+    "start_prompt": "Memulakan sesi meditasi anda sekarang.",
+    "seed_system_prompt_completed": "Anda baru melengkapkan sesi meditasi berpandu dengan pengguna. Beralihlah secara semula jadi ke perbualan santai yang ringkas dan mesra. Tanyakan satu soalan terbuka tentang bagaimana meditasi dirasakan atau apa yang mereka alami.",
+    "seed_system_prompt_stopped": "Pengguna menghentikan sesi meditasi berpandu di tengah-tengah. Beralihlah secara semula jadi ke perbualan santai yang ringkas dan mesra. Tanyakan satu soalan terbuka tentang bagaimana perasaan mereka atau sama ada semuanya baik-baik saja.",
+    "opener_completed": "Bagaimanakah meditasi itu dirasakan?",
+    "opener_stopped": "Saya perasan anda menghentikan meditasi. Bagaimana perasaan anda?"
+  },
   "wakeword_responses": {
     "prompts": {
       "wakeword_detected": "Hey, saya dengar anda memanggil saya. Apa yang boleh saya bantu?",

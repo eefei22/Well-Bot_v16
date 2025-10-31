@@ -1,0 +1,450 @@
+#!/usr/bin/env python3
+"""
+Meditation Activity
+
+Plays guided meditation audio files, listens for termination phrases during
+playback, and transitions to SmallTalk with contextual prompts.
+"""
+
+import logging
+import threading
+import time
+import pyaudio
+import wave
+from pathlib import Path
+from typing import Optional
+
+from src.components.stt import GoogleSTTService
+from src.components.mic_stream import MicStream
+from src.components.conversation_audio_manager import ConversationAudioManager
+from src.components.tts import GoogleTTSClient
+from src.components.termination_phrase import TerminationPhraseDetector, TerminationPhraseDetected
+from src.utils.config_resolver import get_global_config_for_user, get_language_config, resolve_language
+from src.supabase.auth import get_current_user_id
+from src.activities.smalltalk import SmallTalkActivity
+
+logger = logging.getLogger(__name__)
+
+
+class MeditationActivity:
+    def __init__(self, backend_dir: Path, user_id: Optional[str] = None):
+        self.backend_dir = backend_dir
+        self.user_id = user_id or get_current_user_id()
+
+        # Components
+        self.stt_service: Optional[GoogleSTTService] = None
+        self.audio_manager: Optional[ConversationAudioManager] = None
+        self.tts: Optional[GoogleTTSClient] = None
+        self.termination_detector: Optional[TerminationPhraseDetector] = None
+
+        # Configs
+        self.global_config = None
+        self.language_config = None
+        self.audio_paths = None
+        self.meditation_config = None
+        
+        # State
+        self._initialized = False
+        self._active = False
+        
+        # Threading for parallel playback and listening
+        self._audio_playback_thread: Optional[threading.Thread] = None
+        self._listening_thread: Optional[threading.Thread] = None
+        self._termination_detected = threading.Event()
+        self._audio_stopped = threading.Event()
+        self._meditation_completed = False
+
+    def initialize(self) -> bool:
+        try:
+            logger.info("Initializing Meditation activity...")
+            self.global_config = get_global_config_for_user(self.user_id)
+            self.language_config = get_language_config(self.user_id)
+            self.audio_paths = self.language_config.get("audio_paths", {})
+            self.meditation_config = self.language_config.get("meditation", {})
+
+            # Initialize termination phrase detector
+            termination_phrases = self.meditation_config.get("termination_phrases", [
+                "stop meditation",
+                "end meditation",
+                "that's enough",
+                "finish meditation"
+            ])
+            logger.info(f"Loaded {len(termination_phrases)} termination phrases: {termination_phrases}")
+            self.termination_detector = TerminationPhraseDetector(termination_phrases)
+
+            # STT service for listening during playback
+            stt_lang = self.global_config["language_codes"]["stt_language_code"]
+            self.stt_service = GoogleSTTService(language=stt_lang, sample_rate=16000)
+
+            def mic_factory():
+                return MicStream()
+
+            audio_config = {
+                "backend_dir": str(self.backend_dir),
+                "silence_timeout_seconds": 300,  # Long timeout for meditation (5 minutes)
+                "nudge_timeout_seconds": 60,
+                "nudge_pre_delay_ms": 200,
+                "nudge_post_delay_ms": 300,
+                "nudge_audio_path": self.audio_paths.get("nudge_audio_path"),
+                "termination_audio_path": self.audio_paths.get("termination_audio_path"),
+                "end_audio_path": self.audio_paths.get("end_audio_path"),
+                "start_audio_path": self.audio_paths.get("start_meditation_audio_path"),
+            }
+            self.audio_manager = ConversationAudioManager(self.stt_service, mic_factory, audio_config)
+
+            # TTS client for speaking prompts
+            from google.cloud import texttospeech
+            self.tts = GoogleTTSClient(
+                voice_name=self.global_config["language_codes"]["tts_voice_name"],
+                language_code=self.global_config["language_codes"]["tts_language_code"],
+                audio_encoding=texttospeech.AudioEncoding.PCM,
+                sample_rate_hertz=24000,
+                num_channels=1,
+                sample_width_bytes=2,
+            )
+
+            self._initialized = True
+            logger.info("Meditation activity initialized successfully")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to initialize Meditation activity: {e}", exc_info=True)
+            return False
+
+    def _get_meditation_file_path(self) -> Optional[Path]:
+        """
+        Get meditation file path based on user's language preference.
+        Returns path to meditation file or None if not found.
+        """
+        # Get user's language directly from resolver
+        user_lang = resolve_language(self.user_id)
+        logger.info(f"Resolved user language: {user_lang} for user {self.user_id}")
+        
+        # Map language codes to file prefixes
+        lang_map = {
+            "en": "EN",
+            "cn": "CN",
+            "bm": "BM"
+        }
+        
+        file_prefix = lang_map.get(user_lang, "EN")
+        meditation_dir = self.backend_dir / "assets" / "Meditation"
+        
+        logger.info(f"Looking for meditation file with prefix: {file_prefix} in {meditation_dir}")
+        
+        # Try to find file with matching prefix
+        # Files are named like: EN_3.28.wav, CN_3.56.wav
+        for file_path in meditation_dir.glob(f"{file_prefix}_*.wav"):
+            if file_path.exists():
+                logger.info(f"Found meditation file: {file_path}")
+                return file_path
+        
+        # Fallback to English if user's language not found
+        if user_lang != "en":
+            logger.warning(f"No meditation file found for language '{user_lang}', falling back to English")
+            for file_path in meditation_dir.glob("EN_*.wav"):
+                if file_path.exists():
+                    logger.info(f"Using fallback meditation file: {file_path}")
+                    return file_path
+        
+        logger.error(f"No meditation file found in {meditation_dir}")
+        return None
+
+    def _play_meditation_audio(self, audio_path: Path):
+        """Play meditation audio file with interrupt capability (runs in separate thread)"""
+        try:
+            logger.info(f"Starting meditation audio playback: {audio_path}")
+            
+            # Use pyaudio for interruptible playback
+            wf = wave.open(str(audio_path), 'rb')
+            pa = pyaudio.PyAudio()
+            
+            stream = pa.open(
+                format=pa.get_format_from_width(wf.getsampwidth()),
+                channels=wf.getnchannels(),
+                rate=wf.getframerate(),
+                output=True
+            )
+            
+            chunk_size = 1024
+            data = wf.readframes(chunk_size)
+            
+            while data and not self._termination_detected.is_set():
+                stream.write(data)
+                data = wf.readframes(chunk_size)
+            
+            # Check if we completed or were interrupted
+            if not self._termination_detected.is_set():
+                logger.info("Meditation audio playback completed")
+                self._meditation_completed = True
+            else:
+                logger.info("Meditation audio playback interrupted by termination phrase")
+            
+            stream.stop_stream()
+            stream.close()
+            pa.terminate()
+            wf.close()
+            
+        except Exception as e:
+            logger.error(f"Error during meditation audio playback: {e}", exc_info=True)
+        finally:
+            # Signal that audio has stopped
+            self._audio_stopped.set()
+
+    def _listen_for_termination(self):
+        """Listen for termination phrases during meditation (runs in separate thread)"""
+        mic = None
+        try:
+            logger.info("Starting termination phrase listening...")
+            mic = self.audio_manager.mic_factory()
+            
+            with self.audio_manager._mic_lock:
+                self.audio_manager._current_mic = mic
+            
+            mic.start()
+            
+            termination_detected = False
+            
+            def on_transcript(text: str, is_final: bool):
+                nonlocal termination_detected
+                if not self._active or termination_detected:
+                    if mic:
+                        mic.stop()
+                    return
+                
+                if not text:
+                    return
+                
+                # Log all transcripts for debugging
+                logger.info(f"[Meditation Listening] Transcript (final={is_final}): '{text}'")
+                
+                # Check for termination phrase
+                try:
+                    self.termination_detector.check_termination(text, active=self._active)
+                    logger.debug(f"No termination detected in: '{text}'")
+                except TerminationPhraseDetected:
+                    logger.info(f"🎯 TERMINATION PHRASE DETECTED during meditation: '{text}'")
+                    termination_detected = True
+                    self._termination_detected.set()
+                    if mic:
+                        mic.stop()
+            
+            # Continue listening until termination detected or audio stops
+            while self._active and not self._termination_detected.is_set() and not self._audio_stopped.is_set():
+                try:
+                    # Use STT streaming with callback
+                    self.stt_service.stream_recognize(mic.generator(), on_transcript)
+                    
+                    # If stream_recognize returns, it means stream ended
+                    # Restart if we're still supposed to be listening
+                    if self._active and not self._termination_detected.is_set() and not self._audio_stopped.is_set():
+                        logger.debug("STT stream ended, restarting...")
+                        if mic:
+                            mic.stop()
+                        time.sleep(0.2)
+                        if self._active and not self._termination_detected.is_set():
+                            mic.start()
+                    else:
+                        break
+                except TerminationPhraseDetected:
+                    # Already handled in on_transcript
+                    break
+                except Exception as e:
+                    logger.error(f"STT error during termination listening: {e}")
+                    # Try to continue listening
+                    if self._active and not self._termination_detected.is_set() and not self._audio_stopped.is_set():
+                        if mic:
+                            mic.stop()
+                        time.sleep(0.5)
+                        if self._active and not self._termination_detected.is_set():
+                            mic.start()
+                    else:
+                        break
+                        
+        except Exception as e:
+            logger.error(f"Error in termination listening thread: {e}", exc_info=True)
+        finally:
+            if mic:
+                try:
+                    mic.stop()
+                except:
+                    pass
+            with self.audio_manager._mic_lock:
+                if self.audio_manager._current_mic == mic:
+                    self.audio_manager._current_mic = None
+            
+            logger.info("Termination listening thread ended")
+
+    def _speak(self, text: str):
+        """Speak text using TTS"""
+        if not self.tts or not self.audio_manager:
+            return
+        def gen():
+            yield text
+        pcm = self.tts.stream_synthesize(gen())
+        self.audio_manager.play_tts_stream(pcm)
+
+    def run(self) -> bool:
+        if not self._initialized:
+            logger.error("Meditation activity not initialized")
+            return False
+
+        try:
+            self._active = True
+            
+            # Get meditation file
+            meditation_file = self._get_meditation_file_path()
+            if not meditation_file:
+                logger.error("No meditation file found")
+                self._speak("I'm sorry, I couldn't find a meditation file for you right now.")
+                return False
+
+            # Play start prompt
+            start_prompt = self.meditation_config.get("start_prompt", "Starting your meditation session now.")
+            logger.info(f"Playing start prompt: {start_prompt}")
+            self._speak(start_prompt)
+            
+            # Wait 3 seconds before starting meditation
+            logger.info("Waiting 3 seconds before starting meditation...")
+            time.sleep(3.0)
+
+            # Reset state flags
+            self._termination_detected.clear()
+            self._audio_stopped.clear()
+            self._meditation_completed = False
+
+            # Start audio playback in separate thread
+            logger.info("Starting meditation audio playback thread...")
+            self._audio_playback_thread = threading.Thread(
+                target=self._play_meditation_audio,
+                args=(meditation_file,),
+                daemon=True
+            )
+            self._audio_playback_thread.start()
+
+            # Start termination listening in separate thread
+            logger.info("Starting termination phrase listening thread...")
+            self._listening_thread = threading.Thread(
+                target=self._listen_for_termination,
+                daemon=True
+            )
+            self._listening_thread.start()
+
+            # Wait for either termination or audio completion
+            logger.info("Waiting for meditation to complete or be terminated...")
+            while self._active:
+                # Check if termination detected
+                if self._termination_detected.is_set():
+                    logger.info("Meditation terminated by user")
+                    # Stop audio playback if possible
+                    # Note: pydub's play() is blocking, so we can't easily interrupt it
+                    # But we can set the flag and continue
+                    break
+                
+                # Check if audio completed
+                if self._audio_stopped.is_set():
+                    logger.info("Meditation audio completed")
+                    break
+                
+                # Check if threads are still alive
+                if not self._audio_playback_thread.is_alive() and not self._listening_thread.is_alive():
+                    logger.info("Both threads ended")
+                    break
+                
+                time.sleep(0.5)
+
+            # Clean up meditation activity before transitioning
+            logger.info("Cleaning up meditation activity resources...")
+            self._active = False
+            
+            # Wait for threads to finish
+            if self._audio_playback_thread and self._audio_playback_thread.is_alive():
+                logger.info("Waiting for audio playback thread to finish...")
+                self._audio_playback_thread.join(timeout=3.0)
+            if self._listening_thread and self._listening_thread.is_alive():
+                logger.info("Waiting for listening thread to finish...")
+                self._listening_thread.join(timeout=3.0)
+            
+            # Cleanup audio manager resources
+            if self.audio_manager:
+                try:
+                    logger.info("Stopping and cleaning up audio manager...")
+                    self.audio_manager.stop()
+                    self.audio_manager.cleanup()
+                except Exception as e:
+                    logger.warning(f"Error cleaning up audio manager: {e}")
+            
+            # Small delay to ensure audio devices are fully released
+            logger.info("Waiting for audio devices to be released...")
+            time.sleep(0.5)
+
+            # Determine completion status
+            was_completed = self._meditation_completed and not self._termination_detected.is_set()
+            
+            # Transition to SmallTalk with contextual prompts
+            logger.info(f"Meditation cleanup complete. Transitioning to SmallTalk (completed={was_completed})...")
+            
+            if was_completed:
+                seed = self.meditation_config.get(
+                    "seed_system_prompt_completed",
+                    "You just completed a guided meditation session with the user. Transition into a warm, brief small talk. Ask one inviting, open question about how the meditation felt or what they experienced."
+                )
+                opener = self.meditation_config.get(
+                    "opener_completed",
+                    "How did that meditation feel?"
+                )
+            else:
+                seed = self.meditation_config.get(
+                    "seed_system_prompt_stopped",
+                    "The user stopped a guided meditation session halfway. Transition into a warm, brief small talk. Ask one inviting, open question about how they're feeling or if everything is okay."
+                )
+                opener = self.meditation_config.get(
+                    "opener_stopped",
+                    "I noticed you stopped the meditation. How are you feeling?"
+                )
+
+            smalltalk = SmallTalkActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+            if not smalltalk.initialize():
+                logger.error("Failed to initialize SmallTalk for handoff")
+                return False
+            
+            smalltalk.start(seed_system_prompt=seed, custom_start_prompt=opener)
+            # Continue the normal conversation loop
+            ok = smalltalk._conversation_loop()
+            smalltalk.stop()
+            smalltalk.cleanup()
+            smalltalk.reinitialize()
+            return ok
+            
+        except Exception as e:
+            logger.error(f"Meditation activity error: {e}", exc_info=True)
+            return False
+        finally:
+            self._active = False
+
+    def cleanup(self):
+        """Cleanup resources"""
+        try:
+            logger.info("MeditationActivity.cleanup() called")
+            self._active = False
+            
+            # Stop threads if still running
+            if self._audio_playback_thread and self._audio_playback_thread.is_alive():
+                logger.info("Stopping audio playback thread in cleanup...")
+                self._audio_playback_thread.join(timeout=1.0)
+            if self._listening_thread and self._listening_thread.is_alive():
+                logger.info("Stopping listening thread in cleanup...")
+                self._listening_thread.join(timeout=1.0)
+            
+            # Cleanup audio manager
+            if self.audio_manager:
+                try:
+                    self.audio_manager.stop()
+                    self.audio_manager.cleanup()
+                except Exception as e:
+                    logger.warning(f"Error in audio_manager cleanup: {e}")
+        except Exception as e:
+            logger.warning(f"Error in MeditationActivity.cleanup(): {e}")
+
+    def is_active(self) -> bool:
+        return bool(self._active)
+
