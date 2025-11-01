@@ -52,6 +52,24 @@
     "opener_completed": "How did that meditation feel?",
     "opener_stopped": "I noticed you stopped the meditation. How are you feeling?"
   },
+  "gratitude": {
+    "termination_phrases": [
+      "done",
+      "that's all",
+      "that's it",
+      "finished"
+    ],
+    "prompts": {
+      "start": "What are you grateful for today? Speak after the tone. When you're finished, say 'done' to save your entry.",
+      "nudge": "Are you still there? Continue speaking or say 'done' when finished.",
+      "saved": "Thank you for sharing. I've saved your gratitude note.",
+      "recording_error": "I'm sorry, I had trouble recording your gratitude note.",
+      "no_content": "I didn't catch that. Let's try again another time.",
+      "save_error": "I had trouble saving your gratitude note, but I heard what you said."
+    },
+    "seed_system_prompt": "The user just shared a gratitude note. Transition into a warm, brief small talk. Gratitude note: '{gratitude_note}'. Ask one inviting, open question related to gratitude or positivity.",
+    "opener": "That's beautiful. What else is on your mind?"
+  },
   "wakeword_responses": {
     "prompts": {
       "wakeword_detected": "Hey, I heard you called me. What can I help you with?",

@@ -52,6 +52,24 @@
     "opener_completed": "Bagaimanakah meditasi itu dirasakan?",
     "opener_stopped": "Saya perasan anda menghentikan meditasi. Bagaimana perasaan anda?"
   },
+  "gratitude": {
+    "termination_phrases": [
+      "selesai",
+      "itu sahaja",
+      "cukup",
+      "habis"
+    ],
+    "prompts": {
+      "start": "Apa yang anda bersyukur hari ini? Mulakan bercakap selepas nada. Apabila selesai, katakan 'selesai' untuk menyimpan.",
+      "nudge": "Adakah anda masih di situ? Teruskan bercakap atau katakan 'selesai' apabila sudah habis.",
+      "saved": "Terima kasih kerana berkongsi. Saya telah menyimpan nota kesyukuran anda.",
+      "recording_error": "Maaf, saya menghadapi masalah semasa merakam nota kesyukuran anda.",
+      "no_content": "Saya tidak dapat mendengar dengan jelas. Mari cuba lagi lain kali.",
+      "save_error": "Saya menghadapi masalah menyimpan nota kesyukuran anda, tetapi saya mendengar apa yang anda katakan."
+    },
+    "seed_system_prompt": "Pengguna baru berkongsi nota kesyukuran. Beralihlah secara semula jadi ke perbualan santai yang ringkas dan mesra. Nota kesyukuran: '{gratitude_note}'. Tanyakan satu soalan terbuka yang berkaitan dengan kesyukuran atau perkara positif.",
+    "opener": "Itu cantik sekali. Apa lagi yang ada dalam fikiran anda?"
+  },
   "wakeword_responses": {
     "prompts": {
       "wakeword_detected": "Hey, saya dengar anda memanggil saya. Apa yang boleh saya bantu?",

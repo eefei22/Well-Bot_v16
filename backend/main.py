@@ -32,6 +32,7 @@ from src.activities.smalltalk import SmallTalkActivity
 from src.activities.journal import JournalActivity
 from src.activities.spiritual_quote import SpiritualQuoteActivity
 from src.activities.meditation import MeditationActivity
+from src.activities.gratitude import GratitudeActivity
 from src.utils.config_resolver import get_global_config_for_user, resolve_language
 from src.supabase.auth import get_current_user_id
 
@@ -77,6 +78,7 @@ class WellBotOrchestrator:
         self.journal_activity: Optional[JournalActivity] = None
         self.spiritual_quote_activity: Optional[SpiritualQuoteActivity] = None
         self.meditation_activity: Optional[MeditationActivity] = None
+        self.gratitude_activity: Optional[GratitudeActivity] = None
         self.stt_service: Optional[GoogleSTTService] = None
         self.tts_service: Optional[GoogleTTSClient] = None
 
@@ -183,6 +185,12 @@ class WellBotOrchestrator:
             if not self.meditation_activity.initialize():
                 raise RuntimeError("Failed to initialize Meditation activity")
             logger.info("✓ Meditation activity initialized")
+
+            logger.info("Initializing Gratitude activity…")
+            self.gratitude_activity = GratitudeActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+            if not self.gratitude_activity.initialize():
+                raise RuntimeError("Failed to initialize Gratitude activity")
+            logger.info("✓ Gratitude activity initialized")
             
             return True
         except Exception as e:
@@ -247,8 +255,7 @@ class WellBotOrchestrator:
         elif intent == "quote":
             self._start_spiritual_quote_activity()
         elif intent == "gratitude":
-            logger.info("🙏 Gratitude intent detected – not implemented yet")
-            self._handle_activity_unavailable("gratitude")
+            self._start_gratitude_activity()
         elif intent == "termination":
             logger.info("👋 Termination intent detected – ending session")
             self._handle_termination()
@@ -743,6 +750,60 @@ class WellBotOrchestrator:
                 try:
                     self.spiritual_quote_activity = SpiritualQuoteActivity(backend_dir=self.backend_dir, user_id=self.user_id)
                     self.spiritual_quote_activity.initialize()
+                except Exception:
+                    pass
+                # Restart wakeword
+                self._restart_wakeword_detection()
+
+        self._activity_thread = threading.Thread(target=run_activity, daemon=True)
+        self._activity_thread.start()
+
+    def _start_gratitude_activity(self):
+        """Start the gratitude activity thread."""
+        logger.info("🙏 Starting Gratitude activity…")
+
+        if self.gratitude_activity is None:
+            logger.error("❌ Gratitude activity is None - cannot start")
+            return
+
+        with self._lock:
+            self.state = SystemState.ACTIVITY_ACTIVE
+            self.current_activity = "gratitude"
+
+        # Stop wake word pipeline first
+        if self.voice_pipeline:
+            logger.info("🔇 Pausing wake word pipeline before Gratitude…")
+            try:
+                import threading
+                stop_success = threading.Event()
+                def force_stop():
+                    try:
+                        self.voice_pipeline.stop()
+                        stop_success.set()
+                    except Exception:
+                        stop_success.set()
+                threading.Thread(target=force_stop, daemon=True).start()
+                stop_success.wait(timeout=5.0)
+            except Exception as e:
+                logger.warning(f"Ignoring error while stopping voice pipeline: {e}")
+
+        def run_activity():
+            try:
+                if self.gratitude_activity is None:
+                    logger.error("❌ Gratitude activity is None - cannot run")
+                    return
+                ok = self.gratitude_activity.run()
+                if ok:
+                    logger.info("✅ Gratitude activity completed")
+                else:
+                    logger.error("❌ Gratitude activity ended with failure")
+            except Exception as e:
+                logger.error(f"Error in Gratitude activity: {e}", exc_info=True)
+            finally:
+                # Re-initialize for next run
+                try:
+                    self.gratitude_activity = GratitudeActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+                    self.gratitude_activity.initialize()
                 except Exception:
                     pass
                 # Restart wakeword

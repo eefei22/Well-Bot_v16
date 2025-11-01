@@ -95,7 +95,9 @@ class JournalActivity:
             # Initialize STT service
             logger.info("Initializing STT service...")
             stt_language = self.global_config.get("language_codes", {}).get("stt_language_code", "en-US")
-            self.stt_service = GoogleSTTService(language=stt_language, sample_rate=16000)
+            audio_settings = self.global_config.get("audio_settings", {})
+            stt_sample_rate = audio_settings.get("stt_sample_rate", 16000)
+            self.stt_service = GoogleSTTService(language=stt_language, sample_rate=stt_sample_rate)
             logger.info(f"✓ STT service initialized with language: {stt_language}")
             
             # Create mic factory
@@ -108,9 +110,9 @@ class JournalActivity:
                 voice_name=self.global_config["language_codes"]["tts_voice_name"],
                 language_code=self.global_config["language_codes"]["tts_language_code"],
                 audio_encoding=texttospeech.AudioEncoding.LINEAR16,
-                sample_rate_hertz=24000,
-                num_channels=1,
-                sample_width_bytes=2
+                sample_rate_hertz=audio_settings.get("tts_sample_rate_hertz", 24000),
+                num_channels=audio_settings.get("tts_num_channels", 1),
+                sample_width_bytes=audio_settings.get("tts_sample_width_bytes", 2)
             )
             logger.info("✓ TTS service initialized")
             
@@ -136,9 +138,9 @@ class JournalActivity:
                 stt_service=self.stt_service,
                 mic_factory=mic_factory,
                 audio_config=audio_config,
-                sample_rate=24000,
-                sample_width_bytes=2,
-                num_channels=1
+                sample_rate=audio_settings.get("tts_sample_rate_hertz", 24000),
+                sample_width_bytes=audio_settings.get("tts_sample_width_bytes", 2),
+                num_channels=audio_settings.get("tts_num_channels", 1)
             )
             logger.info("✓ Audio manager initialized")
             

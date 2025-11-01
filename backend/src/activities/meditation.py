@@ -91,18 +91,14 @@ class MeditationActivity:
             # Audio manager doesn't need STT for meditation (we use Rhino directly)
             from src.components.stt import GoogleSTTService
             stt_lang = self.global_config["language_codes"]["stt_language_code"]
-            stt_service = GoogleSTTService(language=stt_lang, sample_rate=16000)
+            audio_settings = self.global_config.get("audio_settings", {})
+            stt_sample_rate = audio_settings.get("stt_sample_rate", 16000)
+            stt_service = GoogleSTTService(language=stt_lang, sample_rate=stt_sample_rate)
             
+            # Audio config - minimal config since we only use this for TTS playback
+            # Meditation uses its own Rhino-based termination detection, not silence monitoring
             audio_config = {
                 "backend_dir": str(self.backend_dir),
-                "silence_timeout_seconds": 300,  # Long timeout for meditation (5 minutes)
-                "nudge_timeout_seconds": 60,
-                "nudge_pre_delay_ms": 200,
-                "nudge_post_delay_ms": 300,
-                "nudge_audio_path": self.audio_paths.get("nudge_audio_path"),
-                "termination_audio_path": self.audio_paths.get("termination_audio_path"),
-                "end_audio_path": self.audio_paths.get("end_audio_path"),
-                "start_audio_path": self.audio_paths.get("start_meditation_audio_path"),
             }
             self.audio_manager = ConversationAudioManager(stt_service, mic_factory, audio_config)
 
@@ -112,9 +108,9 @@ class MeditationActivity:
                 voice_name=self.global_config["language_codes"]["tts_voice_name"],
                 language_code=self.global_config["language_codes"]["tts_language_code"],
                 audio_encoding=texttospeech.AudioEncoding.LINEAR16,
-                sample_rate_hertz=24000,
-                num_channels=1,
-                sample_width_bytes=2,
+                sample_rate_hertz=audio_settings.get("tts_sample_rate_hertz", 24000),
+                num_channels=audio_settings.get("tts_num_channels", 1),
+                sample_width_bytes=audio_settings.get("tts_sample_width_bytes", 2),
             )
 
             self._initialized = True
@@ -310,9 +306,11 @@ class MeditationActivity:
             logger.info(f"Playing start prompt: {start_prompt}")
             self._speak(start_prompt)
             
-            # Wait 3 seconds before starting meditation
-            logger.info("Waiting 3 seconds before starting meditation...")
-            time.sleep(3.0)
+            # Wait before starting meditation (configurable)
+            meditation_global_config = self.global_config.get("meditation", {})
+            delay_seconds = meditation_global_config.get("meditation_start_delay_seconds", 3.0)
+            logger.info(f"Waiting {delay_seconds} seconds before starting meditation...")
+            time.sleep(delay_seconds)
 
             # Reset state flags
             self._termination_detected.clear()

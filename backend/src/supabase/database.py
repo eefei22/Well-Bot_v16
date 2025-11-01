@@ -84,6 +84,27 @@ def upsert_journal(user_id: str, title: str, body: str, mood: int,
     return res.data[0]
 
 
+# ---------- Gratitude helpers ----------
+
+def save_gratitude_item(user_id: str, text: str) -> Dict[str, Any]:
+    """
+    Save a gratitude item to the database.
+    
+    Args:
+        user_id: User ID
+        text: Gratitude note text
+    
+    Returns:
+        Dictionary with inserted gratitude item data
+    """
+    payload = {
+        "user_id": user_id,
+        "text": text,
+    }
+    res = sb.table("wb_gratitude_item").insert(payload).execute()
+    return res.data[0]
+
+
 # ---------- Spiritual Quote helpers ----------
 
 def _normalize_religion(value: Optional[str]) -> str:

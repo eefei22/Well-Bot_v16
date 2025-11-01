@@ -52,6 +52,25 @@
     "opener_completed": "这次冥想感觉如何？",
     "opener_stopped": "我注意到你停止了冥想。你感觉怎么样？"
   },
+  "gratitude": {
+    "termination_phrases": [
+      "完成",
+      "完成了",
+      "就这样",
+      "好了",
+      "说完了"
+    ],
+    "prompts": {
+      "start": "今天你有什么要感恩的吗？提示音后开始说话。说完后说'完成了'来保存。",
+      "nudge": "你还在吗？继续说话或说'完成了'来结束。",
+      "saved": "谢谢你分享。我已经保存了你的感恩记录。",
+      "recording_error": "抱歉，我录制你的感恩记录时遇到了问题。",
+      "no_content": "我没有听清楚。我们下次再试吧。",
+      "save_error": "我保存你的感恩记录时遇到了问题，但我听到了你说的话。"
+    },
+    "seed_system_prompt": "用户刚刚分享了一条感恩记录。请自然过渡到简短而温暖的闲聊。感恩记录：'{gratitude_note}'。请提出一个开放、友好的问题，与感恩或积极情绪相关。",
+    "opener": "这很美好。你还有什么想说的吗？"
+  },
   "wakeword_responses": {
     "prompts": {
       "wakeword_detected": "嘿，我听到你叫我。我能帮你什么？",

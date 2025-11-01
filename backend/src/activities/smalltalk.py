@@ -78,7 +78,9 @@ class SmallTalkActivity:
             # Initialize STT service
             logger.info("Initializing STT service...")
             stt_lang = self.global_config["language_codes"]["stt_language_code"]
-            self.stt_service = GoogleSTTService(language=stt_lang, sample_rate=16000)
+            audio_settings = self.global_config.get("audio_settings", {})
+            stt_sample_rate = audio_settings.get("stt_sample_rate", 16000)
+            self.stt_service = GoogleSTTService(language=stt_lang, sample_rate=stt_sample_rate)
             logger.info("✓ STT service initialized")
             
             # Create mic factory

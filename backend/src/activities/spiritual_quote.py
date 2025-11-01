@@ -53,21 +53,16 @@ class SpiritualQuoteActivity:
 
             # STT is not used directly here, but ConversationAudioManager expects it
             stt_lang = self.global_config["language_codes"]["stt_language_code"]
-            self.stt_service = GoogleSTTService(language=stt_lang, sample_rate=16000)
+            audio_settings = self.global_config.get("audio_settings", {})
+            stt_sample_rate = audio_settings.get("stt_sample_rate", 16000)
+            self.stt_service = GoogleSTTService(language=stt_lang, sample_rate=stt_sample_rate)
 
             def mic_factory():
                 return MicStream()
 
+            # Audio config - minimal config since we only use this for TTS playback, not recording or silence monitoring
             audio_config = {
                 "backend_dir": str(self.backend_dir),
-                "silence_timeout_seconds": 30,
-                "nudge_timeout_seconds": 15,
-                "nudge_pre_delay_ms": 200,
-                "nudge_post_delay_ms": 300,
-                "nudge_audio_path": self.audio_paths.get("nudge_audio_path"),
-                "termination_audio_path": self.audio_paths.get("termination_audio_path"),
-                "end_audio_path": self.audio_paths.get("end_audio_path"),
-                "start_audio_path": self.audio_paths.get("start_smalltalk_audio_path"),
             }
             self.audio_manager = ConversationAudioManager(self.stt_service, mic_factory, audio_config)
 
@@ -77,9 +72,9 @@ class SpiritualQuoteActivity:
                 voice_name=self.global_config["language_codes"]["tts_voice_name"],
                 language_code=self.global_config["language_codes"]["tts_language_code"],
                 audio_encoding=texttospeech.AudioEncoding.LINEAR16,
-                sample_rate_hertz=24000,
-                num_channels=1,
-                sample_width_bytes=2,
+                sample_rate_hertz=audio_settings.get("tts_sample_rate_hertz", 24000),
+                num_channels=audio_settings.get("tts_num_channels", 1),
+                sample_width_bytes=audio_settings.get("tts_sample_width_bytes", 2),
             )
 
             self._initialized = True
