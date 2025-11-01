@@ -273,22 +273,38 @@ class SmallTalkActivity:
         
         logger.info("✅ SmallTalk activity cleanup completed")
     
-    def _speak(self, text: str):
-        """Speak text using TTS"""
-        if not self.llm_pipeline or not self.llm_pipeline.tts:
+    def _speak(self, text: str, is_nudge: bool = False):
+        """Speak text using TTS
+        
+        Args:
+            text: Text to speak
+            is_nudge: If True, apply delays to prevent STT from picking up the audio
+        """
+        if not text:
+            logger.warning("_speak called with empty text")
+            return
+            
+        if not self.llm_pipeline:
+            logger.error("Cannot speak: llm_pipeline is None")
+            return
+            
+        if not self.llm_pipeline.tts:
+            logger.error("Cannot speak: llm_pipeline.tts is None")
             return
         
         try:
+            logger.debug(f"TTS: Synthesizing '{text[:50]}...' (is_nudge={is_nudge})")
             def text_gen():
                 yield text
             
             # Generate PCM chunks
             pcm_chunks = self.llm_pipeline.tts.stream_synthesize(text_gen())
             
-            # Play chunks
-            self.audio_manager.play_tts_stream(pcm_chunks)
+            # Play chunks (with delays if nudge)
+            self.audio_manager.play_tts_stream(pcm_chunks, use_nudge_delays=is_nudge)
+            logger.debug("TTS: Audio playback completed")
         except Exception as e:
-            logger.error(f"TTS error: {e}")
+            logger.error(f"TTS error: {e}", exc_info=True)
     
     def reinitialize(self) -> bool:
         """Re-initialize the activity for subsequent runs"""
@@ -431,52 +447,79 @@ class SmallTalkActivity:
         """Handle silence nudge callback"""
         logger.info("🔔 Handling silence nudge...")
         
-        use_audio_files = self.global_smalltalk_config.get("use_audio_files", False)
-        
-        # Play nudge audio if enabled
-        if use_audio_files:
-            nudge_audio_path = self.backend_dir / self.audio_config["nudge_audio_path"]
-            self.audio_manager.play_audio_file(str(nudge_audio_path))
-        
-        # TTS prompt from config
         try:
-            prompts = self.smalltalk_config.get("prompts", {})
-            nudge_prompt = prompts.get("nudge", "Are you still there? Feel free to continue our conversation.")
+            use_audio_files = self.global_smalltalk_config.get("use_audio_files", False)
+            
+            # Play nudge audio if enabled (with delays to prevent STT pickup)
+            if use_audio_files:
+                nudge_audio_path = self.backend_dir / self.audio_config["nudge_audio_path"]
+                if nudge_audio_path.exists():
+                    logger.info(f"Playing nudge audio with delays: {nudge_audio_path}")
+                    self.audio_manager.play_nudge_audio_with_delays(str(nudge_audio_path))
+                else:
+                    logger.warning(f"Nudge audio file not found: {nudge_audio_path}")
+            
+            # TTS prompt from config
+            try:
+                prompts = self.smalltalk_config.get("prompts", {})
+                nudge_prompt = prompts.get("nudge", "Are you still there? Feel free to continue our conversation.")
+                logger.info(f"Nudge prompt from config: '{nudge_prompt}'")
+            except Exception as e:
+                logger.warning(f"Failed to load nudge prompt from config: {e}", exc_info=True)
+                nudge_prompt = "Are you still there? Feel free to continue our conversation."
+            
+            # Speak the nudge prompt (with delays to prevent STT pickup)
+            logger.info(f"Speaking nudge prompt...")
+            self._speak(nudge_prompt, is_nudge=True)
+            logger.info("✅ Nudge prompt spoken successfully")
+            
         except Exception as e:
-            logger.warning(f"Failed to load nudge prompt from config: {e}")
-            nudge_prompt = "Are you still there? Feel free to continue our conversation."
-        
-        self._speak(nudge_prompt)
+            logger.error(f"❌ Error in _handle_nudge: {e}", exc_info=True)
     
     def _handle_timeout(self):
         """Handle silence timeout callback"""
         logger.info("⏰ Handling silence timeout...")
         
-        use_audio_files = self.global_smalltalk_config.get("use_audio_files", False)
-        
-        # Play termination audio if enabled
-        if use_audio_files:
-            termination_audio_path = self.backend_dir / self.audio_config["termination_audio_path"]
-            self.audio_manager.play_audio_file(str(termination_audio_path))
-        
-        # TTS prompt from config
         try:
-            prompts = self.smalltalk_config.get("prompts", {})
-            timeout_prompt = prompts.get("timeout", "It seems you've stepped away. I'll be here when you're ready to talk again.")
+            use_audio_files = self.global_smalltalk_config.get("use_audio_files", False)
+            
+            # Play termination audio if enabled
+            if use_audio_files:
+                termination_audio_path = self.backend_dir / self.audio_config["termination_audio_path"]
+                if termination_audio_path.exists():
+                    logger.info(f"Playing termination audio: {termination_audio_path}")
+                    self.audio_manager.play_audio_file(str(termination_audio_path))
+                else:
+                    logger.warning(f"Termination audio file not found: {termination_audio_path}")
+            
+            # TTS prompt from config
+            try:
+                prompts = self.smalltalk_config.get("prompts", {})
+                timeout_prompt = prompts.get("timeout", "It seems you've stepped away. I'll be here when you're ready to talk again.")
+                logger.info(f"Timeout prompt from config: '{timeout_prompt}'")
+            except Exception as e:
+                logger.warning(f"Failed to load timeout prompt from config: {e}", exc_info=True)
+                timeout_prompt = "It seems you've stepped away. I'll be here when you're ready to talk again."
+            
+            # Speak the timeout prompt
+            logger.info(f"Speaking timeout prompt...")
+            self._speak(timeout_prompt)
+            logger.info("✅ Timeout prompt spoken successfully")
+            
         except Exception as e:
-            logger.warning(f"Failed to load timeout prompt from config: {e}")
-            timeout_prompt = "It seems you've stepped away. I'll be here when you're ready to talk again."
-        
-        self._speak(timeout_prompt)
-        
-        # Stop both the activity and session manager
-        if self.session_manager:
-            self.session_manager.stop_session()
-        self.stop()
-        
-        # Also stop the audio manager to prevent further speech capture
-        if self.audio_manager:
-            self.audio_manager.stop()
+            logger.error(f"❌ Error in _handle_timeout: {e}", exc_info=True)
+        finally:
+            # Always stop the activity, even if TTS fails
+            logger.info("Stopping activity due to timeout...")
+            
+            # Stop both the activity and session manager
+            if self.session_manager:
+                self.session_manager.stop_session()
+            self.stop()
+            
+            # Also stop the audio manager to prevent further speech capture
+            if self.audio_manager:
+                self.audio_manager.stop()
     
     def get_status(self) -> dict:
         """Get current activity status"""

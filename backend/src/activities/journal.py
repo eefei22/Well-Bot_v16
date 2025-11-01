@@ -452,8 +452,13 @@ class JournalActivity:
         # v1: empty list; v2: simple keyword bag; v3: LLM-based tags
         return []
     
-    def _speak(self, text: str):
-        """Speak text using TTS"""
+    def _speak(self, text: str, is_nudge: bool = False):
+        """Speak text using TTS
+        
+        Args:
+            text: Text to speak
+            is_nudge: If True, apply delays to prevent STT from picking up the audio
+        """
         if not self.tts_service:
             return
         
@@ -464,8 +469,8 @@ class JournalActivity:
             # Generate PCM chunks
             pcm_chunks = self.tts_service.stream_synthesize(text_gen())
             
-            # Play chunks
-            self.audio_manager.play_tts_stream(pcm_chunks)
+            # Play chunks (with delays if nudge)
+            self.audio_manager.play_tts_stream(pcm_chunks, use_nudge_delays=is_nudge)
         except Exception as e:
             logger.error(f"TTS error: {e}")
     
@@ -480,13 +485,13 @@ class JournalActivity:
             
             use_audio_files = self.global_journal_config.get("use_audio_files", False)
             
-            # Play nudge audio if enabled
+            # Play nudge audio if enabled (with delays to prevent STT pickup)
             if use_audio_files:
                 nudge_audio_path = self.audio_paths.get("nudge_audio_path")
                 full_audio_path = self.backend_dir / nudge_audio_path
                 
                 if full_audio_path.exists():
-                    self.audio_manager.play_audio_file(str(full_audio_path), mute_mic=False)
+                    self.audio_manager.play_nudge_audio_with_delays(str(full_audio_path))
             
             # TTS nudge from config
             try:
@@ -496,7 +501,8 @@ class JournalActivity:
                 logger.warning(f"Failed to load nudge prompt from config: {e}")
                 nudge_text = "Are you still there? Continue speaking or say 'stop journal' to finish."
             
-            self._speak(nudge_text)
+            # Speak nudge with delays to prevent STT pickup
+            self._speak(nudge_text, is_nudge=True)
         
         def on_timeout():
             """Called when timeout reached after nudge"""

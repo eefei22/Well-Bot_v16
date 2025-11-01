@@ -127,34 +127,22 @@ class ConversationAudioManager:
         try:
             mic.start()
             final_text: Optional[str] = None
-            last_audio_chunk_time = time.time()
             
             def on_transcript(text: str, is_final: bool):
-                nonlocal final_text, last_audio_chunk_time
+                nonlocal final_text
                 # Reset silence timer when any transcript arrives (interim or final)
-                # This prevents timeout during slow STT processing
+                # This indicates actual speech detected by STT (not just background noise)
                 if text:
                     self.reset_silence_timer()
-                    last_audio_chunk_time = time.time()
+                    logger.debug(f"Silence timer reset due to transcript: '{text[:30]}...'")
                 
                 if is_final:
                     final_text = text
                     mic.stop()
             
-            # Track audio chunks to detect actual speech activity
-            # This helps when STT is slow to process but audio is actively coming in
-            def audio_activity_tracker(generator):
-                nonlocal last_audio_chunk_time
-                for chunk in generator:
-                    if chunk and len(chunk) > 0:
-                        # Reset silence timer when we receive audio chunks
-                        # This prevents timeout when user is speaking but STT hasn't processed yet
-                        current_time = time.time()
-                        # Only reset if significant time has passed (avoid spam)
-                        if current_time - last_audio_chunk_time > 0.5:
-                            self.reset_silence_timer()
-                            last_audio_chunk_time = current_time
-                    yield chunk
+            # Pass audio chunks directly without resetting timer on raw audio
+            # We only reset on transcripts (actual speech detected by STT)
+            # This prevents background noise from constantly resetting the silence timer
             
             # Add timeout and check for activity state during STT
             import threading
@@ -164,9 +152,8 @@ class ConversationAudioManager:
             def run_stt():
                 nonlocal stt_error
                 try:
-                    # Use audio activity tracker to detect when mic is receiving audio
-                    # This helps prevent timeout when STT processing is slow
-                    self.stt.stream_recognize(audio_activity_tracker(mic.generator()), on_transcript)
+                    # Pass audio directly - timer resets only on actual transcripts (speech detected)
+                    self.stt.stream_recognize(mic.generator(), on_transcript)
                 except Exception as e:
                     stt_error = e
                 finally:
@@ -208,6 +195,95 @@ class ConversationAudioManager:
             mic.stop()
             with self._mic_lock:
                 self._current_mic = None
+    
+    def play_nudge_audio_with_delays(self, audio_path: str) -> bool:
+        """
+        Play nudge audio file with pre/post delays to prevent STT from picking it up.
+        
+        Args:
+            audio_path: Path to audio file
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if not os.path.exists(audio_path):
+            logger.error(f"Audio file not found: {audio_path}")
+            return False
+        
+        # Pre-delay: Wait before muting to let current audio settle
+        if self.nudge_pre_delay > 0:
+            logger.debug(f"Nudge pre-delay: {self.nudge_pre_delay*1000:.0f}ms")
+            time.sleep(self.nudge_pre_delay)
+        
+        # Mute microphone before playback
+        with self._mic_lock:
+            if self._current_mic and self._current_mic.is_running():
+                self._current_mic.mute()
+                logger.debug("Microphone muted for nudge playback")
+        
+        try:
+            logger.info(f"Playing nudge audio: {audio_path}")
+            self._set_playback_state(True)
+            
+            success = False
+            
+            # Method 1: Try pydub (most reliable)
+            if PYDUB_AVAILABLE:
+                try:
+                    audio = AudioSegment.from_wav(audio_path)
+                    play(audio)
+                    logger.debug("Nudge audio played successfully with pydub")
+                    success = True
+                except Exception as e:
+                    logger.warning(f"pydub playback failed: {e}, trying fallback")
+            
+            # Method 2: Try PowerShell (Windows-specific fallback)
+            if not success and sys.platform == "win32":
+                try:
+                    import subprocess
+                    ps_cmd = f'powershell -c "(New-Object Media.SoundPlayer \'{audio_path}\').PlaySync()"'
+                    result = subprocess.run(ps_cmd, shell=True, capture_output=True, text=True, timeout=10)
+                    
+                    if result.returncode == 0:
+                        logger.debug("Nudge audio played successfully with PowerShell")
+                        success = True
+                    else:
+                        logger.warning(f"PowerShell playback failed: {result.stderr}")
+                except Exception as e:
+                    logger.warning(f"PowerShell playback error: {e}")
+            
+            # Method 3: Try playsound as last resort
+            if not success and PLAYSOUND_AVAILABLE:
+                try:
+                    normalized_path = os.path.normpath(audio_path)
+                    playsound(normalized_path)
+                    logger.debug("Nudge audio played successfully with playsound")
+                    success = True
+                except Exception as e:
+                    logger.warning(f"playsound playback failed: {e}")
+            
+            if not success:
+                logger.error(f"All audio playback methods failed for nudge: {audio_path}")
+                return False
+            
+            # Post-delay: Wait after playback before unmuting
+            if self.nudge_post_delay > 0:
+                logger.debug(f"Nudge post-delay: {self.nudge_post_delay*1000:.0f}ms")
+                time.sleep(self.nudge_post_delay)
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error playing nudge audio: {e}")
+            return False
+        finally:
+            self._set_playback_state(False)
+            
+            # Unmute microphone after delays
+            with self._mic_lock:
+                if self._current_mic and self._current_mic.is_running():
+                    self._current_mic.unmute()
+                    logger.debug("Microphone unmuted after nudge playback")
     
     def play_audio_file(self, audio_path: str, mute_mic: bool = True) -> bool:
         """
@@ -284,13 +360,19 @@ class ConversationAudioManager:
                     if self._current_mic and self._current_mic.is_running():
                         self._current_mic.unmute()
     
-    def play_tts_stream(self, pcm_chunks: Iterator[bytes]):
+    def play_tts_stream(self, pcm_chunks: Iterator[bytes], use_nudge_delays: bool = False):
         """
         Play streaming TTS audio with microphone coordination.
         
         Args:
             pcm_chunks: Iterator of PCM audio chunks
+            use_nudge_delays: If True, apply pre/post delays (for nudge prompts to prevent STT pickup)
         """
+        # Pre-delay for nudge prompts
+        if use_nudge_delays and self.nudge_pre_delay > 0:
+            logger.debug(f"TTS nudge pre-delay: {self.nudge_pre_delay*1000:.0f}ms")
+            time.sleep(self.nudge_pre_delay)
+        
         # Initialize audio stream if needed
         if not self._audio_stream:
             self._init_audio_stream()
@@ -313,7 +395,12 @@ class ConversationAudioManager:
         finally:
             self._set_playback_state(False)
             
-            # Unmute microphone after TTS playback
+            # Post-delay for nudge prompts (before unmuting)
+            if use_nudge_delays and self.nudge_post_delay > 0:
+                logger.debug(f"TTS nudge post-delay: {self.nudge_post_delay*1000:.0f}ms")
+                time.sleep(self.nudge_post_delay)
+            
+            # Unmute microphone after TTS playback and delays
             with self._mic_lock:
                 if self._current_mic and self._current_mic.is_running():
                     self._current_mic.unmute()
@@ -334,10 +421,15 @@ class ConversationAudioManager:
         self._on_timeout_callback = on_timeout
         self._active = True
         
+        # Initialize silence timer when monitoring starts
+        # This ensures the timer begins counting immediately
+        self._last_user_time = time.time()
+        self._nudged = False
+        
         self._silence_watcher_thread = threading.Thread(target=self._silence_watcher, daemon=True)
         self._silence_watcher_thread.start()
         
-        logger.info("Silence monitoring started")
+        logger.info(f"Silence monitoring started - will nudge after {self.silence_timeout}s, timeout after {self.silence_timeout + self.nudge_timeout}s")
     
     def stop_silence_monitoring(self):
         """Stop silence monitoring thread."""
@@ -366,36 +458,70 @@ class ConversationAudioManager:
     
     def _silence_watcher(self):
         """Background thread for silence monitoring."""
+        logger.info("Silence watcher thread started")
+        iteration_count = 0
+        
         while self._active:
+            iteration_count += 1
+            
             if self._last_user_time is None:
+                if iteration_count % 10 == 0:  # Log every 10 iterations
+                    logger.debug("Silence watcher: waiting for timer initialization")
                 time.sleep(1)
                 continue
             
-            # Skip silence counting if audio is playing
+            # Skip silence counting if audio is playing (TTS/audio files)
             if self._is_audio_playing():
+                if iteration_count % 10 == 0:
+                    logger.debug("Silence watcher: audio playing, paused")
                 time.sleep(1)
                 continue
             
-            # Skip silence counting if microphone is not active/muted
+            # Check microphone state
             with self._mic_lock:
-                mic_active = self._current_mic and self._current_mic.is_running() and not self._current_mic.is_muted()
+                mic_exists = self._current_mic is not None
+                if mic_exists:
+                    mic_running = self._current_mic.is_running()
+                    mic_muted = self._current_mic.is_muted()
+                    mic_active = mic_running and not mic_muted
+                else:
+                    mic_active = False
             
-            if not mic_active:
-                logger.debug("Silence watcher paused - microphone not active or muted")
+            # If mic exists but is muted (e.g., during playback), pause counting
+            # If mic doesn't exist yet (e.g., before first user interaction), continue counting
+            if mic_exists and not mic_active:
+                if iteration_count % 10 == 0:
+                    logger.debug(f"Silence watcher paused - mic exists but not active (running={mic_running if mic_exists else 'N/A'}, muted={mic_muted if mic_exists else 'N/A'})")
                 time.sleep(1)
                 continue
             
             elapsed = time.time() - self._last_user_time
             
+            # Log status every 5 seconds
+            if iteration_count % 5 == 0:
+                logger.debug(f"Silence watcher: {elapsed:.1f}s elapsed, nudged={self._nudged}, mic_exists={mic_exists}, mic_active={mic_active}")
+            
             if elapsed >= self.silence_timeout and not self._nudged:
                 logger.info(f"Silence detected ({elapsed:.1f}s), triggering nudge")
                 if self._on_nudge_callback:
-                    self._on_nudge_callback()
+                    try:
+                        self._on_nudge_callback()
+                        logger.info("Nudge callback executed successfully")
+                    except Exception as e:
+                        logger.error(f"Error in nudge callback: {e}", exc_info=True)
+                else:
+                    logger.warning("No nudge callback registered!")
                 self._nudged = True
             elif elapsed >= self.silence_timeout + self.nudge_timeout:
                 logger.info(f"No reply after nudge ({elapsed:.1f}s), triggering timeout")
                 if self._on_timeout_callback:
-                    self._on_timeout_callback()
+                    try:
+                        self._on_timeout_callback()
+                        logger.info("Timeout callback executed successfully")
+                    except Exception as e:
+                        logger.error(f"Error in timeout callback: {e}", exc_info=True)
+                else:
+                    logger.warning("No timeout callback registered!")
                 break
             else:
                 logger.debug(f"Silence watcher: {elapsed:.1f}s elapsed, nudged={self._nudged}")
