@@ -14,11 +14,11 @@ import wave
 from pathlib import Path
 from typing import Optional
 
-from src.components.stt import GoogleSTTService
 from src.components.mic_stream import MicStream
 from src.components.conversation_audio_manager import ConversationAudioManager
 from src.components.tts import GoogleTTSClient
-from src.components.termination_phrase import TerminationPhraseDetector, TerminationPhraseDetected
+from src.components.intent_recognition import IntentRecognition
+from src.utils.config_loader import RHINO_ACCESS_KEY
 from src.utils.config_resolver import get_global_config_for_user, get_language_config, resolve_language
 from src.supabase.auth import get_current_user_id
 from src.activities.smalltalk import SmallTalkActivity
@@ -32,10 +32,9 @@ class MeditationActivity:
         self.user_id = user_id or get_current_user_id()
 
         # Components
-        self.stt_service: Optional[GoogleSTTService] = None
         self.audio_manager: Optional[ConversationAudioManager] = None
         self.tts: Optional[GoogleTTSClient] = None
-        self.termination_detector: Optional[TerminationPhraseDetector] = None
+        self.intent_recognition: Optional[IntentRecognition] = None
 
         # Configs
         self.global_config = None
@@ -62,23 +61,38 @@ class MeditationActivity:
             self.audio_paths = self.language_config.get("audio_paths", {})
             self.meditation_config = self.language_config.get("meditation", {})
 
-            # Initialize termination phrase detector
-            termination_phrases = self.meditation_config.get("termination_phrases", [
-                "stop meditation",
-                "end meditation",
-                "that's enough",
-                "finish meditation"
-            ])
-            logger.info(f"Loaded {len(termination_phrases)} termination phrases: {termination_phrases}")
-            self.termination_detector = TerminationPhraseDetector(termination_phrases)
-
-            # STT service for listening during playback
-            stt_lang = self.global_config["language_codes"]["stt_language_code"]
-            self.stt_service = GoogleSTTService(language=stt_lang, sample_rate=16000)
+            # Initialize Rhino intent recognition for termination detection
+            context_path = self.backend_dir / "config" / "Intent" / "Well-Bot-Commands_en_windows_v3_0_0.rhn"
+            try:
+                if not RHINO_ACCESS_KEY:
+                    logger.error("RHINO_ACCESS_KEY not configured, cannot initialize Rhino")
+                    return False
+                elif not context_path.exists():
+                    logger.error(f"Rhino context file not found: {context_path}")
+                    return False
+                else:
+                    self.intent_recognition = IntentRecognition(
+                        access_key=RHINO_ACCESS_KEY,
+                        context_path=context_path,
+                        sensitivity=0.5,
+                        require_endpoint=True
+                    )
+                    logger.info("Rhino intent recognition initialized for meditation termination detection")
+            except FileNotFoundError as e:
+                logger.error(f"Rhino context file not found: {e}", exc_info=True)
+                return False
+            except Exception as e:
+                logger.error(f"Failed to initialize Rhino intent recognition: {e}", exc_info=True)
+                return False
 
             def mic_factory():
                 return MicStream()
 
+            # Audio manager doesn't need STT for meditation (we use Rhino directly)
+            from src.components.stt import GoogleSTTService
+            stt_lang = self.global_config["language_codes"]["stt_language_code"]
+            stt_service = GoogleSTTService(language=stt_lang, sample_rate=16000)
+            
             audio_config = {
                 "backend_dir": str(self.backend_dir),
                 "silence_timeout_seconds": 300,  # Long timeout for meditation (5 minutes)
@@ -90,14 +104,14 @@ class MeditationActivity:
                 "end_audio_path": self.audio_paths.get("end_audio_path"),
                 "start_audio_path": self.audio_paths.get("start_meditation_audio_path"),
             }
-            self.audio_manager = ConversationAudioManager(self.stt_service, mic_factory, audio_config)
+            self.audio_manager = ConversationAudioManager(stt_service, mic_factory, audio_config)
 
             # TTS client for speaking prompts
             from google.cloud import texttospeech
             self.tts = GoogleTTSClient(
                 voice_name=self.global_config["language_codes"]["tts_voice_name"],
                 language_code=self.global_config["language_codes"]["tts_language_code"],
-                audio_encoding=texttospeech.AudioEncoding.PCM,
+                audio_encoding=texttospeech.AudioEncoding.LINEAR16,
                 sample_rate_hertz=24000,
                 num_channels=1,
                 sample_width_bytes=2,
@@ -191,72 +205,65 @@ class MeditationActivity:
             self._audio_stopped.set()
 
     def _listen_for_termination(self):
-        """Listen for termination phrases during meditation (runs in separate thread)"""
+        """Listen for termination intent using Rhino during meditation (runs in separate thread)"""
+        if not self.intent_recognition:
+            logger.error("Rhino intent recognition not initialized, cannot listen for termination")
+            return
+        
         mic = None
         try:
-            logger.info("Starting termination phrase listening...")
-            mic = self.audio_manager.mic_factory()
+            logger.info("Starting Rhino termination detection...")
+            
+            # Get Rhino's required audio format
+            rhino_sample_rate = self.intent_recognition.get_sample_rate()
+            rhino_frame_length = self.intent_recognition.get_frame_length()
+            
+            mic = MicStream(rate=rhino_sample_rate, chunk_size=rhino_frame_length)
             
             with self.audio_manager._mic_lock:
                 self.audio_manager._current_mic = mic
             
             mic.start()
             
-            termination_detected = False
+            # Reset Rhino for new session
+            self.intent_recognition.reset()
             
-            def on_transcript(text: str, is_final: bool):
-                nonlocal termination_detected
-                if not self._active or termination_detected:
-                    if mic:
-                        mic.stop()
-                    return
-                
-                if not text:
-                    return
-                
-                # Log all transcripts for debugging
-                logger.info(f"[Meditation Listening] Transcript (final={is_final}): '{text}'")
-                
-                # Check for termination phrase
-                try:
-                    self.termination_detector.check_termination(text, active=self._active)
-                    logger.debug(f"No termination detected in: '{text}'")
-                except TerminationPhraseDetected:
-                    logger.info(f"🎯 TERMINATION PHRASE DETECTED during meditation: '{text}'")
-                    termination_detected = True
-                    self._termination_detected.set()
-                    if mic:
-                        mic.stop()
+            logger.info(f"Rhino termination detection active (sample_rate: {rhino_sample_rate}Hz, frame_length: {rhino_frame_length})")
             
             # Continue listening until termination detected or audio stops
             while self._active and not self._termination_detected.is_set() and not self._audio_stopped.is_set():
                 try:
-                    # Use STT streaming with callback
-                    self.stt_service.stream_recognize(mic.generator(), on_transcript)
+                    # Process audio frames with Rhino
+                    for audio_chunk in mic.generator():
+                        if not self._active or self._termination_detected.is_set() or self._audio_stopped.is_set():
+                            break
+                        
+                        # Process frame with Rhino
+                        if self.intent_recognition.process_bytes(audio_chunk):
+                            # Inference is ready
+                            inference = self.intent_recognition.get_inference()
+                            
+                            if inference and inference.get('intent') == 'termination':
+                                logger.info(f"🎯 TERMINATION INTENT DETECTED during meditation")
+                                self._termination_detected.set()
+                                break
+                            else:
+                                # Not termination, reset and continue listening
+                                self.intent_recognition.reset()
                     
-                    # If stream_recognize returns, it means stream ended
-                    # Restart if we're still supposed to be listening
+                    # If we exited the generator loop but should still be listening, continue
                     if self._active and not self._termination_detected.is_set() and not self._audio_stopped.is_set():
-                        logger.debug("STT stream ended, restarting...")
-                        if mic:
-                            mic.stop()
-                        time.sleep(0.2)
-                        if self._active and not self._termination_detected.is_set():
-                            mic.start()
+                        logger.debug("Audio stream ended, continuing to listen...")
+                        time.sleep(0.1)
                     else:
                         break
-                except TerminationPhraseDetected:
-                    # Already handled in on_transcript
-                    break
+                        
                 except Exception as e:
-                    logger.error(f"STT error during termination listening: {e}")
+                    logger.error(f"Rhino error during termination listening: {e}")
                     # Try to continue listening
                     if self._active and not self._termination_detected.is_set() and not self._audio_stopped.is_set():
-                        if mic:
-                            mic.stop()
                         time.sleep(0.5)
-                        if self._active and not self._termination_detected.is_set():
-                            mic.start()
+                        self.intent_recognition.reset()
                     else:
                         break
                         
@@ -442,6 +449,13 @@ class MeditationActivity:
                     self.audio_manager.cleanup()
                 except Exception as e:
                     logger.warning(f"Error in audio_manager cleanup: {e}")
+            
+            # Cleanup intent recognition
+            if self.intent_recognition:
+                try:
+                    self.intent_recognition.delete()
+                except Exception as e:
+                    logger.warning(f"Error in intent_recognition cleanup: {e}")
         except Exception as e:
             logger.warning(f"Error in MeditationActivity.cleanup(): {e}")
 

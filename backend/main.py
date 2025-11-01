@@ -138,7 +138,7 @@ class WellBotOrchestrator:
             self.tts_service = GoogleTTSClient(
                 voice_name=self.global_config["language_codes"]["tts_voice_name"],
                 language_code=self.global_config["language_codes"]["tts_language_code"],
-                audio_encoding=texttospeech.AudioEncoding.PCM,
+                audio_encoding=texttospeech.AudioEncoding.LINEAR16,
                 sample_rate_hertz=24000,
                 num_channels=1,
                 sample_width_bytes=2

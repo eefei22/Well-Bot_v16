@@ -41,6 +41,10 @@ SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 # Porcupine Wake Word Configuration
 PORCUPINE_ACCESS_KEY = os.getenv("PORCUPINE_ACCESS_KEY")
 
+# Rhino Intent Recognition Configuration
+# Falls back to PORCUPINE_ACCESS_KEY if not set (same Picovoice key can be used)
+RHINO_ACCESS_KEY = os.getenv("RHINO_ACCESS_KEY") or PORCUPINE_ACCESS_KEY
+
 def validate_required_config():
     """Validate that all required environment variables are set."""
     required_vars = {
@@ -52,7 +56,8 @@ def validate_required_config():
             GOOGLE_CLIENT_CERT_URL, GOOGLE_UNIVERSE_DOMAIN
         ],
         "Supabase": [SUPABASE_URL, SUPABASE_ANON_KEY, SUPABASE_SERVICE_ROLE_KEY],
-        "Porcupine Wake Word": [PORCUPINE_ACCESS_KEY]
+        "Porcupine Wake Word": [PORCUPINE_ACCESS_KEY],
+        "Rhino Intent Recognition": [RHINO_ACCESS_KEY]
     }
     
     missing_vars = []

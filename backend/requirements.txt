@@ -11,6 +11,7 @@ google-cloud-speech==2.21.0
 google-cloud-texttospeech==2.16.3
 
 picovoice==3.0.1
+pvrhino
 pyaudio==0.2.14
 python-multipart==0.0.6
 numpy

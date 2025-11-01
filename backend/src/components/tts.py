@@ -12,7 +12,7 @@ class GoogleTTSClient:
         self,
         voice_name: str = "en-US-Chirp3-HD-Charon",
         language_code: str = "en-US",
-        audio_encoding: texttospeech.AudioEncoding = texttospeech.AudioEncoding.PCM,
+        audio_encoding: Optional[texttospeech.AudioEncoding] = None,
         sample_rate_hertz: Optional[int] = None,
         num_channels: int = 1,
         sample_width_bytes: int = 2
@@ -22,7 +22,11 @@ class GoogleTTSClient:
 
         self.voice_name = voice_name
         self.language_code = language_code
-        self.audio_encoding = audio_encoding
+        # Set default audio encoding if not provided (use LINEAR16 for PCM)
+        if audio_encoding is None:
+            self.audio_encoding = texttospeech.AudioEncoding.LINEAR16
+        else:
+            self.audio_encoding = audio_encoding
         self.sample_rate_hertz = sample_rate_hertz
         self.num_channels = num_channels
         self.sample_width_bytes = sample_width_bytes
@@ -30,38 +34,33 @@ class GoogleTTSClient:
         logger.info(f"TTS config: voice={voice_name}, lang={language_code}, enc={audio_encoding}, sr={sample_rate_hertz}, chans={num_channels}")
 
     def stream_synthesize(self, text_gen: Iterator[str]) -> Iterator[bytes]:
-        """Bidirectional streaming: yields raw PCM chunks (no container)."""
-        streaming_config = texttospeech.StreamingSynthesizeConfig(
-            voice=texttospeech.VoiceSelectionParams(
-                name=self.voice_name,
-                language_code=self.language_code,
-            ),
-            streaming_audio_config=texttospeech.StreamingAudioConfig(
-                audio_encoding=self.audio_encoding,
-                sample_rate_hertz=self.sample_rate_hertz if self.sample_rate_hertz else 0
-            )
-        )
-        from google.cloud.texttospeech import StreamingSynthesizeRequest, StreamingSynthesisInput
-
-        # First request: config, no input text
-        config_request = StreamingSynthesizeRequest(streaming_config=streaming_config)
-
-        def request_generator():
-            yield config_request
-            for chunk in text_gen:
-                txt = chunk.strip()
-                if not txt:
-                    continue
-                yield StreamingSynthesizeRequest(input=StreamingSynthesisInput(text=txt))
-
-        try:
-            responses = self.client.streaming_synthesize(request_generator())
-            for resp in responses:
-                if resp.audio_content:
-                    yield resp.audio_content
-        except Exception as e:
-            logger.warning(f"Streaming TTS failed: {e}")
-            raise
+        """
+        Stream synthesis: collects text chunks and synthesizes them.
+        Since Google Cloud TTS doesn't support true streaming in the Python SDK v2,
+        we collect all text and synthesize in one batch, then yield as chunks.
+        """
+        # Collect all text from generator
+        text_parts = []
+        for chunk in text_gen:
+            txt = chunk.strip()
+            if txt:
+                text_parts.append(txt)
+        
+        if not text_parts:
+            return
+        
+        # Combine all text and synthesize
+        full_text = " ".join(text_parts)
+        audio_content = self.synthesize(full_text)
+        
+        if not audio_content:
+            return
+        
+        # Yield audio content as chunks (can split if needed, but for simplicity yield all at once)
+        # You could split into smaller chunks here if needed for streaming playback
+        chunk_size = 8192  # 8KB chunks
+        for i in range(0, len(audio_content), chunk_size):
+            yield audio_content[i:i + chunk_size]
 
     def synthesize(self, full_text: str) -> bytes:
         """Fallback (batch) TTS: returns full audio bytes (PCM or supported encoding)."""
@@ -125,7 +124,7 @@ if __name__ == "__main__":
     client = GoogleTTSClient(
         voice_name="en-US-Chirp3-HD-Charon",
         language_code="en-US",
-        audio_encoding=texttospeech.AudioEncoding.PCM,
+        audio_encoding=texttospeech.AudioEncoding.LINEAR16,
         sample_rate_hertz=24000,
         num_channels=1,
         sample_width_bytes=2

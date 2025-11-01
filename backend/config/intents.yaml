@@ -1,0 +1,96 @@
+context:
+  expressions:
+    smalltalk:
+      - "@request talk"
+      - "@request chat"
+      - "@request conversation"
+      - "@request small talk"
+      - "@feeling bored"
+    journaling:
+      - "@feeling a lot of things going on"
+      - "@feeling have a lot of thoughts"
+      - "@feeling overwhelmed"
+      - "@request make a journal entry"
+      - "@request make a journal"
+      - "@request journal"
+      - "@request journaling"
+      - "@request journal entry"
+      - "@request write a journal"
+      - "@request start journaling"
+      - "@request daily journal"
+      - "@feeling need to log my thoughts"
+      - "@feeling need to record my day"
+    meditation:
+      - "@request meditation"
+      - "@request meditate"
+      - "@request meditation session"
+      - "@request guided meditation"
+      - "@request meditation practice"
+      - "@request mindfulness session"
+      - "@request relaxation session"
+      - "@feeling stressed"
+      - "@feeling need to calm my mind"
+      - "@feeling need meditation"
+    quote:
+      - "@feeling lost"
+      - "@feeling unmotivated"
+      - "@request quote"
+      - "@request quote of the day"
+      - "@request daily quote"
+      - "@request inspirational quote"
+      - "@request motivational quote"
+      - "@request wisdom quote"
+      - "@feeling need inspiration"
+      - "@feeling need motivation"
+    gratitude:
+      - "@feeling hopeless"
+      - "@feeling sad"
+      - "@request gratitude"
+      - "@request gratitude practice"
+      - "@request gratitude session"
+      - "@request practice gratitude"
+      - "@request gratitude exercise"
+      - "@request gratitude journal"
+      - "@request appreciation practice"
+      - "@feeling grateful"
+      - "@feeling thankful"
+      - "@feeling need to count blessings"
+    termination:
+      - "@fillers goodbye"
+      - "@fillers bye"
+      - "@fillers see you later"
+      - "@fillers talk to you later"
+      - "@fillers thats all"
+      - "@fillers end conversation"
+      - "@fillers stop talking"
+      - "@fillers finish"
+      - "@fillers done"
+      - "@fillers exit"
+      - "@fillers quit"
+      - "@fillers stop"
+      - "@fillers end"
+      - "@fillers close"
+  slots: {}
+  macros:
+    request:
+      - Help me
+      - Start
+      - Can we do
+      - I want to
+      - Can we have a
+      - Lets do
+      - Can you
+      - Can you help me
+      - Can you give me a
+      - I want a
+    feeling:
+      - i feel like
+      - i feel like i have
+      - i am
+      - i am feeling
+      - i feel
+      - i feel so
+    fillers:
+      - i am
+      - alright
+      - okay
