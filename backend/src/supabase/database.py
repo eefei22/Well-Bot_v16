@@ -195,3 +195,38 @@ def mark_quote_seen(user_id: str, quote_id: str) -> bool:
     except Exception as e:
         logger.warning(f"Failed to mark quote {quote_id} seen for {user_id}: {e}")
         return False
+
+
+# ---------- User Context Bundle helpers ----------
+
+def get_user_persona_summary(user_id: str) -> Optional[str]:
+    """
+    Fetch user's persona summary from user_context_bundle table.
+    
+    Args:
+        user_id: User UUID
+        
+    Returns:
+        Persona summary text or None if not found
+    """
+    try:
+        response = sb.table("user_context_bundle")\
+            .select("persona_summary")\
+            .eq("user_id", user_id)\
+            .limit(1)\
+            .execute()
+        
+        if response.data and len(response.data) > 0:
+            persona_summary = response.data[0].get("persona_summary")
+            if persona_summary:
+                logger.info(f"Found persona summary for user {user_id}")
+                return persona_summary
+            else:
+                logger.info(f"No persona summary found for user {user_id} (field is null/empty)")
+                return None
+        else:
+            logger.info(f"No context bundle found for user {user_id}")
+            return None
+    except Exception as e:
+        logger.warning(f"Failed to fetch persona summary for user {user_id}: {e}")
+        return None

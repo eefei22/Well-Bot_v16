@@ -26,6 +26,7 @@ from src.components.termination_phrase import TerminationPhraseDetected, normali
 from src.utils.config_loader import get_deepseek_config
 from src.utils.config_resolver import get_global_config_for_user, get_language_config
 from src.supabase.auth import get_current_user_id
+from src.supabase.database import get_user_persona_summary
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +172,18 @@ class SmallTalkActivity:
             # Start session
             conv_id = self.session_manager.start_session("Small Talk")
             self.llm_pipeline.conversation_id = conv_id
+            
+            # Fetch and inject user persona summary if available
+            logger.info(f"Fetching persona summary for user {self.user_id}...")
+            persona_summary = get_user_persona_summary(self.user_id)
+            if persona_summary and persona_summary.strip():
+                # Format persona summary with context
+                persona_message = f"User persona context: {persona_summary.strip()}"
+                self.add_system_message(persona_message)
+                logger.info(f"✓ Persona summary fetched and injected for user {self.user_id}")
+                logger.info(f"  Injected prompt: {persona_message}")
+            else:
+                logger.info(f"No persona summary available for user {self.user_id}, continuing without it")
             
             # Check if audio files should be used
             use_audio_files = self.global_smalltalk_config.get("use_audio_files", False)

@@ -1,173 +1,297 @@
-# 1) Goals & constraints
+Here’s an **implementation outline** meant for a developer who has access only to the small-talk module. It gives the big picture, describes what needs to be done for Phase 3, and defines the tasks clearly.
 
-* **Goal:** Resolve the **active language** per user from your DB, then load the matching `en.json | cn.json | bm.json` and expose it across the pipeline (wake word → smalltalk → journal).
-* **Today:** No full auth; use a **fixed dev user UUID** to simulate user differentiation.
-* **Soon:** Switch to real auth without refactoring the pipeline.
+---
 
-# 2) Key decisions
+### Overview
 
-* **User identity handle:** Use a **UUID** (`users.id`) as the canonical foreign key across tables (conversations, messages, logs). This keeps things stable whether or not auth is enabled.
-* **Language source of truth:** `users.language` (enum-like: `en|cn|bm`).
-* **Config selection:** A single **ConfigResolver** that:
+The goal of Phase 3 is: *Enable the small-talk module to use knowledge from past conversations (via the Context Updater Service) so that, when a new session starts, our bot “remembers” something relevant about the user.* The developer will modify the small-talk code base so that it **fetches** context at session start and **reports** the end of session, and then **injects** the retrieved context into the prompt.
 
-  1. fetches `language` for a given `user_id`
-  2. returns the correct language JSON
-  3. falls back to `en` if anything fails or value is unknown
-* **Snapshotting:** Store the **resolved language at message time** (e.g., `lang_snapshot`) so historical records aren’t affected by later preference changes.
+---
 
-# 3) Minimal data model extensions
+### Big Picture & Data Flow
 
-Add (or confirm) these tables to support user-differentiated state:
+1. **At session start**:
 
-**conversations**
+   * Small-talk module calls `GET /context/{user_id}` on the Context Updater Service.
+   * Service returns a JSON “context bundle” (persona_summary, last_session_summary, facts…).
+   * Small-talk code receives this bundle, selects relevant data (facts etc), and builds an augmented system/user prompt that includes this context.
+   * The prompt is sent to the LLM (via DeepSeek REST) and conversation proceeds.
 
-* `id uuid pk default gen_random_uuid()`
-* `user_id uuid not null references users(id)`
-* `started_at timestamptz not null default now()`
-* `ended_at timestamptz null`
-* `topic text null`
-* `lang_snapshot text not null default 'en'`  ← language used when the conversation started
+2. **During session**:
 
-**messages**
+   * The conversation flows as usual (via your existing small-talk activity). The user and bot exchange messages; you record them as you already do (in `wb_messages`, etc).
 
-* `id uuid pk default gen_random_uuid()`
-* `conversation_id uuid not null references conversations(id)`
-* `sender text not null check (sender in ('user','bot','system'))`
-* `content text not null`
-* `created_at timestamptz not null default now()`
-* `lang_snapshot text not null default 'en'`
+3. **At session end**:
 
-*(Optional later: indexes on `user_id`, `conversation_id`, and time for analytics.)*
+   * Small-talk module calls `POST /events` on the Context Updater Service with payload indicating `user_id`, `conversation_id`, `event_type: "session_end"`, `timestamp`.
+   * The service processes this event (extracts facts etc) and updates its internal tables. That work is happening in the service (not your module).
+   * Next time a session starts, the new facts appear in the fetched bundle.
 
-# 4) Where `config_fetch.py` fits
+---
 
-Create a **small, single-purpose module** that your pipeline can import:
+### Developer Responsibilities
 
-* **Responsibilities**
+Here’s what the developer must implement/modify in the small-talk module:
 
-  * Fetch `language` from `public.users` given `user_id`.
-  * Validate/normalize to `{en, cn, bm}`; else default to `en`.
-  * Provide a **pure function**: `resolve_language(user_id) -> 'en'|'cn'|'bm'`
-  * Provide a **higher-level helper**: `get_language_config(user_id) -> dict` that returns the loaded language JSON.
-  * Provide a **simple cache** (in-memory dict keyed by `user_id`) with short TTL (e.g., 60–300s) to avoid excess queries.
+1. **Configuration/Setup**
 
-* **Inputs**
+   * Add new config entries (e.g., `CONTEXT_SERVICE_URL = http://localhost:8000`) in config files.
+   * Ensure that `user_id` variable is available (your `get_current_user_id()` returns `DEV_USER_ID` for now).
+   * Ensure that the conversation module has access to `conversation_id` at session start and end.
 
-  * `SUPABASE_URL`
-  * `SUPABASE_SERVICE_ROLE_KEY` (or anon key if you’ve opened read for `users.language`; service role is simplest now but protect it!)
-  * `DEV_USER_ID` (for your current hardcoded tests)
+2. **Fetch context at session start**
 
-* **Outputs**
+   * Before sending the first user message to the LLM in a session, call the context service:
 
-  * normalized language code
-  * loaded language config object
+     ```python
+     response = httpx.get(f"{CONTEXT_SERVICE_URL}/context/{user_id}")
+     bundle = response.json()
+     ```
+   * Validate the response (status, schema).
+   * Extract from `bundle`: `persona_summary`, `last_session_summary`, `facts` list.
+   * Build a prefix or template for the prompt, such as:
 
-# 5) Runtime flow (today, with fixed UUID)
+     ```
+     You are Well-Bot, a friendly wellness companion.
+     Previous info: {persona_summary}
+     Last session: {last_session_summary}
+     Known facts about you: {fact1}, {fact2}, …
+     --- Now continue.
+     ```
+   * Inject that prefix into your system prompt (or prepend to user message depending on your architecture) before calling the DeepSeek API.
 
-1. **Startup**: `GLOBAL_CONFIG` loads once.
-2. **Session start (or on first need)**:
+3. **Small talk runs as usual but with context**
 
-   * `current_user_id = ENV['DEV_USER_ID']` (or a CLI arg/process flag).
-   * `lang = resolve_language(current_user_id)` via Supabase REST (httpx).
-   * `LANGUAGE_CONFIG = load_language_config(lang)` (your existing loader).
-3. **Pass LANGUAGE_CONFIG** by dependency injection (preferred) into:
+4. **Report session end event**
 
-   * `_pipeline_wakeword.py`
-   * `_pipeline_smalltalk.py`
-   * `activities/smalltalk.py`
-   * `activities/journal.py`
-4. **Conversation open**:
+   * When the conversation is finished (according to your logic), call:
 
-   * Create a `conversations` row (user_id, `lang_snapshot = lang`).
-5. **Each message**:
+     ```python
+     httpx.post(f"{CONTEXT_SERVICE_URL}/events", json={
+         "user_id": user_id,
+         "conversation_id": conversation_id,
+         "event_type": "session_end",
+         "timestamp": datetime.utcnow().isoformat()
+     })
+     ```
+   * Handle response (202 Accepted expected). Optionally log the `processed_facts_count` or `bundle_version_ts` from the response.
 
-   * Create a `messages` row with `lang_snapshot = lang`.
+5. **Testing/modification**
 
-# 6) Runtime flow (future, with real auth)
+   * Add logging around context fetch: log the bundle you receive.
+   * Add logging of the prompt sent to DeepSeek (for debugging).
+   * Create simple test scenario: conversation ends with a distinctive user message (e.g., “I’m training for a marathon”). Next session you should see that message appear in the fetched facts list and the prompt prefix.
+   * Handle edge-cases: if `GET /context/{user_id}` returns empty or no facts (first session), code should still work (skip prefix or include “I look forward to our first conversation…”). If `POST /events` fails, log error but still allow session end gracefully.
 
-* You’ll have a **Supabase Auth JWT** in the request context.
-* Resolve **auth user id → app user id**:
+6. **Code hygienic tasks**
 
-  * Easiest path: make `users.id` **the same** as `auth.users.id` (store app profile fields in `public.users`, keyed by the auth UUID).
-  * If you must keep two IDs, add a **mapping** table `auth_user_map(auth_user_id uuid pk, user_id uuid fk)` and resolve once per session.
-* After you have `user_id`, reuse the **exact same** `resolve_language(user_id)` and downstream behavior. No pipeline refactor needed.
+   * Add config flags so this feature can be toggled (e.g., `ENABLE_CONTEXT_AWARENESS = True/False`) so you can disable quickly if problem arises.
+   * Add unit tests to mock `GET /context` and `POST /events` responses to verify correct prompt building and event reporting logic.
+   * Write clear comments/documentation in code about where the context is fetched, how it’s injected.
 
-# 7) Supabase REST call shape (via httpx)
+---
 
-* Endpoint: `GET {SUPABASE_URL}/rest/v1/users?select=language&id=eq.{user_id}&limit=1`
-* Headers:
+### Acceptance Criteria
 
-  * `apikey: <service or anon key>`
-  * `Authorization: Bearer <service or anon key>`
-  * `Accept: application/json`
-* Parse: if 200 with `[{"language":"cn"}]`, normalize to `'cn'`; else `'en'`.
+* On session start, context service is queried and bundle is received.
+* The prompt to DeepSeek contains the context prefix with at least one fact (after user has had an earlier session with a distinctive message).
+* On session end, event is posted and the service returns 202; next session the new fact shows up.
+* Existing conversation flow (without context service) still functions (backwards-compatible).
+* Logs show the bundle, prompt, and event call details for debugging.
 
-**Security note:** Avoid shipping the service role key to untrusted clients. For server-side only (your backend), it’s fine. Later, if you query from the client, use **RLS** with anon key and policies permitting `select language where id = auth.uid()`.
+---
 
-# 8) Config resolution policy
 
-* **Accepted values:** `en`, `cn`, `bm` (lowercase).
-* **Fallbacks:**
+### Dependencies & Assumptions
 
-  * Missing user row → `'en'`
-  * Missing or invalid `language` → `'en'`
-  * Language file missing a field → fallback to **English** for that specific field (optional “partial fallback” layer if you want).
-* **Caching:**
+* The Context Updater Service is running at `localhost:8000` with endpoints `/context/{user_id}` and `/events`.
+* The database for the service is populated by previous conversations (so that facts exist).
+* The small-talk module can access `conversation_id` (or whichever ID tracks the session).
+* No authentication required for prototype (as defined).
+* The developer has access to modify the small-talk module code base and test on local machine.
 
-  * Per-user result cached for ~60–300s.
-  * Manual invalidation path (e.g., call `ConfigResolver.invalidate(user_id)` after a profile edit).
+--- 
 
-# 9) Injection strategy in your codebase
+# How to call this service from a separate application:
 
-Prefer **dependency injection** over globals so multi-user concurrency is clean:
+## Communication Protocol
 
-* **Create** a `ConfigManager`:
+**HTTP/REST** over FastAPI. Default base URL: `http://localhost:8000` (configurable via `SERVICE_PORT`).
 
-  * `resolve_language(user_id)`
-  * `get_language_config(user_id)` (loads JSON once per language; caches per language, not per user)
-  * `get_global_config()`
-* **At activity/pipeline start**, pass `{global_config, language_config}` explicitly.
-* **Avoid** module-level hardcoded `LANGUAGE_CONFIG` for anything user-specific.
+CORS is enabled for all origins (adjust in production).
 
-# 10) Failure modes & handling
+## Available Endpoints
 
-* **Supabase down / timeout** → log warning, use `'en'`.
-* **HTTP 401/403** → configuration error; log ERROR, use `'en'`.
-* **Unknown language** → warn, use `'en'`.
-* **JSON missing key** → either:
+### 1. Health Check
+```http
+GET /health
+```
 
-  * strict: raise and abort activity; or
-  * lenient: log and fall back to English field.
-* **Race conditions** (multi-thread): protect in-memory caches with a simple lock (only around writes).
+**Response:**
+```json
+{
+  "status": "healthy",
+  "service": "context-updater-service",
+  "version": "1.0.0"
+}
+```
 
-# 11) Testing checklist (now)
+### 2. Get Context Bundle (Publisher Endpoint)
+```http
+GET /context/{user_id}
+```
 
-* Set `DEV_USER_ID` to a user with `language = 'bm'`; confirm Malay prompts/audio paths flow through smalltalk & journal.
-* Toggle `language` in DB; confirm cache TTL behavior.
-* Turn off network; confirm English fallback.
-* Start two conversations under the same `user_id`; confirm consistent `lang_snapshot`.
+**Path Parameters:**
+- `user_id` (required): User UUID (e.g., `"51435f38-0f05-4478-9293-d8d9aa70d455"`)
 
-# 12) Later: switching to real auth
+**Response:** `ContextBundleResponse`
+```json
+{
+  "user_id": "51435f38-0f05-4478-9293-d8d9aa70d455",
+  "version_ts": "2024-01-15T10:30:00Z",
+  "persona_summary": "User prefers...",
+  "last_session_summary": "Last session about...",
+  "facts": [
+    {
+      "fact_id": 1,
+      "user_id": "51435f38-0f05-4478-9293-d8d9aa70d455",
+      "text": "User likes coffee",
+      "tags": ["preference"],
+      "confidence": 0.95,
+      "recency_days": 2.5,
+      "created_ts": "2024-01-13T08:00:00Z",
+      "updated_ts": "2024-01-15T10:00:00Z"
+    }
+  ]
+}
+```
 
-* Align `users.id` with Supabase `auth.users.id`.
-* Add RLS policy on `users`: `select language using (id = auth.uid())`.
-* Replace `DEV_USER_ID` with `ctx.user_id` resolved from the JWT.
-* Everything else remains the same.
+**Status Codes:**
+- `200` - Success
+- `400` - Invalid UUID format
+- `404` - User context not found (returns empty bundle)
+- `503` - Database error
 
-# 13) Light pseudo-API (no code, just contracts)
+### 3. Post Events (Subscriber Endpoint)
+```http
+POST /events
+```
 
-**ConfigResolver**
+**Request Body:** `EventPayload`
+```json
+{
+  "user_id": "51435f38-0f05-4478-9293-d8d9aa70d455",
+  "conversation_id": "123e4567-e89b-12d3-a456-426614174000",
+  "event_type": "session_end",
+  "timestamp": "2024-01-15T10:30:00Z",
+  "metadata": {
+    "additional": "data"
+  }
+}
+```
 
-* `resolve_language(user_id: UUID) -> Literal['en','cn','bm']`
-* `get_language_config(user_id: UUID) -> dict`
-* `get_global_config() -> dict`
-* `invalidate(user_id: UUID) -> None`
+**Field Details:**
+- `user_id` (required): Valid UUID string
+- `conversation_id` (optional): Valid UUID string or null
+- `event_type` (required): One of:
+  - `"session_start"`
+  - `"session_end"`
+  - `"turn_complete"`
+  - `"conversation_end"`
+- `timestamp` (optional): ISO 8601 datetime (defaults to current time if not provided)
+- `metadata` (optional): Additional key-value pairs
 
-**Usage pattern**
+**Response:** `EventResponse`
+```json
+{
+  "status": "accepted",
+  "message": "Event session_end processed successfully",
+  "processed_facts_count": 3,
+  "bundle_version_ts": "2024-01-15T10:30:00Z"
+}
+```
 
-* At session start:
+**Status Codes:**
+- `202` - Accepted and processing
+- `400` - Missing required fields
+- `422` - Invalid event payload (e.g., invalid UUID format)
+- `404` - Conversation not found
+- `503` - Database error
 
-  * `lang = resolve_language(user_id)`
-  * `global_cfg = get_global_config()`
-  * `lang_cfg = get_language_config(user_id)`
-  * Pass `{global_cfg, lang_cfg}` to pipeline/activity constructors.
+## Example Usage
+
+### Python Example
+```python
+import requests
+import json
+
+BASE_URL = "http://localhost:8000"
+
+# Get context for a user
+user_id = "51435f38-0f05-4478-9293-d8d9aa70d455"
+response = requests.get(f"{BASE_URL}/context/{user_id}")
+context_bundle = response.json()
+
+# Post an event
+event = {
+    "user_id": user_id,
+    "conversation_id": "123e4567-e89b-12d3-a456-426614174000",
+    "event_type": "session_end",
+    "metadata": {"session_duration": 300}
+}
+response = requests.post(
+    f"{BASE_URL}/events",
+    json=event,
+    headers={"Content-Type": "application/json"}
+)
+result = response.json()
+```
+
+### JavaScript/TypeScript Example
+```javascript
+const BASE_URL = "http://localhost:8000";
+
+// Get context for a user
+const userId = "51435f38-0f05-4478-9293-d8d9aa70d455";
+const contextResponse = await fetch(`${BASE_URL}/context/${userId}`);
+const contextBundle = await contextResponse.json();
+
+// Post an event
+const event = {
+  user_id: userId,
+  conversation_id: "123e4567-e89b-12d3-a456-426614174000",
+  event_type: "session_end",
+  metadata: { session_duration: 300 }
+};
+
+const eventResponse = await fetch(`${BASE_URL}/events`, {
+  method: "POST",
+  headers: {
+    "Content-Type": "application/json"
+  },
+  body: JSON.stringify(event)
+});
+
+const result = await eventResponse.json();
+```
+
+## API Documentation
+
+When running, view interactive docs:
+- Swagger UI: `http://localhost:8000/docs`
+- ReDoc: `http://localhost:8000/redoc`
+
+These show request/response schemas and allow testing directly in the browser.
+
+## Error Response Format
+
+All errors return:
+```json
+{
+  "error_code": "ERROR_CODE",
+  "message": "Human-readable error message",
+  "details": {}
+}
+```
+
+The service uses FastAPI with automatic request validation, so invalid payloads return `422` with validation details.
