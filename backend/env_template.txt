@@ -25,4 +25,6 @@ SUPABASE_ANON_KEY=your_supabase_anon_key_here
 SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key_here
 
 # Porcupine Wake Word Access Key
+# Use PORCUPINE_ACCESS_KEY for x86/Windows, PORCUPINE_ACCESS_KEY_ARM for ARM/Raspberry Pi
 PORCUPINE_ACCESS_KEY=your_porcupine_access_key_here
+PORCUPINE_ACCESS_KEY_ARM=your_porcupine_access_key_arm_here

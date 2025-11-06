@@ -9,11 +9,18 @@ management and makes the application Docker-ready.
 import os
 import json
 import tempfile
+import platform
 from pathlib import Path
 from dotenv import load_dotenv
 
 # Load environment variables from .env file
 load_dotenv()
+
+# Detect if running on ARM architecture
+def is_arm_architecture():
+    """Detect if running on ARM architecture (ARM64, aarch64, or armv7l)."""
+    machine = platform.machine().lower()
+    return machine in ('arm64', 'aarch64', 'armv7l', 'armv8l')
 
 # DeepSeek API Configuration
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY")
@@ -39,7 +46,11 @@ SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
 # Porcupine Wake Word Configuration
-PORCUPINE_ACCESS_KEY = os.getenv("PORCUPINE_ACCESS_KEY")
+# Automatically use ARM-specific key if available and running on ARM architecture
+if is_arm_architecture():
+    PORCUPINE_ACCESS_KEY = os.getenv("PORCUPINE_ACCESS_KEY_ARM") or os.getenv("PORCUPINE_ACCESS_KEY")
+else:
+    PORCUPINE_ACCESS_KEY = os.getenv("PORCUPINE_ACCESS_KEY")
 
 # Rhino Intent Recognition Configuration
 # Falls back to PORCUPINE_ACCESS_KEY if not set (same Picovoice key can be used)
