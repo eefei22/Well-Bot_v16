@@ -12,7 +12,7 @@ This package provides a complete voice pipeline implementation including:
 from .wakeword import WakeWordDetector, create_wake_word_detector
 from .mic_stream import MicStream
 from .stt import GoogleSTTService
-from .intent_detection import IntentDetection
+from .intent_recognition import IntentRecognition
 from ._pipeline_wakeword import VoicePipeline, create_voice_pipeline
 from .conversation_audio_manager import ConversationAudioManager
 from .conversation_session import ConversationSession
@@ -22,7 +22,7 @@ __all__ = [
     'create_wake_word_detector', 
     'MicStream',
     'GoogleSTTService',
-    'IntentDetection',
+    'IntentRecognition',
     'VoicePipeline',
     'create_voice_pipeline',
     'ConversationAudioManager',

@@ -1,0 +1,97 @@
+{
+  "smalltalk": {
+    "system_prompt": "你是Well-Bot，一个友好的情感健康助手，正在与用户进行闲聊。保持你的回复随意、简短和简洁。不要使用表情符号。以下是用户说的：",
+    "termination_phrases": [
+      "好的，再见",
+      "我现在要走了",
+      "回头聊",
+      "停止说话",
+      "退出"
+    ],
+    "prompts": {
+      "start": "你想聊什么？",
+      "nudge": "嘿，你还在吗？随时继续我们的对话。",
+      "timeout": "看起来你不在。我先休息一下。等你准备好了，随时叫我。",
+      "end": "好的，回头聊，再见！"
+    }
+  },
+  "journal": {
+    "termination_phrases": [
+      "停止写日记",
+      "保存日记",
+      "结束记录",
+      "就这样",
+      "完成写日记",
+      "写日记完成",
+      "结束日记",
+      "停止录音"
+    ],
+    "prompts": {
+      "start": "准备开始写日记。提示音后开始说话。你可以随时暂停思考。说完时说'停止写日记'。",
+      "nudge": "你还在吗？继续说话或说'停止写日记'来完成。",
+      "saving": "正在保存你的日记条目。",
+      "saved": "日记条目已保存，共{word_count}字。",
+      "timeout": "正在保存你的日记条目。"
+    }
+  },
+  "quote": {
+    "preamble": "给你一句名言。",
+    "seed_system_prompt": "你刚刚向用户分享了这句名言。请自然过渡到简短而温暖的闲聊。名言：‘{quote}’。请提出一个开放、友好的问题，邀请用户分享看法。",
+    "opener": "你对这句名言有什么想法？"
+  },
+  "meditation": {
+    "termination_phrases": [
+      "停止冥想",
+      "结束冥想",
+      "够了",
+      "完成冥想"
+    ],
+    "start_prompt": "现在开始你的冥想课程。",
+    "seed_system_prompt_completed": "你刚刚与用户完成了一次引导冥想。请自然过渡到简短而温暖的闲聊。提出一个开放、友好的问题，询问冥想的感觉或体验。",
+    "seed_system_prompt_stopped": "用户中途停止了引导冥想。请自然过渡到简短而温暖的闲聊。提出一个开放、友好的问题，询问他们的感受或是否一切正常。",
+    "opener_completed": "这次冥想感觉如何？",
+    "opener_stopped": "我注意到你停止了冥想。你感觉怎么样？"
+  },
+  "gratitude": {
+    "termination_phrases": [
+      "完成",
+      "完成了",
+      "就这样",
+      "好了",
+      "说完了"
+    ],
+    "prompts": {
+      "start": "今天你有什么要感恩的吗？提示音后开始说话。说完后说'完成了'来保存。",
+      "nudge": "你还在吗？继续说话或说'完成了'来结束。",
+      "saved": "谢谢你分享。我已经保存了你的感恩记录。",
+      "recording_error": "抱歉，我录制你的感恩记录时遇到了问题。",
+      "no_content": "我没有听清楚。我们下次再试吧。",
+      "save_error": "我保存你的感恩记录时遇到了问题，但我听到了你说的话。"
+    },
+    "seed_system_prompt": "用户刚刚分享了一条感恩记录。请自然过渡到简短而温暖的闲聊。感恩记录：'{gratitude_note}'。请提出一个开放、友好的问题，与感恩或积极情绪相关。",
+    "opener": "这很美好。你还有什么想说的吗？"
+  },
+  "wakeword_responses": {
+    "prompts": {
+      "wakeword_detected": "嘿，我听到你叫我。我能帮你什么？",
+      "nudge": "我在听。你想做什么？",
+      "timeout": "当你需要我的时候，我在这里。只要叫我的名字。",
+      "unknown_intent": "我没听清楚。你能重复一遍吗？",
+      "activity_unavailable": "那个功能还没有。我还能帮你什么？"
+    }
+  },
+  "audio_paths": {
+    "wokeword_audio_path": "assets/MANDARIN/wokeword_CN_male.wav",
+    "start_smalltalk_audio_path": "assets/MANDARIN/start_smalltalk_CN_male.wav",
+    "start_journal_audio_path": "assets/MANDARIN/start_journal_CN_male.wav",
+    "start_gratitude_audio_path": "assets/MANDARIN/start_gratitude_CN_male.wav",
+    "start_meditation_audio_path": "assets/MANDARIN/start_meditation_CN_male.wav",
+    "start__quote_audio_path": "assets/MANDARIN/start_quote_CN_male.wav",
+    "nudge_audio_path": "assets/MANDARIN/inactivity_nudge_CN_male.wav",
+    "termination_audio_path": "assets/MANDARIN/termination_CN_male.wav",
+    "end_audio_path": "assets/MANDARIN/end_smalltalk_CN_male.wav",
+    "prompt_repeat_path": "assets/MANDARIN/prompt_repeat_CN_male.wav",
+    "activity_unavailable_path": "assets/MANDARIN/activity_unavailable_CN_male.wav"
+  }
+}
+

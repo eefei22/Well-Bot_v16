@@ -9,7 +9,7 @@ import os
 import logging
 from google.cloud import speech
 from typing import Callable, Iterable, Optional, Dict, Any
-from ..config_loader import get_google_cloud_credentials_path
+from ..utils.config_loader import get_google_cloud_credentials_path
 
 # Set up credentials from environment variables
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = get_google_cloud_credentials_path()
@@ -113,11 +113,42 @@ class GoogleSTTService:
                 try:
                     on_transcript(transcript, is_final)
                 except Exception as e:
-                    logger.error(f"Error in transcript callback: {e}")
+                    import traceback
+                    exception_name = type(e).__name__
+                    
+                    # Check if this is a termination signal that should propagate
+                    # (e.g., TerminationPhraseDetected from journal/smalltalk activities)
+                    is_termination_signal = "Termination" in exception_name or "termination" in str(e).lower()
+                    
+                    if is_termination_signal:
+                        # Termination signals are expected - log at debug level
+                        logger.debug(f"Termination signal in transcript callback: {exception_name}")
+                        logger.debug(f"  Transcript: '{transcript}' (final: {is_final})")
+                        # Re-raise termination signals so they can be caught by activity handlers
+                        raise
+                    else:
+                        # Real errors - log with full details
+                        logger.error(f"Error in transcript callback")
+                        logger.error(f"  Exception type: {exception_name}")
+                        logger.error(f"  Exception message: {str(e)}")
+                        logger.error(f"  Transcript text: '{transcript}'")
+                        logger.error(f"  Is final: {is_final}")
+                        logger.error(f"  Full traceback:")
+                        logger.error(traceback.format_exc())
+                        # For other errors, log and continue processing
                     
         except Exception as e:
-            logger.error(f"Error in streaming recognition: {e}")
-            raise
+            # Check if this is a termination signal that should propagate silently
+            exception_name = type(e).__name__
+            is_termination_signal = "Termination" in exception_name or "termination" in str(e).lower()
+            
+            if is_termination_signal:
+                # Termination signals are expected and should propagate without error logging
+                logger.debug(f"Termination signal propagated from transcript callback: {exception_name}")
+                raise
+            else:
+                logger.error(f"Error in streaming recognition: {e}")
+                raise
     
     def recognize_file(self, audio_file_path: str) -> Optional[str]:
         """

@@ -1,6 +1,17 @@
 -- WARNING: This schema is for context only and is not meant to be run.
 -- Table order and constraints may not be valid for execution.
 
+CREATE TABLE public.context_fact (
+  fact_id integer NOT NULL DEFAULT nextval('context_fact_fact_id_seq'::regclass),
+  user_id uuid NOT NULL,
+  text text NOT NULL,
+  tags ARRAY DEFAULT ARRAY[]::text[],
+  confidence double precision DEFAULT 0.0,
+  recency_days double precision DEFAULT 0.0,
+  created_ts timestamp with time zone NOT NULL DEFAULT now(),
+  updated_ts timestamp with time zone NOT NULL DEFAULT now(),
+  CONSTRAINT context_fact_pkey PRIMARY KEY (fact_id)
+);
 CREATE TABLE public.devices (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   serial_number text NOT NULL UNIQUE,
@@ -40,6 +51,14 @@ CREATE TABLE public.quotes (
   emotion text NOT NULL CHECK (emotion = ANY (ARRAY['happy'::text, 'sad'::text, 'angry'::text, 'fearful'::text])),
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT quotes_pkey PRIMARY KEY (id)
+);
+CREATE TABLE public.user_context_bundle (
+  user_id uuid NOT NULL,
+  version_ts timestamp with time zone NOT NULL DEFAULT now(),
+  persona_summary text,
+  last_session_summary text,
+  facts jsonb DEFAULT '[]'::jsonb,
+  CONSTRAINT user_context_bundle_pkey PRIMARY KEY (user_id)
 );
 CREATE TABLE public.users (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -110,7 +129,7 @@ CREATE TABLE public.wb_journal (
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   updated_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT wb_journal_pkey PRIMARY KEY (id),
-  CONSTRAINT wb_journal_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+  CONSTRAINT wb_journal_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
 );
 CREATE TABLE public.wb_meditation_log (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -158,6 +177,7 @@ CREATE TABLE public.wb_quote (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   category USER-DEFINED NOT NULL,
   text text NOT NULL,
+  language text NOT NULL DEFAULT 'en'::text,
   CONSTRAINT wb_quote_pkey PRIMARY KEY (id)
 );
 CREATE TABLE public.wb_quote_seen (

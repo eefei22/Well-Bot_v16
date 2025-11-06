@@ -8,6 +8,7 @@ import threading
 import time
 import logging
 import json
+from pathlib import Path
 from typing import Optional, Callable
 
 # For playing wakeword audio - use pydub as primary, PowerShell as fallback
@@ -35,14 +36,16 @@ try:
     from .wakeword import WakeWordDetector, create_wake_word_detector
     from .mic_stream import MicStream
     from .stt import GoogleSTTService
-    from .intent_detection import IntentDetection
-    from ..config_loader import PORCUPINE_ACCESS_KEY
+    from .tts import GoogleTTSClient
+    from .intent_recognition import IntentRecognition
+    from ..utils.config_loader import PORCUPINE_ACCESS_KEY, RHINO_ACCESS_KEY
 except ImportError:
     from wakeword import WakeWordDetector, create_wake_word_detector
     from mic_stream import MicStream
     from stt import GoogleSTTService
-    from intent_detection import IntentDetection
-    from config_loader import PORCUPINE_ACCESS_KEY
+    from tts import GoogleTTSClient
+    from intent_recognition import IntentRecognition
+    from utils.config_loader import PORCUPINE_ACCESS_KEY, RHINO_ACCESS_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +61,7 @@ class VoicePipeline:
         wakeword_detector: WakeWordDetector,
         stt_service: GoogleSTTService,
         lang: str = "en-US",
+        user_id: Optional[str] = None,
         on_wake_callback: Optional[Callable[[], None]] = None,
         on_final_transcript: Optional[Callable[[str, Optional[dict]], None]] = None,
         intent_config_path: Optional[str] = None,
@@ -69,24 +73,61 @@ class VoicePipeline:
         self.lang = lang
         self.on_wake_callback = on_wake_callback
         self.on_final_transcript = on_final_transcript
+        
+        # Resolve user ID
+        from ..supabase.auth import get_current_user_id
+        self.user_id = user_id if user_id is not None else get_current_user_id()
+        logger.info(f"VoicePipeline initialized for user: {self.user_id}")
+        
+        # Load user-specific configurations
+        from ..utils.config_resolver import get_global_config_for_user, get_language_config
+        self.global_config = get_global_config_for_user(self.user_id)
+        self.language_config = get_language_config(self.user_id)
 
-        self.wakeword_audio_path = None
-        if preference_file_path:
-            try:
-                self.wakeword_audio_path = self._load_wakeword_audio_path(preference_file_path)
-                logger.info(f"Wakeword audio path loaded: {self.wakeword_audio_path}")
-            except Exception as e:
-                logger.warning(f"Failed to load wakeword audio path: {e}")
-                self.wakeword_audio_path = None
+        self.wakeword_audio_path = self.language_config["audio_paths"].get("wokeword_audio_path")
+        logger.info(f"Wakeword audio path loaded: {self.wakeword_audio_path}")
 
-        self.intent_detection = None
-        if intent_config_path:
-            try:
-                self.intent_detection = IntentDetection(intent_config_path)
-                logger.info("Intent detection initialized")
-            except Exception as e:
-                logger.warning(f"Failed to initialize intent detection: {e}")
-                self.intent_detection = None
+        # Initialize TTS service for wakeword responses
+        try:
+            from google.cloud import texttospeech
+            self.tts_service = GoogleTTSClient(
+                voice_name=self.global_config["language_codes"]["tts_voice_name"],
+                language_code=self.global_config["language_codes"]["tts_language_code"],
+                audio_encoding=texttospeech.AudioEncoding.LINEAR16,
+                sample_rate_hertz=24000,
+                num_channels=1,
+                sample_width_bytes=2
+            )
+            logger.info("TTS service initialized for wakeword")
+        except Exception as e:
+            logger.warning(f"Failed to initialize TTS service for wakeword: {e}")
+            self.tts_service = None
+
+        # Initialize Rhino intent recognition with fixed English context
+        backend_dir = Path(__file__).parent.parent.parent
+        context_path = backend_dir / "config" / "Intent" / "Well-Bot-Commands_en_windows_v3_0_0.rhn"
+        
+        try:
+            if not RHINO_ACCESS_KEY:
+                logger.error("RHINO_ACCESS_KEY not configured, cannot initialize Rhino")
+                self.intent_recognition = None
+            elif not context_path.exists():
+                logger.error(f"Rhino context file not found: {context_path}")
+                self.intent_recognition = None
+            else:
+                self.intent_recognition = IntentRecognition(
+                    access_key=RHINO_ACCESS_KEY,
+                    context_path=context_path,
+                    sensitivity=0.5,
+                    require_endpoint=True
+                )
+                logger.info(f"Rhino intent recognition initialized for user {self.user_id}")
+        except FileNotFoundError as e:
+            logger.error(f"Rhino context file not found: {e}", exc_info=True)
+            self.intent_recognition = None
+        except Exception as e:
+            logger.error(f"Failed to initialize Rhino intent recognition: {e}", exc_info=True)
+            self.intent_recognition = None
 
         self.active = False
         self.stt_active = False
@@ -95,7 +136,7 @@ class VoicePipeline:
 
         self.stt_timeout_s = stt_timeout_s  # how many seconds to wait for speech
 
-        logger.info(f"Pipeline initialized | Language: {lang} | Intent: {'Yes' if self.intent_detection else 'No'} | Wakeword Audio: {'Yes' if self.wakeword_audio_path else 'No'}")
+        logger.info(f"Pipeline initialized | Language: {lang} | Intent: {'Yes' if self.intent_recognition else 'No'} | Wakeword Audio: {'Yes' if self.wakeword_audio_path else 'No'}")
 
     def _play_audio_file(self, audio_path: str) -> bool:
         """
@@ -149,23 +190,40 @@ class VoicePipeline:
         logger.error(f"All audio playback methods failed for: {audio_path}")
         return False
 
-    def _load_wakeword_audio_path(self, preference_file_path: str) -> Optional[str]:
+    def _speak(self, text: str):
+        """Speak text using TTS"""
+        if not self.tts_service:
+            logger.warning("TTS service not available")
+            return
+        
         try:
-            with open(preference_file_path, 'r') as f:
-                preferences = json.load(f)
-            wakeword_path = preferences.get('wokeword_audio_path')
-            if wakeword_path:
-                backend_dir = os.path.join(os.path.dirname(__file__), '..', '..')
-                absolute_path = os.path.join(backend_dir, wakeword_path)
-                if os.path.exists(absolute_path):
-                    return absolute_path
-                else:
-                    logger.warning(f"Wakeword audio file not found: {absolute_path}")
-            else:
-                logger.warning("No 'wokeword_audio_path' key in preferences")
+            def text_gen():
+                yield text
+            
+            # Generate PCM chunks
+            pcm_chunks = self.tts_service.stream_synthesize(text_gen())
+            
+            # Play PCM chunks using PyAudio
+            import pyaudio
+            pa = pyaudio.PyAudio()
+            stream = pa.open(
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=24000,
+                output=True
+            )
+            
+            for chunk in pcm_chunks:
+                stream.write(chunk)
+            
+            stream.stop_stream()
+            stream.close()
+            pa.terminate()
+            
+            logger.info(f"TTS played: {text[:50]}...")
         except Exception as e:
-            logger.error(f"Error loading wakeword preferences: {e}")
-        return None
+            logger.error(f"TTS error: {e}")
+
 
     def _on_wake(self):
         logger.info("Wake word detected")
@@ -175,8 +233,12 @@ class VoicePipeline:
                 return
             self.stt_active = True
 
-        # Play feedback (blocking) if configured
-        if self.wakeword_audio_path:
+        # Load wakeword response config
+        wakeword_config = self.language_config.get("wakeword_responses", {})
+        use_audio_files = self.global_config["wakeword"].get("use_audio_files", False)
+        
+        # Play feedback audio if enabled
+        if use_audio_files and self.wakeword_audio_path:
             try:
                 logger.info(f"Playing wakeword feedback audio: {self.wakeword_audio_path}")
                 success = self._play_audio_file(self.wakeword_audio_path)
@@ -187,91 +249,99 @@ class VoicePipeline:
             except Exception as e:
                 logger.error(f"Error playing wakeword audio: {e}")
         else:
-            logger.debug("No wakeword feedback audio configured")
+            logger.debug("No wakeword feedback audio configured or audio files disabled")
 
-        # Callback to orchestrator
+        # TTS prompt from config
+        try:
+            prompts = wakeword_config.get("prompts", {})
+            wakeword_prompt = prompts.get("wakeword_detected", "Hey, I heard you called me. What can I help you with?")
+        except Exception as e:
+            logger.warning(f"Failed to load wakeword detected prompt from config: {e}")
+            wakeword_prompt = "Hey, I heard you called me. What can I help you with?"
+        
+        # Callback to orchestrator first (for state management)
         if self.on_wake_callback:
             try:
                 self.on_wake_callback()
             except Exception as e:
                 logger.error(f"Error in wake callback: {e}")
 
-        # Launch STT thread
-        logger.info("Launching STT session")
-        self._stt_thread = threading.Thread(target=self._run_stt, daemon=True)
+        # Speak the prompt (this will block until TTS finishes)
+        logger.info(f"Speaking wakeword prompt: {wakeword_prompt}")
+        self._speak(wakeword_prompt)
+        logger.info("Wakeword prompt finished, starting Rhino intent recognition")
+
+        # Launch Rhino intent recognition thread AFTER TTS completes
+        logger.info("Launching Rhino intent recognition session")
+        self._stt_thread = threading.Thread(target=self._run_rhino_intent, daemon=True)
         self._stt_thread.start()
 
-    def _run_stt(self):
-        logger.info("STT session started")
+    def _run_rhino_intent(self):
+        """Process audio frames with Rhino for intent recognition."""
+        if not self.intent_recognition:
+            logger.error("Rhino intent recognition not initialized, cannot process")
+            with self._lock:
+                self.stt_active = False
+            return
+        
+        logger.info("Rhino intent recognition session started")
+        
+        # Use Rhino's required sample rate and frame length
+        rhino_sample_rate = self.intent_recognition.get_sample_rate()
+        rhino_frame_length = self.intent_recognition.get_frame_length()
+        
         mic = MicStream(
-            rate=self.stt.get_sample_rate(),
-            chunk_size=int(self.stt.get_sample_rate() / 10)
+            rate=rhino_sample_rate,
+            chunk_size=rhino_frame_length
         )
-
-        final_transcript: Optional[str] = None
+        
         intent_result: Optional[dict] = None
-        transcript_received_event = threading.Event()
-
-        def on_transcript_cb(text: str, is_final: bool):
-            nonlocal final_transcript
-            if not is_final:
-                logger.debug(f"[Pipeline] Interim transcript: {text}")
-                return
-            logger.info(f"[Pipeline] Final transcript: '{text}'")
-            final_transcript = text
-            transcript_received_event.set()
-            try:
-                mic.stop()
-            except Exception as e:
-                logger.error(f"Error stopping mic after final: {e}")
+        start_time = time.time()
 
         try:
             mic.start()
-            logger.info("Microphone active, awaiting speech")
-            # Start recognition with single_utterance = True so stream ends when user stops speaking
-            self.stt.stream_recognize(
-                audio_generator=mic.generator(),
-                on_transcript=on_transcript_cb,
-                interim_results=True,
-                single_utterance=True
-            )
-
-            # Wait for final transcript or timeout
-            logger.debug(f"Waiting up to {self.stt_timeout_s:.1f}s for user speech")
-            transcript_received = transcript_received_event.wait(timeout=self.stt_timeout_s)
-            if not transcript_received:
-                logger.warning(f"No user transcript received within {self.stt_timeout_s:.1f}s → timing out STT session")
-            else:
-                # We got a transcript
-                if self.intent_detection and final_transcript:
-                    try:
-                        intent_result = self.intent_detection.detect_intent(final_transcript)
-                        if intent_result:
-                            intent_name, matched_phrase = intent_result
-                            logger.info(f"Detected intent: {intent_name} (matched phrase: '{matched_phrase}')")
-                            intent_result = {"intent": intent_name, "matched_phrase": matched_phrase, "confidence": 1.0}
-                        else:
-                            logger.info("No intent detected")
-                            intent_result = {"intent": "unknown", "confidence": 0.0}
-                    except Exception as e:
-                        logger.error(f"Intent detection error: {e}")
-                        intent_result = {"intent": "unknown", "confidence": 0.0}
-
-                # Invoke callback 
-                if self.on_final_transcript:
-                    try:
-                        self.on_final_transcript(final_transcript, intent_result)
-                    except Exception as e:
-                        logger.error(f"Error invoking final transcript callback: {e}")
-            # Ensure mic is stopped
-            mic.stop()
-
+            logger.info(f"Microphone active, awaiting speech (Rhino: {rhino_sample_rate}Hz, frame: {rhino_frame_length})")
+            
+            # Reset Rhino for new session
+            self.intent_recognition.reset()
+            
+            # Process audio frames
+            for audio_chunk in mic.generator():
+                if time.time() - start_time > self.stt_timeout_s:
+                    logger.warning(f"No intent detected within {self.stt_timeout_s:.1f}s → timing out")
+                    break
+                
+                # Process frame with Rhino
+                if self.intent_recognition.process_bytes(audio_chunk):
+                    # Inference is ready
+                    intent_result = self.intent_recognition.get_inference()
+                    
+                    if intent_result:
+                        logger.info(f"[Pipeline] Intent detected: {intent_result.get('intent')}")
+                        break
+                    else:
+                        # Not understood, reset and continue
+                        self.intent_recognition.reset()
+            
+            # If we didn't get an intent, set unknown
+            if not intent_result:
+                intent_result = {"intent": "unknown", "confidence": 0.0}
+                logger.info("[Pipeline] No intent understood, defaulting to unknown")
+            
+            # Invoke callback with empty transcript (no STT needed)
+            if self.on_final_transcript:
+                try:
+                    self.on_final_transcript("", intent_result)
+                except Exception as e:
+                    logger.error(f"Error invoking final transcript callback: {e}")
+            
         except Exception as e:
-            logger.error(f"Error during STT streaming: {e}")
+            logger.error(f"Error during Rhino intent recognition: {e}", exc_info=True)
         finally:
+            mic.stop()
             with self._lock:
                 self.stt_active = False
-            logger.info("STT session ended, returning to wakeword detection")
+            logger.info("Rhino intent recognition session ended, returning to wakeword detection")
 
     def start(self):
         if self.active:
@@ -310,6 +380,8 @@ class VoicePipeline:
         try:
             self.stop()
             self.wakeword.cleanup()
+            if hasattr(self, 'intent_recognition') and self.intent_recognition:
+                self.intent_recognition.delete()
             logger.info("Pipeline cleanup done")
         except Exception as e:
             logger.error(f"Error during pipeline cleanup: {e}")
@@ -335,6 +407,7 @@ def create_voice_pipeline(
     access_key_file: str,
     custom_keyword_file: Optional[str] = None,
     language: str = "en-US",
+    user_id: Optional[str] = None,
     on_wake_callback: Optional[Callable[[], None]] = None,
     on_final_transcript: Optional[Callable[[str, Optional[dict]], None]] = None,
     intent_config_path: Optional[str] = None,
@@ -347,6 +420,7 @@ def create_voice_pipeline(
         wakeword_detector=wakeword_detector,
         stt_service=stt_service,
         lang=language,
+        user_id=user_id,
         on_wake_callback=on_wake_callback,
         on_final_transcript=on_final_transcript,
         intent_config_path=intent_config_path,

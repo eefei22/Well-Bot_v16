@@ -1,0 +1,96 @@
+{
+  "smalltalk": {
+    "system_prompt": "You are Well-Bot,a friendly emotional wellness assistant having a small talk with your user. Keep your responses casual, short and concise. Do not use emojis. Here is what the user said:",
+    "termination_phrases": [
+      "Okay, bye",
+      "I have to go now",
+      "Talk later",
+      "Stop talking",
+      "Exit"
+    ],
+    "prompts": {
+      "start": "What's on your mind?",
+      "nudge": "Hey are you still there? Feel free to continue our conversation.",
+      "timeout": "It seems like you're not there. I'll go take a break now. Just call me when you're ready to talk again.",
+      "end": "Okay talk later, bye for now!."
+    }
+  },
+  "journal": {
+    "termination_phrases": [
+      "stop journal",
+      "save journal",
+      "end entry",
+      "that's all",
+      "finish journal",
+      "done journaling",
+      "end journal",
+      "stop recording"
+    ],
+    "prompts": {
+      "start": "Ready to journal. Start speaking after the tone. You can pause anytime to think. Say 'stop journal' when you're finished.",
+      "nudge": "Are you still there? Continue speaking or say 'stop journal' to finish.",
+      "saving": "Saving your journal entry now.",
+      "saved": "Journal entry saved with {word_count} words.",
+      "timeout": "Saving your journal entry now."
+    }
+  },
+  "quote": {
+    "preamble": "Here is a quote for you.",
+    "seed_system_prompt": "You just shared this quote with the user. Transition into a warm, brief small talk. Quote: '{quote}'. Ask one inviting, open question related to the theme.",
+    "opener": "What are your thoughts on that quote?"
+  },
+  "meditation": {
+    "termination_phrases": [
+      "stop meditation",
+      "end meditation",
+      "that's enough",
+      "finish meditation"
+    ],
+    "start_prompt": "Starting your meditation session now.",
+    "seed_system_prompt_completed": "You just completed a guided meditation session with the user. Transition into a warm, brief small talk. Ask one inviting, open question about how the meditation felt or what they experienced.",
+    "seed_system_prompt_stopped": "The user stopped a guided meditation session halfway. Transition into a warm, brief small talk. Ask one inviting, open question about how they're feeling or if everything is okay.",
+    "opener_completed": "How did that meditation feel?",
+    "opener_stopped": "I noticed you stopped the meditation. How are you feeling?"
+  },
+  "gratitude": {
+    "termination_phrases": [
+      "done",
+      "that's all",
+      "that's it",
+      "finished"
+    ],
+    "prompts": {
+      "start": "What are you grateful for today? Speak after the tone. When you're finished, say 'done' to save your entry.",
+      "nudge": "Are you still there? Continue speaking or say 'done' when finished.",
+      "saved": "Thank you for sharing. I've saved your gratitude note.",
+      "recording_error": "I'm sorry, I had trouble recording your gratitude note.",
+      "no_content": "I didn't catch that. Let's try again another time.",
+      "save_error": "I had trouble saving your gratitude note, but I heard what you said."
+    },
+    "seed_system_prompt": "The user just shared a gratitude note. Transition into a warm, brief small talk. Gratitude note: '{gratitude_note}'. Ask one inviting, open question related to gratitude or positivity.",
+    "opener": "That's beautiful. What else is on your mind?"
+  },
+  "wakeword_responses": {
+    "prompts": {
+      "wakeword_detected": "Hey, I heard you called me. What can I help you with?",
+      "nudge": "I'm listening. What would you like to do?",
+      "timeout": "I'll be here when you need me. Just say my name.",
+      "unknown_intent": "I didn't quite catch that. Could you please repeat?",
+      "activity_unavailable": "That feature isn't available yet. What else can I help you with?"
+    }
+  },
+  "audio_paths": {
+    "wokeword_audio_path": "assets/ENGLISH/wokeword_EN_male.wav",
+    "start_smalltalk_audio_path": "assets/ENGLISH/start_smalltalk_EN_male.wav",
+    "start_journal_audio_path": "assets/ENGLISH/start_journal_EN_male.wav",
+    "start_gratitude_audio_path": "assets/ENGLISH/start_gratitude_EN_male.wav",
+    "start_meditation_audio_path": "assets/ENGLISH/start_meditation_EN_male.wav",
+    "start__quote_audio_path": "assets/ENGLISH/start_quote_EN_male.wav",
+    "nudge_audio_path": "assets/ENGLISH/inactivity_nudge_EN_male.wav",
+    "termination_audio_path": "assets/ENGLISH/termination_EN_male.wav",
+    "end_audio_path": "assets/ENGLISH/end_smalltalk_EN_male.wav",
+    "prompt_repeat_path": "assets/ENGLISH/prompt_repeat_EN_male.wav",
+    "activity_unavailable_path": "assets/ENGLISH/activity_unavailable_EN_male.wav"
+  }
+}
+

@@ -7,7 +7,7 @@ import threading
 import time
 import logging
 import string
-from typing import Optional, Callable, List, Dict, Iterator
+from typing import Optional, Callable, List, Dict, Iterator, Tuple
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 
@@ -16,45 +16,20 @@ try:
     from .stt import GoogleSTTService
     from .llm import DeepSeekClient
     from .tts import GoogleTTSClient
+    from .termination_phrase import TerminationPhraseDetector, TerminationPhraseDetected, normalize_text
     from ..supabase.database import start_conversation, add_message, end_conversation
-    from ..config_loader import get_deepseek_config
+    from ..utils.config_loader import get_deepseek_config
 except ImportError:
     from mic_stream import MicStream
     from stt import GoogleSTTService
     from llm import DeepSeekClient
     from tts import GoogleTTSClient
+    from termination_phrase import TerminationPhraseDetector, TerminationPhraseDetected, normalize_text
     from src.supabase.database import start_conversation, add_message, end_conversation
-    from config_loader import get_deepseek_config
+    from utils.config_loader import get_deepseek_config
 
 
 logger = logging.getLogger(__name__)
-
-
-def normalize_text(text: str) -> str:
-    """
-    Normalize text for robust matching:
-    - Convert to lowercase
-    - Remove punctuation
-    - Collapse whitespace
-    """
-    if not text:
-        return ""
-    
-    # Convert to lowercase and strip
-    normalized = text.strip().lower()
-    
-    # Remove punctuation
-    normalized = normalized.translate(str.maketrans("", "", string.punctuation))
-    
-    # Collapse multiple spaces into single space
-    normalized = " ".join(normalized.split())
-    
-    return normalized
-
-
-class TerminationPhraseDetected(Exception):
-    """Raised when user utterance matches a termination phrase"""
-    pass
 
 
 class SmallTalkSession:
@@ -67,8 +42,9 @@ class SmallTalkSession:
         stt: GoogleSTTService,
         mic_factory: Callable[[], MicStream],
         deepseek_config: dict,
-        llm_config_path: str,
-        tts_voice_name: str,
+        llm_config_path: Optional[str] = None,
+        llm_config_dict: Optional[dict] = None,
+        tts_voice_name: str = "",
         tts_language_code: str = "en-US",
         system_prompt: Optional[str] = "You are a friendly, concise wellness assistant. Keep responses short unless asked.",
         language_code: str = "en-US",
@@ -86,10 +62,21 @@ class SmallTalkSession:
             model=deepseek_config.get("model", "deepseek-chat"),
         )
 
-        # Load termination phrases from LLM config
-        with open(llm_config_path, "r", encoding="utf-8") as f:
-            llm_cfg = json.load(f)
-        self.termination_phrases = [p.lower() for p in llm_cfg.get("termination_phrases", [])]
+        # Load termination phrases from language config
+        if llm_config_dict is not None:
+            # Use provided dict config (new structure)
+            cfg = llm_config_dict
+        elif llm_config_path and os.path.exists(llm_config_path):
+            # Load from file path (legacy)
+            with open(llm_config_path, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        else:
+            # No config provided, use empty dict
+            cfg = {}
+        
+        # Initialize termination phrase detector
+        phrases = [p.lower() for p in cfg.get("termination_phrases", [])]  # Keep lowercase conversion
+        self.termination_detector = TerminationPhraseDetector(phrases)
 
         # Initialize TTS client
         self.tts = GoogleTTSClient(
@@ -128,38 +115,9 @@ class SmallTalkSession:
 
         return final_text
 
-    def _is_termination_phrase(self, user_text: str) -> bool:
-        """Check if user text contains termination phrases with robust matching"""
-        if not user_text:
-            return False
-            
-        normalized_user = normalize_text(user_text)
-        logger.debug(f"Pipeline: checking termination - user_text='{user_text}' -> normalized='{normalized_user}'")
-        
-        for phrase in self.termination_phrases:
-            normalized_phrase = normalize_text(phrase)
-            logger.debug(f"Pipeline: comparing against phrase='{phrase}' -> normalized='{normalized_phrase}'")
-            
-            # Multiple matching strategies for robustness
-            if (normalized_user == normalized_phrase or 
-                normalized_user.startswith(normalized_phrase + " ") or
-                normalized_phrase in normalized_user):
-                logger.info(f"Pipeline: termination phrase matched! '{phrase}' in '{user_text}'")
-                return True
-                
-        logger.debug(f"Pipeline: no termination phrase matched for '{user_text}'")
-        return False
-
     def check_termination(self, user_text: str):
         """Check and raise exception if termination phrase detected"""
-        logger.info(f"Pipeline: checking termination for user_text='{user_text}'")
-        logger.debug(f"Pipeline: configured termination phrases: {self.termination_phrases}")
-        
-        if self._is_termination_phrase(user_text):
-            logger.info(f"Pipeline: TERMINATION DETECTED! User said: '{user_text}'")
-            raise TerminationPhraseDetected(f"User requested termination: {user_text}")
-        
-        logger.debug(f"Pipeline: no termination detected for '{user_text}'")
+        self.termination_detector.check_termination(user_text)
 
     # ---- LLM streaming + TTS streaming ----
     def _stream_llm_and_tts(self) -> Iterator[bytes]:

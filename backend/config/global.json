@@ -1,0 +1,49 @@
+{
+  "language_codes": {
+    "tts_voice_name": "en-US-Chirp3-HD-Charon",
+    "tts_language_code": "en-US",
+    "stt_language_code": "en-US"
+  },
+  "audio_settings": {
+    "stt_sample_rate": 16000,
+    "tts_sample_rate_hertz": 24000,
+    "tts_num_channels": 1,
+    "tts_sample_width_bytes": 2
+  },
+  "wakeword": {
+    "silence_timeout_seconds": 10,
+    "nudge_timeout_seconds": 15,
+    "stt_timeout_s": 8.0,
+    "use_audio_files": false
+  },
+  "smalltalk": {
+    "silence_timeout_seconds": 30,
+    "nudge_timeout_seconds": 15,
+    "max_turns": 20,
+    "nudge_pre_delay_ms": 200,
+    "nudge_post_delay_ms": 300,
+    "use_audio_files": false
+  },
+  "journal": {
+    "silence_timeout_seconds": 30,
+    "nudge_timeout_seconds": 15,
+    "pause_finalization_seconds": 2.5,
+    "max_duration_seconds": 150,
+    "nudge_pre_delay_ms": 100,
+    "nudge_post_delay_ms": 100,
+    "default_mood": 3,
+    "min_words_threshold": 5,
+    "use_audio_files": false
+  },
+  "gratitude": {
+    "silence_timeout_seconds": 30,
+    "nudge_timeout_seconds": 15,
+    "nudge_pre_delay_ms": 200,
+    "nudge_post_delay_ms": 300,
+    "use_audio_files": false
+  },
+  "meditation": {
+    "meditation_start_delay_seconds": 3.0,
+    "use_audio_files": false
+  }
+}
