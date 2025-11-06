@@ -46,6 +46,8 @@ context:
       - "@feeling hopeless"
       - "@feeling sad"
       - "@request gratitude"
+      - "@request gratitude note"
+      - "@request gratitude entry"
       - "@request gratitude practice"
       - "@request gratitude session"
       - "@request practice gratitude"
@@ -83,6 +85,7 @@ context:
       - Can you help me
       - Can you give me a
       - I want a
+      - I want to make a 
     feeling:
       - i feel like
       - i feel like i have

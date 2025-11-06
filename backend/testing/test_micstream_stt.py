@@ -75,9 +75,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Add backend/src to path for imports
-backend_src_path = os.path.join(os.path.dirname(__file__), '..', 'src')
-sys.path.insert(0, backend_src_path)
+# Add backend directory to path for imports (needed for relative imports in components)
+backend_dir = os.path.join(os.path.dirname(__file__), '..')
+sys.path.insert(0, backend_dir)
 
 # ============================================================================
 # GOOGLE CLOUD CREDENTIALS SETUP
@@ -132,7 +132,7 @@ def test_stt_capture(stt_service):
     logger.info(f"Speak now. Timeout: {CAPTURE_TIMEOUT_SECONDS}s")
     logger.info("=" * 60)
     
-    from components.mic_stream import MicStream
+    from src.components.mic_stream import MicStream
     
     mic = None
     final_transcript = None
@@ -259,7 +259,7 @@ def main():
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_file
         
         # Import STT service
-        from components.stt import GoogleSTTService
+        from src.components.stt import GoogleSTTService
         
         # Initialize STT service
         logger.info("Initializing Google STT service...")

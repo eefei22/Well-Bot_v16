@@ -74,14 +74,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Add backend/src to path for imports
-backend_src_path = os.path.join(os.path.dirname(__file__), '..', 'src')
-sys.path.insert(0, backend_src_path)
+# Add backend directory to path for imports (needed for relative imports in components)
+backend_dir = os.path.join(os.path.dirname(__file__), '..')
+sys.path.insert(0, backend_dir)
 
 # Import components
 try:
-    from components.intent_recognition import IntentRecognition
-    from components.mic_stream import MicStream
+    from src.components.intent_recognition import IntentRecognition
+    from src.components.mic_stream import MicStream
     logger.info("Successfully imported IntentRecognition and MicStream")
 except ImportError as e:
     logger.error(f"Failed to import components: {e}")

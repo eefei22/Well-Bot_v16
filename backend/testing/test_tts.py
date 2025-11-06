@@ -74,9 +74,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Add backend/src to path for imports
-backend_src_path = os.path.join(os.path.dirname(__file__), '..', 'src')
-sys.path.insert(0, backend_src_path)
+# Add backend directory to path for imports (needed for relative imports in components)
+backend_dir = os.path.join(os.path.dirname(__file__), '..')
+sys.path.insert(0, backend_dir)
 
 # ============================================================================
 # GOOGLE CLOUD CREDENTIALS SETUP
@@ -243,7 +243,7 @@ def main():
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_file
         
         # Import TTS client
-        from components.tts import GoogleTTSClient
+        from src.components.tts import GoogleTTSClient
         from google.cloud import texttospeech
         
         # Initialize TTS client

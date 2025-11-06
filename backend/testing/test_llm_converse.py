@@ -69,9 +69,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Add backend/src to path for imports
-backend_src_path = os.path.join(os.path.dirname(__file__), '..', 'src')
-sys.path.insert(0, backend_src_path)
+# Add backend directory to path for imports (needed for relative imports in components)
+backend_dir = os.path.join(os.path.dirname(__file__), '..')
+sys.path.insert(0, backend_dir)
 
 # ============================================================================
 # MAIN TEST FUNCTION
@@ -141,7 +141,7 @@ def main():
     
     try:
         # Import LLM client
-        from components.llm import DeepSeekClient
+        from src.components.llm import DeepSeekClient
         
         # Initialize LLM client
         logger.info("Initializing DeepSeek LLM client...")

@@ -63,13 +63,13 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Add backend/src to path for imports
-backend_src_path = os.path.join(os.path.dirname(__file__), '..', 'src')
-sys.path.insert(0, backend_src_path)
+# Add backend directory to path for imports (needed for relative imports in components)
+backend_dir = os.path.join(os.path.dirname(__file__), '..')
+sys.path.insert(0, backend_dir)
 
 # Import wakeword component
 try:
-    from components.wakeword import WakeWordDetector
+    from src.components.wakeword import WakeWordDetector
     logger.info("Successfully imported WakeWordDetector")
 except ImportError as e:
     logger.error(f"Failed to import WakeWordDetector: {e}")
