@@ -140,8 +140,13 @@ def main():
     llm_client = None
     
     try:
-        # Import LLM client
-        from src.components.llm import DeepSeekClient
+        # Import LLM client directly (bypassing __init__.py to avoid unnecessary dependencies)
+        import importlib.util
+        llm_file_path = os.path.join(backend_dir, 'src', 'components', 'llm.py')
+        spec = importlib.util.spec_from_file_location("llm", llm_file_path)
+        llm_module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(llm_module)
+        DeepSeekClient = llm_module.DeepSeekClient
         
         # Initialize LLM client
         logger.info("Initializing DeepSeek LLM client...")

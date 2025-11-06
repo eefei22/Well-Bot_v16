@@ -29,7 +29,7 @@ ENV_FILE_PATH = os.path.join(os.path.dirname(__file__), '..', '.env')
 
 # Rhino context file path (relative to backend directory)
 RHINO_CONTEXT_PATH = os.path.join(
-    os.path.dirname(__file__), '..', 'config', 'Intent', 'Well-Bot-Commands_en_windows_v3_0_0.rhn'
+    os.path.dirname(__file__), '..', 'config', 'Intent', 'Well-Bot-Commands_en_raspberry-pi_v3_0_0.rhn'
 )
 
 # Rhino settings
