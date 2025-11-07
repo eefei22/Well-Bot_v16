@@ -27,7 +27,7 @@ ENV_FILE_PATH = os.path.join(os.path.dirname(__file__), '..', '.env')
 
 # Wakeword model file path (relative to backend directory)
 WAKEWORD_MODEL_PATH = os.path.join(
-    os.path.dirname(__file__), '..', 'config', 'WakeWord', 'WellBot_WakeWordModel.ppn'
+    os.path.dirname(__file__), '..', 'config', 'WakeWord', 'WellBot_WakeWordModel_ARM.ppn'
 )
 
 # Output directory for logs and results
@@ -67,9 +67,20 @@ logger = logging.getLogger(__name__)
 backend_dir = os.path.join(os.path.dirname(__file__), '..')
 sys.path.insert(0, backend_dir)
 
-# Import wakeword component
 try:
-    from src.components.wakeword import WakeWordDetector
+    import importlib.util
+    wakeword_file_path = os.path.join(backend_dir, 'src', 'components', 'wakeword.py')
+    spec = importlib.util.spec_from_file_location("src.components.wakeword", wakeword_file_path)
+    wakeword_module = importlib.util.module_from_spec(spec)
+    # Set package context for relative imports to work
+    wakeword_module.__package__ = 'src.components'
+    wakeword_module.__name__ = 'src.components.wakeword'
+    # Add to sys.modules so relative imports can resolve
+    if 'src.components' not in sys.modules:
+        sys.modules['src.components'] = type(sys)('src.components')
+    sys.modules['src.components.wakeword'] = wakeword_module
+    spec.loader.exec_module(wakeword_module)
+    WakeWordDetector = wakeword_module.WakeWordDetector
     logger.info("Successfully imported WakeWordDetector")
 except ImportError as e:
     logger.error(f"Failed to import WakeWordDetector: {e}")

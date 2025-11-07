@@ -4,6 +4,7 @@
 archive/
 
 
+backend/testing/output/
 # Python
 __pycache__/
 *.py[cod]
