@@ -132,7 +132,21 @@ def test_stt_capture(stt_service):
     logger.info(f"Speak now. Timeout: {CAPTURE_TIMEOUT_SECONDS}s")
     logger.info("=" * 60)
     
-    from src.components.mic_stream import MicStream
+    # Import MicStream directly (bypassing __init__.py)
+    import importlib.util
+    import sys
+    mic_file_path = os.path.join(backend_dir, 'src', 'components', 'mic_stream.py')
+    spec = importlib.util.spec_from_file_location("src.components.mic_stream", mic_file_path)
+    mic_module = importlib.util.module_from_spec(spec)
+    # Set package context for relative imports to work
+    mic_module.__package__ = 'src.components'
+    mic_module.__name__ = 'src.components.mic_stream'
+    # Add to sys.modules so relative imports can resolve
+    sys.modules['src.components.mic_stream'] = mic_module
+    if 'src.components' not in sys.modules:
+        sys.modules['src.components'] = type(sys)('src.components')
+    spec.loader.exec_module(mic_module)
+    MicStream = mic_module.MicStream
     
     mic = None
     final_transcript = None
@@ -258,8 +272,38 @@ def main():
         credentials_file = create_google_credentials_file()
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_file
         
-        # Import STT service
-        from src.components.stt import GoogleSTTService
+        # Import STT service directly (bypassing __init__.py to avoid unnecessary dependencies)
+        import importlib.util
+        import sys
+        import types
+        
+        # Set up package structure in sys.modules for relative imports
+        if 'src' not in sys.modules:
+            sys.modules['src'] = types.ModuleType('src')
+        if 'src.components' not in sys.modules:
+            sys.modules['src.components'] = types.ModuleType('src.components')
+        if 'src.utils' not in sys.modules:
+            sys.modules['src.utils'] = types.ModuleType('src.utils')
+        
+        # Import utils.config_loader first (needed by stt.py)
+        utils_file_path = os.path.join(backend_dir, 'src', 'utils', 'config_loader.py')
+        utils_spec = importlib.util.spec_from_file_location("src.utils.config_loader", utils_file_path)
+        utils_module = importlib.util.module_from_spec(utils_spec)
+        utils_module.__package__ = 'src.utils'
+        utils_module.__name__ = 'src.utils.config_loader'
+        sys.modules['src.utils.config_loader'] = utils_module
+        utils_spec.loader.exec_module(utils_module)
+        
+        # Now import STT service
+        stt_file_path = os.path.join(backend_dir, 'src', 'components', 'stt.py')
+        spec = importlib.util.spec_from_file_location("src.components.stt", stt_file_path)
+        stt_module = importlib.util.module_from_spec(spec)
+        # Set package context for relative imports to work
+        stt_module.__package__ = 'src.components'
+        stt_module.__name__ = 'src.components.stt'
+        sys.modules['src.components.stt'] = stt_module
+        spec.loader.exec_module(stt_module)
+        GoogleSTTService = stt_module.GoogleSTTService
         
         # Initialize STT service
         logger.info("Initializing Google STT service...")

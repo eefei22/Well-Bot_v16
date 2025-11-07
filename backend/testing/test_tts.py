@@ -242,8 +242,21 @@ def main():
         credentials_file = create_google_credentials_file()
         os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_file
         
-        # Import TTS client
-        from src.components.tts import GoogleTTSClient
+        # Import TTS client directly (bypassing __init__.py to avoid unnecessary dependencies)
+        import importlib.util
+        import sys
+        tts_file_path = os.path.join(backend_dir, 'src', 'components', 'tts.py')
+        spec = importlib.util.spec_from_file_location("src.components.tts", tts_file_path)
+        tts_module = importlib.util.module_from_spec(spec)
+        # Set package context for relative imports to work
+        tts_module.__package__ = 'src.components'
+        tts_module.__name__ = 'src.components.tts'
+        # Add to sys.modules so relative imports can resolve
+        if 'src.components' not in sys.modules:
+            sys.modules['src.components'] = type(sys)('src.components')
+        sys.modules['src.components.tts'] = tts_module
+        spec.loader.exec_module(tts_module)
+        GoogleTTSClient = tts_module.GoogleTTSClient
         from google.cloud import texttospeech
         
         # Initialize TTS client
