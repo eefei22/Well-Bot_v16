@@ -21,12 +21,16 @@ import string
 backend_dir = Path(__file__).parent.parent.parent
 sys.path.append(str(backend_dir))
 
-from src.components.stt import GoogleSTTService
-from src.components.mic_stream import MicStream
-from src.components.conversation_audio_manager import ConversationAudioManager
-from src.components.tts import GoogleTTSClient
-from src.components.termination_phrase import TerminationPhraseDetector, TerminationPhraseDetected
-from src.supabase.database import upsert_journal, DEV_USER_ID
+# Use lazy imports from __init__.py to prevent cascade import issues
+from src.components import (
+    GoogleSTTService,
+    MicStream,
+    ConversationAudioManager,
+    GoogleTTSClient,
+    TerminationPhraseDetector,
+    TerminationPhraseDetected
+)
+from src.supabase.database import upsert_journal
 from src.utils.config_resolver import get_global_config_for_user, get_language_config
 from src.supabase.auth import get_current_user_id
 from google.cloud import texttospeech
@@ -58,6 +62,7 @@ class JournalActivity:
         self.state = "INIT"
         self._active = False
         self._initialized = False
+        self._activity_log_id: Optional[str] = None  # Track log ID for completion
         
         # Paragraph buffering
         self.buffers: List[str] = []
@@ -159,6 +164,10 @@ class JournalActivity:
             traceback.print_exc()
             return False
     
+    def set_activity_log_id(self, log_id: Optional[str]):
+        """Set the activity log ID for completion tracking."""
+        self._activity_log_id = log_id
+    
     def start(self):
         """Start the journal session"""
         if not self._initialized:
@@ -168,6 +177,7 @@ class JournalActivity:
         self._active = True
         logger.info("Starting journal session...")
         
+        completed = False
         try:
             # State: PROMPT_START
             self._prompt_start()
@@ -178,7 +188,8 @@ class JournalActivity:
             # Auto-save if we have content (normal completion)
             if not self._termination_detected and self._has_content():
                 self.state = "SAVING"
-                self._save()
+                if self._save():
+                    completed = True
             
             self.state = "DONE"
             logger.info("Journal session completed successfully")
@@ -191,24 +202,36 @@ class JournalActivity:
             if has_content:
                 logger.info("Content validated, proceeding to save...")
                 self.state = "SAVING"
-                self._save()
+                if self._save():
+                    completed = True
             else:
                 logger.warning("No content to save (below word threshold or empty)")
+                completed = False
         except KeyboardInterrupt:
             logger.info("Journal session interrupted by user")
             if self._has_content():
                 self.state = "SAVING"
-                self._save()
+                if self._save():
+                    completed = True
+            else:
+                completed = False
         except Exception as e:
             logger.error(f"Error during journal session: {e}")
             import traceback
             traceback.print_exc()
+            completed = False
         finally:
             # If terminated by timeout, save before cleanup (only if not already saved)
             if self._termination_detected and not self._saved and self._has_content():
                 logger.info("Saving accumulated content after timeout termination")
                 self.state = "SAVING"
-                self._save()
+                if self._save():
+                    completed = True
+            
+            # Log completion status
+            if self._activity_log_id:
+                log_activity_completion(self._activity_log_id, completed)
+            
             self._cleanup()
     
     def _prompt_start(self):
@@ -372,12 +395,12 @@ class JournalActivity:
             logger.debug(f"_has_content (non-Chinese): {word_count} words, threshold: {threshold}")
             return word_count >= threshold
     
-    def _save(self):
+    def _save(self) -> bool:
         """Save journal entry to database"""
         # Prevent duplicate saves
         if self._saved:
             logger.info("Journal already saved, skipping duplicate save")
-            return
+            return True
         
         logger.info("Saving journal entry to database...")
         logger.info(f"Current state - buffers count: {len(self.buffers)}, current_buffer: '{self.current_buffer[:50]}...'")
@@ -389,7 +412,7 @@ class JournalActivity:
         if not self.buffers:
             logger.warning("No content to save - buffers are empty")
             logger.warning(f"current_buffer was: '{self.current_buffer}'")
-            return
+            return False
         
         body = "\n\n".join(self.buffers).strip()
         
@@ -438,11 +461,13 @@ class JournalActivity:
                 confirmation = f"Journal entry saved with {word_count} words."
             
             self._speak(confirmation)
+            return True
             
         except Exception as e:
             logger.error(f"Failed to save journal entry: {e}")
             import traceback
             traceback.print_exc()
+            return False
     
     def _generate_title(self) -> str:
         """Generate default title from timestamp"""

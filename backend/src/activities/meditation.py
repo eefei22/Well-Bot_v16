@@ -21,6 +21,7 @@ from src.components.intent_recognition import IntentRecognition
 from src.utils.config_loader import RHINO_ACCESS_KEY
 from src.utils.config_resolver import get_global_config_for_user, get_language_config, resolve_language
 from src.supabase.auth import get_current_user_id
+from src.supabase.database import log_activity_completion
 from src.activities.smalltalk import SmallTalkActivity
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,7 @@ class MeditationActivity:
         # State
         self._initialized = False
         self._active = False
+        self._activity_log_id: Optional[str] = None  # Track log ID for completion
         
         # Threading for parallel playback and listening
         self._audio_playback_thread: Optional[threading.Thread] = None
@@ -286,6 +288,10 @@ class MeditationActivity:
         pcm = self.tts.stream_synthesize(gen())
         self.audio_manager.play_tts_stream(pcm)
 
+    def set_activity_log_id(self, log_id: Optional[str]):
+        """Set the activity log ID for completion tracking."""
+        self._activity_log_id = log_id
+
     def run(self) -> bool:
         if not self._initialized:
             logger.error("Meditation activity not initialized")
@@ -384,6 +390,7 @@ class MeditationActivity:
 
             # Determine completion status
             was_completed = self._meditation_completed and not self._termination_detected.is_set()
+            completed = was_completed
             
             # Transition to SmallTalk with contextual prompts
             logger.info(f"Meditation cleanup complete. Transitioning to SmallTalk (completed={was_completed})...")
@@ -422,8 +429,13 @@ class MeditationActivity:
             
         except Exception as e:
             logger.error(f"Meditation activity error: {e}", exc_info=True)
+            completed = False
             return False
         finally:
+            # Log completion status
+            if self._activity_log_id:
+                log_activity_completion(self._activity_log_id, completed)
+            
             self._active = False
 
     def cleanup(self):

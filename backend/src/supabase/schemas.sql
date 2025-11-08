@@ -80,15 +80,21 @@ CREATE TABLE public.users (
   CONSTRAINT users_pkey PRIMARY KEY (id),
   CONSTRAINT users_device_id_fkey FOREIGN KEY (device_id) REFERENCES public.devices(id)
 );
-CREATE TABLE public.wb_activity_event (
+CREATE TABLE public.users_context_bundle (
+  user_id uuid NOT NULL,
+  version_ts timestamp with time zone NOT NULL DEFAULT now(),
+  persona_summary text,
+  last_session_summary text,
+  facts text,
+  CONSTRAINT users_context_bundle_pkey PRIMARY KEY (user_id)
+);
+CREATE TABLE public.wb_activity_logs (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL,
   type text NOT NULL CHECK (type = ANY (ARRAY['journal'::text, 'gratitude'::text, 'todo'::text, 'meditation'::text, 'quote'::text])),
-  ref_id uuid,
-  action text NOT NULL,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
-  CONSTRAINT wb_activity_event_pkey PRIMARY KEY (id),
-  CONSTRAINT wb_activity_event_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+  CONSTRAINT wb_activity_logs_pkey PRIMARY KEY (id),
+  CONSTRAINT wb_activity_event_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
 );
 CREATE TABLE public.wb_conversation (
   id uuid NOT NULL DEFAULT gen_random_uuid(),

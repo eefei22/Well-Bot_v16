@@ -35,6 +35,7 @@ from src.activities.meditation import MeditationActivity
 from src.activities.gratitude import GratitudeActivity
 from src.utils.config_resolver import get_global_config_for_user, resolve_language
 from src.supabase.auth import get_current_user_id
+from src.supabase.database import log_activity_start
 
 # Configure logging
 logging.basicConfig(
@@ -92,6 +93,7 @@ class WellBotOrchestrator:
 
         self.current_activity: Optional[str] = None
         self._activity_thread: Optional[threading.Thread] = None
+        self._current_activity_log_id: Optional[str] = None  # Track log ID for completion
 
         logger.info("WellBotOrchestrator initialized")
 
@@ -246,6 +248,29 @@ class WellBotOrchestrator:
         """Route the user to proper activity based on intent."""
         logger.info(f"🔄 Routing to activity: {intent}")
 
+        # Map intent to activity type for logging
+        intent_to_activity_type = {
+            "smalltalk": None,  # Smalltalk is not logged as an activity
+            "journaling": "journal",
+            "meditation": "meditation",
+            "quote": "quote",
+            "gratitude": "gratitude",
+            "termination": None,
+        }
+        
+        activity_type = intent_to_activity_type.get(intent)
+        
+        # Log activity start if it's a trackable activity
+        if activity_type:
+            log_id = log_activity_start(
+                user_id=self.user_id,
+                activity_type=activity_type,
+                trigger_type="direct_command"
+            )
+            self._current_activity_log_id = log_id
+        else:
+            self._current_activity_log_id = None
+
         if intent == "smalltalk":
             self._start_smalltalk_activity()
         elif intent == "journaling":
@@ -332,6 +357,10 @@ class WellBotOrchestrator:
                     logger.error("❌ SmallTalk activity is None - cannot run")
                     return
                 
+                # Pass log_id to activity for completion tracking
+                if hasattr(self.smalltalk_activity, 'set_activity_log_id'):
+                    self.smalltalk_activity.set_activity_log_id(self._current_activity_log_id)
+                
                 success = self.smalltalk_activity.run()
                 if success:
                     logger.info("✅ SmallTalk activity completed successfully")
@@ -356,6 +385,9 @@ class WellBotOrchestrator:
                             
                     except Exception as e:
                         logger.warning(f"Error during activity cleanup/reinit: {e}")
+                
+                # Clear log ID
+                self._current_activity_log_id = None
                 
                 # When activity ends, restart wake word detection
                 self._restart_wakeword_detection()
@@ -673,6 +705,10 @@ class WellBotOrchestrator:
                     logger.error("❌ Journal activity is None - cannot run")
                     return
                 
+                # Pass log_id to activity for completion tracking
+                if hasattr(self.journal_activity, 'set_activity_log_id'):
+                    self.journal_activity.set_activity_log_id(self._current_activity_log_id)
+                
                 success = self.journal_activity.run()
                 if success:
                     logger.info("✅ Journal activity completed successfully")
@@ -697,6 +733,9 @@ class WellBotOrchestrator:
                             
                     except Exception as e:
                         logger.warning(f"Error during activity cleanup/reinit: {e}")
+                
+                # Clear log ID
+                self._current_activity_log_id = None
                 
                 # When activity ends, restart wake word detection
                 self._restart_wakeword_detection()
@@ -738,6 +777,11 @@ class WellBotOrchestrator:
                 if self.spiritual_quote_activity is None:
                     logger.error("❌ Spiritual Quote activity is None - cannot run")
                     return
+                
+                # Pass log_id to activity for completion tracking
+                if hasattr(self.spiritual_quote_activity, 'set_activity_log_id'):
+                    self.spiritual_quote_activity.set_activity_log_id(self._current_activity_log_id)
+                
                 ok = self.spiritual_quote_activity.run()
                 if ok:
                     logger.info("✅ Spiritual Quote activity completed")
@@ -746,6 +790,9 @@ class WellBotOrchestrator:
             except Exception as e:
                 logger.error(f"Error in Spiritual Quote activity: {e}", exc_info=True)
             finally:
+                # Clear log ID
+                self._current_activity_log_id = None
+                
                 # Re-initialize for next run
                 try:
                     self.spiritual_quote_activity = SpiritualQuoteActivity(backend_dir=self.backend_dir, user_id=self.user_id)
@@ -792,6 +839,11 @@ class WellBotOrchestrator:
                 if self.gratitude_activity is None:
                     logger.error("❌ Gratitude activity is None - cannot run")
                     return
+                
+                # Pass log_id to activity for completion tracking
+                if hasattr(self.gratitude_activity, 'set_activity_log_id'):
+                    self.gratitude_activity.set_activity_log_id(self._current_activity_log_id)
+                
                 ok = self.gratitude_activity.run()
                 if ok:
                     logger.info("✅ Gratitude activity completed")
@@ -800,6 +852,9 @@ class WellBotOrchestrator:
             except Exception as e:
                 logger.error(f"Error in Gratitude activity: {e}", exc_info=True)
             finally:
+                # Clear log ID
+                self._current_activity_log_id = None
+                
                 # Re-initialize for next run
                 try:
                     self.gratitude_activity = GratitudeActivity(backend_dir=self.backend_dir, user_id=self.user_id)
@@ -846,6 +901,11 @@ class WellBotOrchestrator:
                 if self.meditation_activity is None:
                     logger.error("❌ Meditation activity is None - cannot run")
                     return
+                
+                # Pass log_id to activity for completion tracking
+                if hasattr(self.meditation_activity, 'set_activity_log_id'):
+                    self.meditation_activity.set_activity_log_id(self._current_activity_log_id)
+                
                 ok = self.meditation_activity.run()
                 if ok:
                     logger.info("✅ Meditation activity completed")
@@ -854,6 +914,9 @@ class WellBotOrchestrator:
             except Exception as e:
                 logger.error(f"Error in Meditation activity: {e}", exc_info=True)
             finally:
+                # Clear log ID
+                self._current_activity_log_id = None
+                
                 # Re-initialize for next run
                 try:
                     self.meditation_activity = MeditationActivity(backend_dir=self.backend_dir, user_id=self.user_id)

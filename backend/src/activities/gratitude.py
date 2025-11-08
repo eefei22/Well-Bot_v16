@@ -19,7 +19,7 @@ from src.components.tts import GoogleTTSClient
 from src.components.termination_phrase import TerminationPhraseDetector, TerminationPhraseDetected
 from src.utils.config_resolver import get_global_config_for_user, get_language_config
 from src.supabase.auth import get_current_user_id
-from src.supabase.database import save_gratitude_item
+from src.supabase.database import save_gratitude_item, log_activity_completion
 from src.activities.smalltalk import SmallTalkActivity
 
 logger = logging.getLogger(__name__)
@@ -43,6 +43,7 @@ class GratitudeActivity:
         self.gratitude_config = None
         self._initialized = False
         self._active = False
+        self._activity_log_id: Optional[str] = None  # Track log ID for completion
         
         # Recording state
         self.gratitude_text = ""
@@ -259,11 +260,16 @@ class GratitudeActivity:
         if self.audio_manager:
             self.audio_manager.stop_silence_monitoring()
 
+    def set_activity_log_id(self, log_id: Optional[str]):
+        """Set the activity log ID for completion tracking."""
+        self._activity_log_id = log_id
+
     def run(self) -> bool:
         if not self._initialized:
             logger.error("Gratitude activity not initialized")
             return False
 
+        completed = False
         try:
             self._active = True
             self._termination_detected = False
@@ -278,6 +284,7 @@ class GratitudeActivity:
                 logger.error(f"Error during gratitude recording: {e}", exc_info=True)
                 recording_error = prompts.get("recording_error", "I'm sorry, I had trouble recording your gratitude note.")
                 self._speak(recording_error)
+                completed = False
                 return False
 
             # Validate we have content
@@ -285,16 +292,19 @@ class GratitudeActivity:
                 logger.warning("No gratitude text recorded")
                 no_content = prompts.get("no_content", "I didn't catch that. Let's try again another time.")
                 self._speak(no_content)
+                completed = False
                 return True
 
             # 2) Save to database
             try:
                 result = save_gratitude_item(self.user_id, self.gratitude_text)
                 logger.info(f"Gratitude item saved successfully: {result.get('id')}")
+                completed = True
             except Exception as e:
                 logger.error(f"Failed to save gratitude item: {e}", exc_info=True)
                 save_error = prompts.get("save_error", "I had trouble saving your gratitude note, but I heard what you said.")
                 self._speak(save_error)
+                completed = False
                 # Continue to smalltalk anyway
 
             # 3) Confirm save with TTS
@@ -322,8 +332,13 @@ class GratitudeActivity:
             return ok
         except Exception as e:
             logger.error(f"Gratitude activity error: {e}", exc_info=True)
+            completed = False
             return False
         finally:
+            # Log completion status
+            if self._activity_log_id:
+                log_activity_completion(self._activity_log_id, completed)
+            
             self._active = False
 
     def cleanup(self):
