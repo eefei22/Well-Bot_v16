@@ -35,6 +35,7 @@ This project provides Docker and Docker Compose configurations to run the Python
 - For environment-specific configuration, use a `.env` file and reference it in the compose file.
 
 ---
+```
 
 Well-Bot_v16/
 ├── 📄 compose.yaml                    # Docker Compose configuration
@@ -84,3 +85,5 @@ Well-Bot_v16/
        ├── 📄 test_complete_fixes.py     # Comprehensive tests
        ├── 📄 test_tts.py                # TTS testing
        └── 📄 websocket.py               # WebSocket testing
+
+```

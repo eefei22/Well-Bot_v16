@@ -20,13 +20,6 @@ except ImportError:
     PYDUB_AVAILABLE = False
     logging.warning("pydub not available - will use PowerShell fallback for audio")
 
-try:
-    from playsound import playsound
-    PLAYSOUND_AVAILABLE = True
-except ImportError:
-    playsound = None
-    PLAYSOUND_AVAILABLE = False
-    logging.warning("playsound not available - using alternative audio methods")
 
 # Add the backend directory to the path to import modules
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -174,18 +167,6 @@ class VoicePipeline:
                     logger.warning(f"PowerShell playback failed: {result.stderr}")
             except Exception as e:
                 logger.warning(f"PowerShell playback error: {e}")
-
-        # Method 3: Try playsound as last resort (with path normalization)
-        if PLAYSOUND_AVAILABLE:
-            try:
-                logger.debug(f"Playing audio with playsound: {audio_path}")
-                # Normalize the path to use consistent separators
-                normalized_path = os.path.normpath(audio_path)
-                playsound(normalized_path)
-                logger.debug("Audio played successfully with playsound")
-                return True
-            except Exception as e:
-                logger.warning(f"playsound playback failed: {e}")
 
         logger.error(f"All audio playback methods failed for: {audio_path}")
         return False

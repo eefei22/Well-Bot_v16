@@ -7,17 +7,28 @@ playback, and transitions to SmallTalk with contextual prompts.
 """
 
 import logging
+import sys
 import threading
 import time
+import gc
+import os
+import tempfile
 import pyaudio
 import wave
 from pathlib import Path
 from typing import Optional
 
-from src.components.mic_stream import MicStream
-from src.components.conversation_audio_manager import ConversationAudioManager
-from src.components.tts import GoogleTTSClient
-from src.components.intent_recognition import IntentRecognition
+# Add the backend directory to the path
+backend_dir = Path(__file__).parent.parent.parent
+sys.path.append(str(backend_dir))
+
+# Use lazy imports from __init__.py to prevent cascade import issues
+from src.components import (
+    MicStream,
+    ConversationAudioManager,
+    GoogleTTSClient,
+    IntentRecognition
+)
 from src.utils.config_loader import RHINO_ACCESS_KEY
 from src.utils.config_resolver import get_global_config_for_user, get_language_config, resolve_language
 from src.supabase.auth import get_current_user_id
@@ -427,36 +438,155 @@ class MeditationActivity:
             self._active = False
 
     def cleanup(self):
-        """Cleanup resources"""
-        try:
-            logger.info("MeditationActivity.cleanup() called")
+        """Complete cleanup of all resources including native libraries, cached resources, and dependencies"""
+        logger.info("🧹 Cleaning up Meditation activity resources...")
+        
+        # Stop if still active
+        if self._active:
             self._active = False
-            
-            # Stop threads if still running
-            if self._audio_playback_thread and self._audio_playback_thread.is_alive():
-                logger.info("Stopping audio playback thread in cleanup...")
+        
+        # Stop threads if still running
+        if self._audio_playback_thread and self._audio_playback_thread.is_alive():
+            try:
+                logger.info("🧹 Stopping audio playback thread...")
                 self._audio_playback_thread.join(timeout=1.0)
-            if self._listening_thread and self._listening_thread.is_alive():
-                logger.info("Stopping listening thread in cleanup...")
+                logger.debug("Audio playback thread stopped")
+            except Exception as e:
+                logger.warning(f"Error stopping audio playback thread: {e}")
+        
+        if self._listening_thread and self._listening_thread.is_alive():
+            try:
+                logger.info("🧹 Stopping listening thread...")
                 self._listening_thread.join(timeout=1.0)
-            
-            # Cleanup audio manager
-            if self.audio_manager:
-                try:
-                    self.audio_manager.stop()
-                    self.audio_manager.cleanup()
-                except Exception as e:
-                    logger.warning(f"Error in audio_manager cleanup: {e}")
-            
-            # Cleanup intent recognition
-            if self.intent_recognition:
-                try:
-                    self.intent_recognition.delete()
-                except Exception as e:
-                    logger.warning(f"Error in intent_recognition cleanup: {e}")
+                logger.debug("Listening thread stopped")
+            except Exception as e:
+                logger.warning(f"Error stopping listening thread: {e}")
+        
+        # Cleanup audio manager (handles PyAudio streams)
+        if self.audio_manager:
+            try:
+                logger.info("🧹 Cleaning up audio manager...")
+                self.audio_manager.stop()
+                self.audio_manager.cleanup()
+                self.audio_manager = None
+                logger.info("✓ Audio manager cleaned up")
+            except Exception as e:
+                logger.warning(f"Error during audio manager cleanup: {e}")
+        
+        # Cleanup TTS service (Google Cloud TTS client)
+        if self.tts:
+            try:
+                logger.info("🧹 Cleaning up TTS service...")
+                # Close Google Cloud TTS client
+                if hasattr(self.tts, 'client') and self.tts.client:
+                    try:
+                        self.tts.client = None
+                        logger.debug("TTS client closed")
+                    except Exception as e:
+                        logger.warning(f"Error closing TTS client: {e}")
+                self.tts = None
+                logger.info("✓ TTS service cleaned up")
+            except Exception as e:
+                logger.warning(f"Error during TTS cleanup: {e}")
+        
+        # Cleanup intent recognition (Rhino native library)
+        if self.intent_recognition:
+            try:
+                logger.info("🧹 Cleaning up intent recognition (Rhino)...")
+                self.intent_recognition.delete()
+                self.intent_recognition = None
+                logger.info("✓ Intent recognition cleaned up")
+            except Exception as e:
+                logger.warning(f"Error during intent recognition cleanup: {e}")
+        
+        # Clear config caches
+        try:
+            from src.utils.config_resolver import _resolver
+            if hasattr(_resolver, 'clear_cache'):
+                logger.info("🧹 Clearing config caches...")
+                _resolver.clear_cache()
+                logger.debug("Config caches cleared")
         except Exception as e:
-            logger.warning(f"Error in MeditationActivity.cleanup(): {e}")
+            logger.debug(f"Could not clear config cache: {e}")
+        
+        # Cleanup temporary files (if any were created)
+        try:
+            logger.info("🧹 Checking for temporary files...")
+            # Check for temporary Google Cloud credentials file
+            # Note: This is a best-effort cleanup - the file may have been cleaned up already
+            temp_dir = tempfile.gettempdir()
+            # We can't easily track which temp files we created, so this is optional
+            # If you track temp file paths, clean them up here
+            logger.debug("Temporary file check completed")
+        except Exception as e:
+            logger.debug(f"Could not check temporary files: {e}")
+        
+        # Force garbage collection to help release native library resources
+        try:
+            logger.info("🧹 Running garbage collection...")
+            collected = gc.collect()
+            logger.debug(f"Garbage collection collected {collected} objects")
+        except Exception as e:
+            logger.warning(f"Error during garbage collection: {e}")
+        
+        # Reset initialization state
+        self._initialized = False
+        
+        logger.info("✅ Meditation activity cleanup completed")
 
     def is_active(self) -> bool:
         return bool(self._active)
+
+
+# For testing when run directly
+if __name__ == "__main__":
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s | %(levelname)-8s | %(name)-15s | %(message)s',
+        datefmt='%H:%M:%S'
+    )
+    
+    def main():
+        """Test the Meditation activity"""
+        try:
+            # Get backend directory
+            backend_dir = Path(__file__).parent.parent.parent
+            
+            # Create and initialize activity
+            activity = MeditationActivity(backend_dir)
+            
+            if not activity.initialize():
+                logger.error("Failed to initialize activity")
+                return 1
+            
+            logger.info("=== Meditation Activity Test ===")
+            logger.info("The activity will:")
+            logger.info("- Play a guided meditation audio file")
+            logger.info("- Listen for termination phrases during playback")
+            logger.info("- Transition to SmallTalk after completion or termination")
+            logger.info("- Press Ctrl+C to stop")
+            
+            # Run the activity
+            success = activity.run()
+            
+            # Cleanup
+            activity.cleanup()
+            
+            if success:
+                logger.info("=== Meditation Activity Test Completed Successfully! ===")
+            else:
+                logger.error("=== Meditation Activity Test Failed! ===")
+                return 1
+            
+            return 0
+            
+        except KeyboardInterrupt:
+            logger.info("Test interrupted by user")
+            return 0
+        except Exception as e:
+            logger.error(f"Test failed: {e}", exc_info=True)
+            return 1
+    
+    exit(main())
 

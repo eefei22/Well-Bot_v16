@@ -1,30 +1,48 @@
 # syntax=docker/dockerfile:1
-ARG PY_VER=3.11
-FROM python:${PY_VER}-slim
 
-ENV PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
-
-# --- Install required system libs for audio, mic, and ffmpeg ---
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libportaudio2 portaudio19-dev libasound2 libsndfile1 ffmpeg \
-    build-essential pkg-config \
-  && rm -rf /var/lib/apt/lists/*
+FROM python:3.12-slim AS base
 
 WORKDIR /app
 
-# --- Copy and install Python dependencies ---
-COPY backend/requirements.txt ./requirements.txt
-RUN pip install --upgrade pip setuptools wheel && \
-    pip install -r requirements.txt
+# Install system dependencies for audio processing
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    portaudio19-dev \
+    libasound2-dev \
+    libsndfile1 \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
 
-# --- Copy backend source code ---
-COPY backend /app/backend
+# Dependencies stage - install Python packages
+FROM base AS deps
+COPY backend/requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
-# --- Create non-root user (optional but good practice) ---
-RUN useradd -m app && chown -R app:app /app
-USER app
+# Final stage
+FROM base AS final
 
-EXPOSE 8000
+# Copy installed dependencies from deps stage
+COPY --from=deps /usr/local/lib/python3.12/site-packages /usr/local/lib/python3.12/site-packages
+COPY --from=deps /usr/local/bin /usr/local/bin
 
-# --- Launch the application ---
-CMD ["python", "backend/main.py"]
+# Create non-privileged user
+ARG UID=10001
+RUN groupadd -r appuser && useradd -r -u "${UID}" -g appuser appuser
+
+# Copy backend code (includes all config files)
+COPY backend/ /app/backend/
+
+# Handle architecture-specific wake word model
+ARG TARGETARCH=amd64
+RUN if [ "$TARGETARCH" = "arm64" ]; then \
+        cp /app/backend/config/WakeWord/WellBot_WakeWordModel_ARM.ppn /app/backend/config/WakeWord/WellBot_WakeWordModel.ppn; \
+    fi && \
+    rm -f /app/backend/config/WakeWord/WellBot_WakeWordModel_ARM.ppn && \
+    chown -R appuser:appuser /app
+
+USER appuser
+
+WORKDIR /app/backend
+
+ENTRYPOINT ["python", "main.py"]
