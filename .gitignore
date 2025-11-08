@@ -74,6 +74,9 @@ Thumbs.db
 *.log
 logs/
 
+# Testing output
+backend/testing/output/
+
 # Temporary files
 *.tmp
 *.temp

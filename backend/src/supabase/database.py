@@ -1,5 +1,6 @@
 from typing import Optional, Dict, Any, List
 from .client import get_supabase, fetch_user_by_id
+from .auth import get_current_user_id
 import logging
 import random
 import json
@@ -9,7 +10,8 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 # If you're running everything locally now, hardcode your dev user_id here:
-DEV_USER_ID = "8517c97f-66ef-4955-86ed-531013d33d3e"
+# NOTE: This constant is deprecated. Use get_current_user_id() instead.
+# DEV_USER_ID = "8517c97f-66ef-4955-86ed-531013d33d3e"
 
 sb = get_supabase(service=True)
 
@@ -29,11 +31,27 @@ def get_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
     """Get full user record by ID."""
     return fetch_user_by_id(user_id)
 
-def start_conversation(user_id: str = DEV_USER_ID, title: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> str:
+def start_conversation(user_id: Optional[str] = None, title: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> str:
+    """
+    Start a new conversation.
+    
+    Args:
+        user_id: User ID. If None, will use get_current_user_id() to read from environment variable.
+        title: Optional conversation title
+        metadata: Optional metadata dictionary
+        
+    Returns:
+        Conversation ID
+    """
+    if user_id is None:
+        user_id = get_current_user_id()
+        logger.info(f"Using user_id from environment: {user_id}")
+    
     data = {
         "user_id": user_id
     }
     res = sb.table("wb_conversation").insert(data).execute()
+    logger.info(f"Started conversation {res.data[0]['id']} for user {user_id}")
     return res.data[0]["id"]
 
 def end_conversation(conversation_id: str):
@@ -51,7 +69,21 @@ def add_message(conversation_id: str, role: str, content: str, *, tokens: Option
     res = sb.table("wb_message").insert(rec).execute()
     return res.data[0]["id"]
 
-def list_conversations(limit: int = 20, user_id: str = DEV_USER_ID) -> List[Dict[str, Any]]:
+def list_conversations(limit: int = 20, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    List conversations for a user.
+    
+    Args:
+        limit: Maximum number of conversations to return
+        user_id: User ID. If None, will use get_current_user_id() to read from environment variable.
+        
+    Returns:
+        List of conversation dictionaries
+    """
+    if user_id is None:
+        user_id = get_current_user_id()
+        logger.info(f"Using user_id from environment: {user_id}")
+    
     res = sb.table("wb_conversation").select("*").eq("user_id", user_id).order("started_at", desc=True).limit(limit).execute()
     return res.data
 
@@ -202,9 +234,52 @@ def mark_quote_seen(user_id: str, quote_id: str) -> bool:
 
 # ---------- User Context Bundle helpers ----------
 
+def get_user_context_bundle(user_id: str) -> Optional[Dict[str, str]]:
+    """
+    Fetch user's context bundle (persona_summary and facts) from users_context_bundle table.
+    
+    Args:
+        user_id: User UUID
+        
+    Returns:
+        Dictionary with 'persona_summary' and 'facts' keys, or None if not found
+    """
+    try:
+        response = sb.table("users_context_bundle")\
+            .select("persona_summary, facts")\
+            .eq("user_id", user_id)\
+            .limit(1)\
+            .execute()
+        
+        if response.data and len(response.data) > 0:
+            data = response.data[0]
+            persona_summary = data.get("persona_summary")
+            facts = data.get("facts")
+            
+            # Return dict even if fields are None/empty
+            result = {
+                "persona_summary": persona_summary if persona_summary else None,
+                "facts": facts if facts else None
+            }
+            
+            if persona_summary or facts:
+                logger.info(f"Found context bundle for user {user_id} (persona_summary: {bool(persona_summary)}, facts: {bool(facts)})")
+                return result
+            else:
+                logger.info(f"Context bundle found for user {user_id} but both fields are null/empty")
+                return None
+        else:
+            logger.info(f"No context bundle found for user {user_id}")
+            return None
+    except Exception as e:
+        logger.warning(f"Failed to fetch context bundle for user {user_id}: {e}")
+        return None
+
+
 def get_user_persona_summary(user_id: str) -> Optional[str]:
     """
-    Fetch user's persona summary from user_context_bundle table.
+    Fetch user's persona summary from users_context_bundle table.
+    Legacy function for backward compatibility.
     
     Args:
         user_id: User UUID
@@ -212,26 +287,90 @@ def get_user_persona_summary(user_id: str) -> Optional[str]:
     Returns:
         Persona summary text or None if not found
     """
-    try:
-        response = sb.table("user_context_bundle")\
-            .select("persona_summary")\
-            .eq("user_id", user_id)\
-            .limit(1)\
-            .execute()
+    bundle = get_user_context_bundle(user_id)
+    if bundle:
+        return bundle.get("persona_summary")
+    return None
+
+
+def save_user_context_to_local(user_id: str, persona_summary: Optional[str] = None, facts: Optional[str] = None, backend_dir: Optional[Path] = None) -> bool:
+    """
+    Save user context (persona_summary and facts) to local JSON file as fallback.
+    
+    Args:
+        user_id: User UUID
+        persona_summary: Persona summary text (optional)
+        facts: Facts text (optional)
+        backend_dir: Backend directory path (optional, will be inferred if not provided)
         
-        if response.data and len(response.data) > 0:
-            persona_summary = response.data[0].get("persona_summary")
-            if persona_summary:
-                logger.info(f"Found persona summary for user {user_id}")
-                return persona_summary
-            else:
-                logger.info(f"No persona summary found for user {user_id} (field is null/empty)")
-                return None
-        else:
-            logger.info(f"No context bundle found for user {user_id}")
-            return None
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        if backend_dir is None:
+            # Infer backend directory from current file location
+            backend_dir = Path(__file__).parent.parent.parent
+        
+        config_dir = backend_dir / "config"
+        config_dir.mkdir(exist_ok=True)
+        
+        file_path = config_dir / "user_persona.json"
+        
+        data = {
+            "user_id": user_id,
+            "persona_summary": persona_summary,
+            "facts": facts,
+            "last_updated": datetime.utcnow().isoformat()
+        }
+        
+        with open(file_path, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+        
+        logger.info(f"Saved user context to local file: {file_path}")
+        return True
+        
     except Exception as e:
-        logger.warning(f"Failed to fetch persona summary for user {user_id}: {e}")
+        logger.warning(f"Failed to save user context to local file for user {user_id}: {e}")
+        return False
+
+
+def load_user_context_from_local(backend_dir: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+    """
+    Load user context (persona_summary and facts) from local JSON file.
+    
+    Args:
+        backend_dir: Backend directory path (optional, will be inferred if not provided)
+        
+    Returns:
+        Dictionary with 'persona_summary', 'facts', 'user_id', 'last_updated' keys, or None if not found
+    """
+    try:
+        if backend_dir is None:
+            # Infer backend directory from current file location
+            backend_dir = Path(__file__).parent.parent.parent
+        
+        file_path = backend_dir / "config" / "user_persona.json"
+        
+        if not file_path.exists():
+            logger.debug(f"Local context file not found: {file_path}")
+            return None
+        
+        with open(file_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        # Validate structure
+        if not isinstance(data, dict):
+            logger.warning(f"Invalid format in local context file: {file_path}")
+            return None
+        
+        logger.info(f"Loaded user context from local file: {file_path}")
+        return data
+        
+    except json.JSONDecodeError as e:
+        logger.warning(f"Failed to parse local context file: {e}")
+        return None
+    except Exception as e:
+        logger.warning(f"Failed to load user context from local file: {e}")
         return None
 
 

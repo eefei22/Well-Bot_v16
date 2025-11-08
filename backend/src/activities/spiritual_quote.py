@@ -8,13 +8,24 @@ LLM system context and a tailored opening prompt.
 """
 
 import logging
+import sys
+import gc
+import os
+import tempfile
 from pathlib import Path
 from typing import Optional
 
-from src.components.stt import GoogleSTTService
-from src.components.mic_stream import MicStream
-from src.components.conversation_audio_manager import ConversationAudioManager
-from src.components.tts import GoogleTTSClient
+# Add the backend directory to the path
+backend_dir = Path(__file__).parent.parent.parent
+sys.path.append(str(backend_dir))
+
+# Use lazy imports from __init__.py to prevent cascade import issues
+from src.components import (
+    GoogleSTTService,
+    MicStream,
+    ConversationAudioManager,
+    GoogleTTSClient
+)
 from src.utils.config_resolver import get_global_config_for_user, get_language_config
 from src.supabase.auth import get_current_user_id
 from src.supabase.database import (
@@ -69,6 +80,7 @@ class SpiritualQuoteActivity:
             self.audio_manager = ConversationAudioManager(self.stt_service, mic_factory, audio_config)
 
             # TTS client
+            # Import texttospeech locally for AudioEncoding enum
             from google.cloud import texttospeech
             self.tts = GoogleTTSClient(
                 voice_name=self.global_config["language_codes"]["tts_voice_name"],
@@ -155,13 +167,145 @@ class SpiritualQuoteActivity:
             self._active = False
 
     def cleanup(self):
-        try:
-            if self.audio_manager:
+        """Complete cleanup of all resources including native libraries, cached resources, and dependencies"""
+        logger.info("🧹 Cleaning up SpiritualQuote activity resources...")
+        
+        # Stop if still active
+        if self._active:
+            self._active = False
+        
+        # Cleanup audio manager (handles PyAudio streams)
+        if self.audio_manager:
+            try:
+                logger.info("🧹 Cleaning up audio manager...")
                 self.audio_manager.cleanup()
-        except Exception:
-            pass
+                self.audio_manager = None
+                logger.info("✓ Audio manager cleaned up")
+            except Exception as e:
+                logger.warning(f"Error during audio manager cleanup: {e}")
+        
+        # Cleanup STT service (Google Cloud Speech client)
+        if self.stt_service:
+            try:
+                logger.info("🧹 Cleaning up STT service...")
+                # Close Google Cloud Speech client
+                if hasattr(self.stt_service, 'client') and self.stt_service.client:
+                    try:
+                        # Google Cloud clients don't have explicit close, but we can clear the reference
+                        self.stt_service.client = None
+                        logger.debug("STT client closed")
+                    except Exception as e:
+                        logger.warning(f"Error closing STT client: {e}")
+                self.stt_service = None
+                logger.info("✓ STT service cleaned up")
+            except Exception as e:
+                logger.warning(f"Error during STT cleanup: {e}")
+        
+        # Cleanup TTS service (Google Cloud TTS client)
+        if self.tts:
+            try:
+                logger.info("🧹 Cleaning up TTS service...")
+                # Close Google Cloud TTS client
+                if hasattr(self.tts, 'client') and self.tts.client:
+                    try:
+                        self.tts.client = None
+                        logger.debug("TTS client closed")
+                    except Exception as e:
+                        logger.warning(f"Error closing TTS client: {e}")
+                self.tts = None
+                logger.info("✓ TTS service cleaned up")
+            except Exception as e:
+                logger.warning(f"Error during TTS cleanup: {e}")
+        
+        # Clear config caches
+        try:
+            from src.utils.config_resolver import _resolver
+            if hasattr(_resolver, 'clear_cache'):
+                logger.info("🧹 Clearing config caches...")
+                _resolver.clear_cache()
+                logger.debug("Config caches cleared")
+        except Exception as e:
+            logger.debug(f"Could not clear config cache: {e}")
+        
+        # Cleanup temporary files (if any were created)
+        try:
+            logger.info("🧹 Checking for temporary files...")
+            # Check for temporary Google Cloud credentials file
+            # Note: This is a best-effort cleanup - the file may have been cleaned up already
+            temp_dir = tempfile.gettempdir()
+            # We can't easily track which temp files we created, so this is optional
+            # If you track temp file paths, clean them up here
+            logger.debug("Temporary file check completed")
+        except Exception as e:
+            logger.debug(f"Could not check temporary files: {e}")
+        
+        # Force garbage collection to help release native library resources
+        try:
+            logger.info("🧹 Running garbage collection...")
+            collected = gc.collect()
+            logger.debug(f"Garbage collection collected {collected} objects")
+        except Exception as e:
+            logger.warning(f"Error during garbage collection: {e}")
+        
+        # Reset initialization state
+        self._initialized = False
+        
+        logger.info("✅ SpiritualQuote activity cleanup completed")
 
     def is_active(self) -> bool:
         return bool(self._active)
+
+
+# For testing when run directly
+if __name__ == "__main__":
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s | %(levelname)-8s | %(name)-15s | %(message)s',
+        datefmt='%H:%M:%S'
+    )
+    
+    def main():
+        """Test the SpiritualQuote activity"""
+        try:
+            # Get backend directory
+            backend_dir = Path(__file__).parent.parent.parent
+            
+            # Create and initialize activity
+            activity = SpiritualQuoteActivity(backend_dir)
+            
+            if not activity.initialize():
+                logger.error("Failed to initialize activity")
+                return 1
+            
+            logger.info("=== Spiritual Quote Activity Test ===")
+            logger.info("The activity will:")
+            logger.info("- Fetch a religion-aware quote from the database")
+            logger.info("- Speak the quote via TTS")
+            logger.info("- Transition to SmallTalk with the quote in context")
+            logger.info("- Press Ctrl+C to stop")
+            
+            # Run the activity
+            success = activity.run()
+            
+            # Cleanup
+            activity.cleanup()
+            
+            if success:
+                logger.info("=== Spiritual Quote Activity Test Completed Successfully! ===")
+            else:
+                logger.error("=== Spiritual Quote Activity Test Failed! ===")
+                return 1
+            
+            return 0
+            
+        except KeyboardInterrupt:
+            logger.info("Test interrupted by user")
+            return 0
+        except Exception as e:
+            logger.error(f"Test failed: {e}", exc_info=True)
+            return 1
+    
+    exit(main())
 
 

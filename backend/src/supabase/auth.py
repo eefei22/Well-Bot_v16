@@ -18,9 +18,21 @@ def get_current_user_id() -> str:
     
     Current behavior: Returns DEV_USER_ID from environment or default.
     Future behavior: Will extract from JWT token or session context.
+    
+    Note: DEV_USER_ID is loaded from .env file via config_loader.py's load_dotenv()
     """
+    # Try to import from config_loader first (centralized config)
+    try:
+        from ..utils.config_loader import DEV_USER_ID
+        if DEV_USER_ID:
+            logger.info(f"Current user ID (from config_loader): {DEV_USER_ID}")
+            return DEV_USER_ID
+    except (ImportError, AttributeError):
+        pass
+    
+    # Fallback to direct environment variable read
     user_id = os.getenv("DEV_USER_ID", DEFAULT_DEV_USER_ID)
-    logger.info(f"Current user ID: {user_id}")
+    logger.info(f"Current user ID (from env/fallback): {user_id}")
     return user_id
 
 def set_session_user(user_id: str) -> None:
