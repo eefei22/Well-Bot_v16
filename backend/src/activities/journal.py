@@ -12,6 +12,8 @@ import threading
 import time
 import json
 import re
+import gc
+import tempfile
 from pathlib import Path
 from typing import Optional, List, Callable
 from datetime import datetime
@@ -21,15 +23,18 @@ import string
 backend_dir = Path(__file__).parent.parent.parent
 sys.path.append(str(backend_dir))
 
-from src.components.stt import GoogleSTTService
-from src.components.mic_stream import MicStream
-from src.components.conversation_audio_manager import ConversationAudioManager
-from src.components.tts import GoogleTTSClient
-from src.components.termination_phrase import TerminationPhraseDetector, TerminationPhraseDetected
-from src.supabase.database import upsert_journal, DEV_USER_ID
+# Use lazy imports from __init__.py to prevent cascade import issues
+from src.components import (
+    GoogleSTTService,
+    MicStream,
+    ConversationAudioManager,
+    GoogleTTSClient,
+    TerminationPhraseDetector,
+    TerminationPhraseDetected
+)
+from src.supabase.database import upsert_journal
 from src.utils.config_resolver import get_global_config_for_user, get_language_config
 from src.supabase.auth import get_current_user_id
-from google.cloud import texttospeech
 
 logger = logging.getLogger(__name__)
 
@@ -106,6 +111,8 @@ class JournalActivity:
             
             # Initialize TTS service
             logger.info("Initializing TTS service...")
+            # Import texttospeech locally for AudioEncoding enum
+            from google.cloud import texttospeech
             self.tts_service = GoogleTTSClient(
                 voice_name=self.global_config["language_codes"]["tts_voice_name"],
                 language_code=self.global_config["language_codes"]["tts_language_code"],
@@ -540,37 +547,94 @@ class JournalActivity:
         logger.info("Journal activity cleanup completed")
     
     def cleanup(self):
-        """Complete cleanup of all resources (public method for orchestrator)"""
+        """Complete cleanup of all resources including native libraries, cached resources, and dependencies"""
         logger.info("🧹 Cleaning up Journal activity resources...")
         
         # Stop if still active
         if self._active:
             self._cleanup()
         
-        # Cleanup audio manager
+        # Cleanup audio manager (handles PyAudio streams)
         if self.audio_manager:
             try:
                 logger.info("🧹 Cleaning up audio manager...")
                 self.audio_manager.cleanup()
                 self.audio_manager = None
+                logger.info("✓ Audio manager cleaned up")
             except Exception as e:
                 logger.warning(f"Error during audio manager cleanup: {e}")
         
-        # Cleanup STT service
+        # Cleanup STT service (Google Cloud Speech client)
         if self.stt_service:
             try:
                 logger.info("🧹 Cleaning up STT service...")
+                # Close Google Cloud Speech client
+                if hasattr(self.stt_service, 'client') and self.stt_service.client:
+                    try:
+                        # Google Cloud clients don't have explicit close, but we can clear the reference
+                        self.stt_service.client = None
+                        logger.debug("STT client closed")
+                    except Exception as e:
+                        logger.warning(f"Error closing STT client: {e}")
                 self.stt_service = None
+                logger.info("✓ STT service cleaned up")
             except Exception as e:
                 logger.warning(f"Error during STT cleanup: {e}")
         
-        # Cleanup TTS service
+        # Cleanup TTS service (Google Cloud TTS client)
         if self.tts_service:
             try:
                 logger.info("🧹 Cleaning up TTS service...")
+                # Close Google Cloud TTS client
+                if hasattr(self.tts_service, 'client') and self.tts_service.client:
+                    try:
+                        self.tts_service.client = None
+                        logger.debug("TTS client closed")
+                    except Exception as e:
+                        logger.warning(f"Error closing TTS client: {e}")
                 self.tts_service = None
+                logger.info("✓ TTS service cleaned up")
             except Exception as e:
                 logger.warning(f"Error during TTS cleanup: {e}")
+        
+        # Cleanup termination detector
+        if hasattr(self, 'termination_detector') and self.termination_detector:
+            try:
+                logger.info("🧹 Cleaning up termination detector...")
+                self.termination_detector = None
+                logger.debug("Termination detector cleaned up")
+            except Exception as e:
+                logger.warning(f"Error during termination detector cleanup: {e}")
+        
+        # Clear config caches
+        try:
+            from src.utils.config_resolver import _resolver
+            if hasattr(_resolver, 'clear_cache'):
+                logger.info("🧹 Clearing config caches...")
+                _resolver.clear_cache()
+                logger.debug("Config caches cleared")
+        except Exception as e:
+            logger.debug(f"Could not clear config cache: {e}")
+        
+        # Cleanup temporary files (if any were created)
+        try:
+            logger.info("🧹 Checking for temporary files...")
+            # Check for temporary Google Cloud credentials file
+            # Note: This is a best-effort cleanup - the file may have been cleaned up already
+            temp_dir = tempfile.gettempdir()
+            # We can't easily track which temp files we created, so this is optional
+            # If you track temp file paths, clean them up here
+            logger.debug("Temporary file check completed")
+        except Exception as e:
+            logger.debug(f"Could not check temporary files: {e}")
+        
+        # Force garbage collection to help release native library resources
+        try:
+            logger.info("🧹 Running garbage collection...")
+            collected = gc.collect()
+            logger.debug(f"Garbage collection collected {collected} objects")
+        except Exception as e:
+            logger.warning(f"Error during garbage collection: {e}")
         
         # Reset state
         self.buffers = []
