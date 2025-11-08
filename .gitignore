@@ -76,6 +76,7 @@ logs/
 
 # Testing output
 backend/testing/output/
+backend/config/user_persona.json
 
 # Temporary files
 *.tmp
