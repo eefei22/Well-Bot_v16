@@ -45,5 +45,7 @@
   "meditation": {
     "meditation_start_delay_seconds": 3.0,
     "use_audio_files": false
-  }
+  },
+  "context_service_url": "https://user-context-well-bot-520080168829.asia-south1.run.app",
+  "enable_context_processing": true
 }
