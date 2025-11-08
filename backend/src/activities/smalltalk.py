@@ -15,6 +15,7 @@ from typing import Optional
 import gc
 import os
 import tempfile
+import requests
 
 # Add the backend directory to the path
 backend_dir = Path(__file__).parent.parent.parent
@@ -33,9 +34,17 @@ from src.components import (
 from src.utils.config_loader import get_deepseek_config
 from src.utils.config_resolver import get_global_config_for_user, get_language_config
 from src.supabase.auth import get_current_user_id
-from src.supabase.database import get_user_persona_summary
+from src.supabase.database import get_user_language
+from src.components import UserContextInjector
 
 logger = logging.getLogger(__name__)
+
+# Language name mapping for system prompt
+LANGUAGE_NAMES = {
+    'en': 'English',
+    'cn': 'Chinese',
+    'bm': 'Bahasa Malay'
+}
 
 
 class SmallTalkActivity:
@@ -120,11 +129,19 @@ class SmallTalkActivity:
             # Store audio config for callback methods
             self.audio_config = audio_config
             
+            # Get user language for system prompt
+            user_lang = get_user_language(self.user_id) or 'en'
+            language_name = LANGUAGE_NAMES.get(user_lang, 'English')
+            
+            # Build system prompt with language instruction
+            base_system_prompt = self.smalltalk_config.get("system_prompt", "You are a friendly assistant. Do not use emojis and always always ask follow up questions.")
+            system_prompt_with_language = f"{base_system_prompt}\n\nImportant: Always respond in {language_name}. This is the user's preferred language."
+            
             # Initialize ConversationSession
             logger.info("Initializing ConversationSession...")
             self.session_manager = ConversationSession(
                 max_turns=self.global_smalltalk_config.get("max_turns", 20),
-                system_prompt=self.smalltalk_config.get("system_prompt", "You are a friendly assistant. Do not use emojis."),
+                system_prompt=system_prompt_with_language,
                 language_code=stt_lang
             )
             logger.info("✓ ConversationSession initialized")
@@ -140,7 +157,7 @@ class SmallTalkActivity:
                 llm_config_dict=self.smalltalk_config,  # Pass config dict directly
                 tts_voice_name=self.global_config["language_codes"]["tts_voice_name"],
                 tts_language_code=self.global_config["language_codes"]["tts_language_code"],
-                system_prompt=self.smalltalk_config.get("system_prompt", "You are a friendly assistant. Do not use emojis."),
+                system_prompt=system_prompt_with_language,
                 language_code=stt_lang
             )
             logger.info("✓ SmallTalkSession initialized")
@@ -156,6 +173,114 @@ class SmallTalkActivity:
         """Inject a system message into the LLM pipeline before starting."""
         if self.llm_pipeline:
             self.llm_pipeline.messages.append({"role": "system", "content": content})
+    
+    def notify_context_processor(self, user_id: str, conversation_id: Optional[str] = None) -> bool:
+        """
+        Notify the context processor service to reprocess context after a conversation completes.
+        
+        Args:
+            user_id: UUID of the user whose context needs updating
+            conversation_id: Optional conversation ID (for logging)
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        # Add log at the very start to confirm function is being called
+        logger.info(f"=== notify_context_processor CALLED for user {user_id} ===")
+        
+        # Get context service URL from config or use default
+        context_service_url = self.global_config.get("context_service_url", "http://localhost:8000")
+        enable_context_processing = self.global_config.get("enable_context_processing", True)
+        
+        logger.info(f"Context processing config - URL: {context_service_url}, Enabled: {enable_context_processing}")
+        
+        if not enable_context_processing:
+            logger.warning("Context processing is disabled in config - skipping notification")
+            return False
+        
+        endpoint = f"{context_service_url}/api/context/process"
+        
+        # Add detailed logging
+        logger.info(f"Attempting to notify context processor:")
+        logger.info(f"  Endpoint: {endpoint}")
+        logger.info(f"  User ID: {user_id}")
+        logger.info(f"  Conversation ID: {conversation_id}")
+        
+        try:
+            # First, verify service is reachable (optional health check)
+            try:
+                health_url = f"{context_service_url}/health"
+                logger.debug(f"Checking context service health at: {health_url}")
+                health_response = requests.get(health_url, timeout=5)
+                if health_response.status_code == 200:
+                    logger.info(f"Context service is running: {health_response.json()}")
+                else:
+                    logger.warning(f"Context service health check returned status {health_response.status_code}")
+            except requests.exceptions.RequestException as health_e:
+                logger.warning(f"Context service health check failed (continuing anyway): {health_e}")
+            except Exception as health_e:
+                logger.warning(f"Unexpected error during health check (continuing anyway): {health_e}")
+            
+            # Make the processing request
+            logger.info(f"Making POST request to context processor...")
+            response = requests.post(
+                endpoint,
+                json={"user_id": user_id},
+                headers={"Content-Type": "application/json"},
+                timeout=300  # 5 minutes - processing can take 1-3 minutes
+            )
+            
+            # Log response status and details
+            logger.info(f"Response status: {response.status_code}")
+            logger.debug(f"Response headers: {dict(response.headers)}")
+            
+            # Check for HTTP errors before raising
+            if response.status_code >= 400:
+                error_text = response.text[:500] if response.text else "No error message"
+                logger.error(f"Context processor returned error {response.status_code}: {error_text}")
+                try:
+                    error_json = response.json()
+                    logger.error(f"Error details: {error_json}")
+                except:
+                    pass
+                return False
+            
+            response.raise_for_status()
+            
+            result = response.json()
+            logger.info(f"Context processing completed for user {user_id}")
+            logger.info(f"  Status: {result.get('status')}")
+            logger.info(f"  Facts extracted: {result.get('facts') is not None}")
+            logger.info(f"  Persona summary extracted: {result.get('persona_summary') is not None}")
+            
+            return True
+            
+        except requests.exceptions.Timeout:
+            logger.error(f"Context processor request timed out for user {user_id} (after 300s)")
+            return False
+        except requests.exceptions.ConnectionError as e:
+            logger.error(f"Failed to connect to context processor at {endpoint}: {e}")
+            logger.error(f"  Please verify the service is running at {context_service_url}")
+            return False
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"HTTP error from context processor: {e}")
+            if hasattr(e, 'response') and e.response is not None:
+                try:
+                    error_detail = e.response.json()
+                    logger.error(f"Error details: {error_detail}")
+                except:
+                    error_text = e.response.text[:500] if e.response.text else "No error message"
+                    logger.error(f"Error response text: {error_text}")
+            return False
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Request exception during context processing notification: {e}")
+            logger.error(f"  Error type: {type(e).__name__}")
+            logger.exception(e)
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error during context processing notification: {e}")
+            logger.exception(e)  # This will log the full traceback
+            return False
 
     def start(self, *, seed_system_prompt: Optional[str] = None, custom_start_prompt: Optional[str] = None) -> bool:
         """Start the SmallTalk activity"""
@@ -180,17 +305,20 @@ class SmallTalkActivity:
             conv_id = self.session_manager.start_session("Small Talk")
             self.llm_pipeline.conversation_id = conv_id
             
-            # Fetch and inject user persona summary if available
-            logger.info(f"Fetching persona summary for user {self.user_id}...")
-            persona_summary = get_user_persona_summary(self.user_id)
-            if persona_summary and persona_summary.strip():
-                # Format persona summary with context
-                persona_message = f"User persona context: {persona_summary.strip()}"
-                self.add_system_message(persona_message)
-                logger.info(f"✓ Persona summary fetched and injected for user {self.user_id}")
-                logger.info(f"  Injected prompt: {persona_message}")
+            # Inject user context using component
+            injector = UserContextInjector()
+            context_result = injector.inject_context(
+                user_id=self.user_id,
+                llm_pipeline=self.llm_pipeline,
+                backend_dir=self.backend_dir,
+                logger_instance=logger
+            )
+            
+            # Log results but continue regardless of success/failure
+            if context_result['success']:
+                logger.info(f"Context injection completed: persona={context_result['persona_injected']}, facts={context_result['facts_injected']}, fallback={context_result['used_fallback']}")
             else:
-                logger.info(f"No persona summary available for user {self.user_id}, continuing without it")
+                logger.warning(f"Context injection failed: {context_result.get('error')} - continuing without context")
             
             # Check if audio files should be used
             use_audio_files = self.global_smalltalk_config.get("use_audio_files", False)
@@ -322,14 +450,40 @@ class SmallTalkActivity:
                 logger.warning(f"Error during STT cleanup: {e}")
         
         # End conversation in database
+        conversation_id = None
         if self.session_manager:
             try:
+                conversation_id = self.session_manager.get_conversation_id()
                 logger.info("🧹 Ending conversation in database...")
                 self.session_manager.end_conversation()
                 self.session_manager = None
                 logger.info("✓ Session manager cleaned up")
             except Exception as e:
                 logger.warning(f"Error during session cleanup: {e}")
+        
+        # Notify context processor service (non-blocking)
+        # Use non-daemon thread for cleanup to ensure it completes
+        if self.user_id:
+            try:
+                # Run in a separate thread to avoid blocking cleanup
+                def notify_async():
+                    try:
+                        logger.info(f"Async thread started for context processor notification (cleanup)")
+                        result = self.notify_context_processor(self.user_id, conversation_id)
+                        logger.info(f"Async context processor notification completed: {result}")
+                    except Exception as e:
+                        logger.error(f"Error in async context processor notification: {e}")
+                        logger.exception(e)
+                
+                # Use non-daemon thread for cleanup so it can complete even if main thread exits
+                thread = threading.Thread(target=notify_async, daemon=False)
+                thread.start()
+                logger.info(f"✓ Context processor notification thread started (non-daemon, thread_id={thread.ident})")
+                # Give the thread a moment to start the request
+                time.sleep(0.1)
+            except Exception as e:
+                logger.error(f"Failed to start context processor notification thread: {e}")
+                logger.exception(e)
         
         # Clear config caches (optional - only if you want to clear on each cleanup)
         try:
@@ -439,6 +593,7 @@ class SmallTalkActivity:
         except Exception as e:
             logger.error(f"Error running SmallTalk activity: {e}", exc_info=True)
             self.stop()
+            self.cleanup()  # Ensure cleanup is called to trigger context processor
             return False
     
     def _conversation_loop(self) -> bool:
@@ -495,13 +650,35 @@ class SmallTalkActivity:
                     self._speak(end_prompt)
                     
                     # Stop both the activity and session manager
+                    conversation_id = None
                     if self.session_manager:
+                        conversation_id = self.session_manager.get_conversation_id()
                         self.session_manager.stop_session()
                     self.stop()
                     
                     # Also stop the audio manager to prevent further speech capture
                     if self.audio_manager:
                         self.audio_manager.stop()
+                    
+                    # Notify context processor service (non-blocking)
+                    if self.user_id:
+                        try:
+                            def notify_async():
+                                try:
+                                    logger.info(f"Async thread started for context processor notification (termination)")
+                                    result = self.notify_context_processor(self.user_id, conversation_id)
+                                    logger.info(f"Async context processor notification completed: {result}")
+                                except Exception as e:
+                                    logger.error(f"Error in async context processor notification: {e}")
+                                    logger.exception(e)
+                            
+                            thread = threading.Thread(target=notify_async, daemon=True)
+                            thread.start()
+                            logger.info(f"✓ Context processor notification thread started (async, thread_id={thread.ident})")
+                        except Exception as e:
+                            logger.error(f"Failed to start context processor notification thread: {e}")
+                            logger.exception(e)
+                    
                     break
                 
                 # Generate and play response
@@ -520,6 +697,25 @@ class SmallTalkActivity:
                 # Complete turn and reset silence timer
                 if not self.session_manager.complete_turn(user_text, assistant_text):
                     logger.info("Max turns reached, ending session")
+                    # Notify context processor service (non-blocking)
+                    conversation_id = self.session_manager.get_conversation_id() if self.session_manager else None
+                    if self.user_id:
+                        try:
+                            def notify_async():
+                                try:
+                                    logger.info(f"Async thread started for context processor notification (max_turns)")
+                                    result = self.notify_context_processor(self.user_id, conversation_id)
+                                    logger.info(f"Async context processor notification completed: {result}")
+                                except Exception as e:
+                                    logger.error(f"Error in async context processor notification: {e}")
+                                    logger.exception(e)
+                            
+                            thread = threading.Thread(target=notify_async, daemon=True)
+                            thread.start()
+                            logger.info(f"✓ Context processor notification thread started (async, thread_id={thread.ident})")
+                        except Exception as e:
+                            logger.error(f"Failed to start context processor notification thread: {e}")
+                            logger.exception(e)
                     break
                 
                 self.audio_manager.reset_silence_timer()
@@ -527,6 +723,25 @@ class SmallTalkActivity:
                 # Check if activity was stopped after turn completion
                 if not self._active:
                     logger.info("Activity stopped after turn completion, exiting conversation loop")
+                    # Notify context processor service (non-blocking)
+                    conversation_id = self.session_manager.get_conversation_id() if self.session_manager else None
+                    if self.user_id:
+                        try:
+                            def notify_async():
+                                try:
+                                    logger.info(f"Async thread started for context processor notification (stopped)")
+                                    result = self.notify_context_processor(self.user_id, conversation_id)
+                                    logger.info(f"Async context processor notification completed: {result}")
+                                except Exception as e:
+                                    logger.error(f"Error in async context processor notification: {e}")
+                                    logger.exception(e)
+                            
+                            thread = threading.Thread(target=notify_async, daemon=True)
+                            thread.start()
+                            logger.info(f"✓ Context processor notification thread started (async, thread_id={thread.ident})")
+                        except Exception as e:
+                            logger.error(f"Failed to start context processor notification thread: {e}")
+                            logger.exception(e)
                     break
             
             logger.info("✅ Conversation loop completed successfully")
@@ -606,13 +821,34 @@ class SmallTalkActivity:
             logger.info("Stopping activity due to timeout...")
             
             # Stop both the activity and session manager
+            conversation_id = None
             if self.session_manager:
+                conversation_id = self.session_manager.get_conversation_id()
                 self.session_manager.stop_session()
             self.stop()
             
             # Also stop the audio manager to prevent further speech capture
             if self.audio_manager:
                 self.audio_manager.stop()
+            
+            # Notify context processor service (non-blocking)
+            if self.user_id:
+                try:
+                    def notify_async():
+                        try:
+                            logger.info(f"Async thread started for context processor notification (timeout)")
+                            result = self.notify_context_processor(self.user_id, conversation_id)
+                            logger.info(f"Async context processor notification completed: {result}")
+                        except Exception as e:
+                            logger.error(f"Error in async context processor notification: {e}")
+                            logger.exception(e)
+                    
+                    thread = threading.Thread(target=notify_async, daemon=True)
+                    thread.start()
+                    logger.info(f"✓ Context processor notification thread started (async, thread_id={thread.ident})")
+                except Exception as e:
+                    logger.error(f"Failed to start context processor notification thread: {e}")
+                    logger.exception(e)
     
     def get_status(self) -> dict:
         """Get current activity status"""

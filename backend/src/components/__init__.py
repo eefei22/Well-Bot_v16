@@ -32,6 +32,7 @@ __all__ = [
     'TerminationPhraseDetected',
     'normalize_text',
     'DeepSeekClient',
+    'UserContextInjector',
 ]
 
 __version__ = "1.0.0"
@@ -109,6 +110,11 @@ def __getattr__(name):
     elif name == 'DeepSeekClient':
         from .llm import DeepSeekClient
         return DeepSeekClient
+    
+    # User context injector (used by activities)
+    elif name == 'UserContextInjector':
+        from .user_context_injector import UserContextInjector
+        return UserContextInjector
     
     # Unknown attribute
     raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
