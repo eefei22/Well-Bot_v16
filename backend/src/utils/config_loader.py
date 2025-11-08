@@ -45,6 +45,10 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
+# User Identity Configuration (for development/testing)
+# In production, this will be replaced with JWT token authentication
+DEV_USER_ID = os.getenv("DEV_USER_ID")
+
 # Porcupine Wake Word Configuration
 # Automatically use ARM-specific key if available and running on ARM architecture
 if is_arm_architecture():

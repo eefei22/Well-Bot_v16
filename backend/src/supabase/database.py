@@ -1,5 +1,6 @@
 from typing import Optional, Dict, Any, List
 from .client import get_supabase, fetch_user_by_id
+from .auth import get_current_user_id
 import logging
 import random
 import json
@@ -9,7 +10,8 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 # If you're running everything locally now, hardcode your dev user_id here:
-DEV_USER_ID = "8517c97f-66ef-4955-86ed-531013d33d3e"
+# NOTE: This constant is deprecated. Use get_current_user_id() instead.
+# DEV_USER_ID = "8517c97f-66ef-4955-86ed-531013d33d3e"
 
 sb = get_supabase(service=True)
 
@@ -29,11 +31,27 @@ def get_user_by_id(user_id: str) -> Optional[Dict[str, Any]]:
     """Get full user record by ID."""
     return fetch_user_by_id(user_id)
 
-def start_conversation(user_id: str = DEV_USER_ID, title: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> str:
+def start_conversation(user_id: Optional[str] = None, title: Optional[str] = None, metadata: Optional[Dict[str, Any]] = None) -> str:
+    """
+    Start a new conversation.
+    
+    Args:
+        user_id: User ID. If None, will use get_current_user_id() to read from environment variable.
+        title: Optional conversation title
+        metadata: Optional metadata dictionary
+        
+    Returns:
+        Conversation ID
+    """
+    if user_id is None:
+        user_id = get_current_user_id()
+        logger.info(f"Using user_id from environment: {user_id}")
+    
     data = {
         "user_id": user_id
     }
     res = sb.table("wb_conversation").insert(data).execute()
+    logger.info(f"Started conversation {res.data[0]['id']} for user {user_id}")
     return res.data[0]["id"]
 
 def end_conversation(conversation_id: str):
@@ -51,7 +69,21 @@ def add_message(conversation_id: str, role: str, content: str, *, tokens: Option
     res = sb.table("wb_message").insert(rec).execute()
     return res.data[0]["id"]
 
-def list_conversations(limit: int = 20, user_id: str = DEV_USER_ID) -> List[Dict[str, Any]]:
+def list_conversations(limit: int = 20, user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    List conversations for a user.
+    
+    Args:
+        limit: Maximum number of conversations to return
+        user_id: User ID. If None, will use get_current_user_id() to read from environment variable.
+        
+    Returns:
+        List of conversation dictionaries
+    """
+    if user_id is None:
+        user_id = get_current_user_id()
+        logger.info(f"Using user_id from environment: {user_id}")
+    
     res = sb.table("wb_conversation").select("*").eq("user_id", user_id).order("started_at", desc=True).limit(limit).execute()
     return res.data
 

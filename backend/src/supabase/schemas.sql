@@ -70,7 +70,7 @@ CREATE TABLE public.wb_activity_logs (
   action text NOT NULL,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT wb_activity_logs_pkey PRIMARY KEY (id),
-  CONSTRAINT wb_activity_event_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+  CONSTRAINT wb_activity_event_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
 );
 CREATE TABLE public.wb_conversation (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -79,7 +79,7 @@ CREATE TABLE public.wb_conversation (
   ended_at timestamp with time zone,
   reason_ended text,
   CONSTRAINT wb_conversation_pkey PRIMARY KEY (id),
-  CONSTRAINT wb_conversation_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+  CONSTRAINT wb_conversation_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
 );
 CREATE TABLE public.wb_embeddings (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -90,7 +90,7 @@ CREATE TABLE public.wb_embeddings (
   model_tag text NOT NULL CHECK (model_tag = ANY (ARRAY['miniLM'::text, 'e5'::text])),
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT wb_embeddings_pkey PRIMARY KEY (id),
-  CONSTRAINT wb_embeddings_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+  CONSTRAINT wb_embeddings_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
 );
 CREATE TABLE public.wb_gratitude_item (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -98,7 +98,7 @@ CREATE TABLE public.wb_gratitude_item (
   text text NOT NULL,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT wb_gratitude_item_pkey PRIMARY KEY (id),
-  CONSTRAINT wb_gratitude_item_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id)
+  CONSTRAINT wb_gratitude_item_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
 );
 CREATE TABLE public.wb_journal (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
@@ -137,7 +137,7 @@ CREATE TABLE public.wb_quote_seen (
   quote_id uuid NOT NULL,
   seen_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT wb_quote_seen_pkey PRIMARY KEY (user_id, quote_id),
-  CONSTRAINT wb_quote_seen_user_id_fkey FOREIGN KEY (user_id) REFERENCES auth.users(id),
+  CONSTRAINT wb_quote_seen_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id),
   CONSTRAINT wb_quote_seen_quote_id_fkey FOREIGN KEY (quote_id) REFERENCES public.wb_quote(id)
 );
 CREATE TABLE public.z_meditation_video (
