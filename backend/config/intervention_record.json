@@ -1,0 +1,43 @@
+{
+  "latest_emotion_entry": {
+    "id": 21,
+    "user_id": "8517c97f-66ef-4955-86ed-531013d33d3e",
+    "timestamp": "2025-11-09T23:00:33",
+    "emotion_label": "Fear",
+    "confidence_score": 0.83,
+    "emotional_score": 34
+  },
+  "latest_decision": {
+    "trigger_intervention": false,
+    "confidence_score": 0.0,
+    "reasoning": "Recent activity -490.7 minutes ago"
+  },
+  "latest_suggestion": {
+    "ranked_activities": [
+      {
+        "activity_type": "gratitude",
+        "rank": 1,
+        "score": 1.0
+      },
+      {
+        "activity_type": "journal",
+        "rank": 2,
+        "score": 0.622
+      },
+      {
+        "activity_type": "quote",
+        "rank": 3,
+        "score": 0.533
+      },
+      {
+        "activity_type": "meditation",
+        "rank": 4,
+        "score": 0.436
+      }
+    ],
+    "reasoning": "Emotion: Fear; Time of day: morning; Top suggestion: gratitude (score: 1.000)"
+  },
+  "last_request_time": "2025-11-09T22:54:15.220665",
+  "last_response_time": "2025-11-09T22:54:16.684265",
+  "last_database_query_time": "2025-11-09T22:58:06.510819"
+}

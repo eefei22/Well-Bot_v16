@@ -98,55 +98,65 @@ class InterventionPoller:
         """
         Check for new emotion log entries and process them.
         This method is called periodically and on startup.
+        
+        Always updates latest_emotion_entry with the latest entry from database.
+        Only calls cloud service if there's a new entry (timestamp > last processed).
         """
         if not self._running:
             return
         
+        query_time = datetime.now()
+        
         try:
             logger.debug("Checking for new emotion log entries...")
             
-            # Get the last processed timestamp
-            last_timestamp = self.record_manager.get_latest_emotion_timestamp()
+            # Get current record BEFORE querying to compare timestamps
+            record = self.record_manager.load_record()
+            last_processed_entry = record.get("latest_emotion_entry")
+            last_processed_timestamp = None
             
-            # If no previous timestamp, query for the latest entry to establish baseline
-            if last_timestamp is None:
-                logger.info("No previous timestamp found, querying for latest entry to establish baseline...")
-                # Query for entries in the last 24 hours to find the latest
-                from datetime import datetime, timedelta
-                cutoff_time = datetime.now() - timedelta(hours=24)
-                recent_entries = query_emotional_logs_since(self.user_id, cutoff_time)
-                
-                if recent_entries:
-                    # Get the latest entry (last in list since ordered ascending)
-                    latest_entry = recent_entries[-1]
-                    last_timestamp_str = latest_entry.get("timestamp")
-                    if last_timestamp_str:
-                        try:
-                            # Parse timestamp (assume timezone-naive)
-                            last_timestamp = datetime.fromisoformat(last_timestamp_str.replace('Z', ''))
-                            logger.info(f"Established baseline timestamp: {last_timestamp}")
-                        except Exception as e:
-                            logger.warning(f"Failed to parse baseline timestamp: {e}")
-                            last_timestamp = None
-                else:
-                    logger.info("No recent entries found, will check for new entries from now")
-                    last_timestamp = datetime.now() - timedelta(minutes=1)  # Check from 1 minute ago
+            if last_processed_entry and last_processed_entry.get("timestamp"):
+                try:
+                    timestamp_str = last_processed_entry["timestamp"]
+                    last_processed_timestamp = datetime.fromisoformat(timestamp_str.replace('Z', ''))
+                except Exception as e:
+                    logger.warning(f"Failed to parse last processed timestamp: {e}")
             
-            # Query for new entries since last timestamp
-            if last_timestamp:
-                new_entries = query_emotional_logs_since(self.user_id, last_timestamp)
+            # Always query for the latest entry in the last 24 hours to get current latest
+            cutoff_time = datetime.now() - timedelta(hours=24)
+            all_recent_entries = query_emotional_logs_since(self.user_id, cutoff_time)
+            
+            # Get the latest entry (last in list since ordered ascending)
+            latest_entry = all_recent_entries[-1] if all_recent_entries else None
+            
+            # Always update latest_emotion_entry and last_database_query_time
+            self.record_manager.update_emotion_entry_only(latest_entry, query_time)
+            
+            if latest_entry:
+                logger.info(f"Updated latest_emotion_entry: {latest_entry.get('emotion_label')} "
+                           f"(confidence: {latest_entry.get('confidence_score'):.2f})")
             else:
-                # If still no timestamp, query from 1 minute ago
-                cutoff_time = datetime.now() - timedelta(minutes=1)
-                new_entries = query_emotional_logs_since(self.user_id, cutoff_time)
+                logger.info("No emotion entries found in last 24 hours")
             
-            if new_entries:
-                logger.info(f"Found {len(new_entries)} new emotion log entries")
-                # Process the most recent entry (last in list)
-                latest_entry = new_entries[-1]
-                self._process_new_emotion_entry(latest_entry)
+            # Now check if we need to call cloud service (only if there's a NEW entry)
+            # Compare latest entry timestamp with what we had before updating
+            if latest_entry:
+                latest_entry_timestamp_str = latest_entry.get("timestamp")
+                if latest_entry_timestamp_str:
+                    try:
+                        latest_entry_timestamp = datetime.fromisoformat(latest_entry_timestamp_str.replace('Z', ''))
+                        
+                        # Only process if this is a new entry (timestamp > last processed)
+                        # If last_processed_timestamp is None, it means we never processed anything, so process it
+                        if last_processed_timestamp is None or latest_entry_timestamp > last_processed_timestamp:
+                            logger.info(f"Found new emotion entry, processing...")
+                            self._process_new_emotion_entry(latest_entry)
+                        else:
+                            logger.debug("Latest entry is not new, skipping cloud service call")
+                    except Exception as e:
+                        logger.warning(f"Failed to parse latest entry timestamp: {e}")
             else:
-                logger.debug("No new emotion log entries found")
+                logger.debug("No latest entry to process")
             
         except Exception as e:
             logger.error(f"Error checking for new emotions: {e}", exc_info=True)

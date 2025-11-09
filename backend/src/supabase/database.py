@@ -582,3 +582,40 @@ def query_recent_activity_logs(
     except Exception as e:
         logger.error(f"Failed to query intervention logs: {e}", exc_info=True)
         return []
+
+
+def query_emotional_logs_since(user_id: str, since_timestamp: datetime) -> List[Dict[str, Any]]:
+    """
+    Query emotional_log table for entries with timestamp greater than since_timestamp.
+    
+    Args:
+        user_id: User ID to filter logs
+        since_timestamp: Datetime object (timezone-naive). Only entries with timestamp > since_timestamp will be returned
+    
+    Returns:
+        List of emotion log dictionaries, ordered by timestamp ascending.
+        Each entry contains: id, user_id, timestamp, emotion_label, confidence_score, emotional_score
+        Returns empty list if query fails.
+    """
+    try:
+        # Ensure timestamp is timezone-naive for database query
+        if since_timestamp.tzinfo is not None:
+            since_timestamp = since_timestamp.replace(tzinfo=None)
+        
+        # Build query
+        query = (
+            sb.table("emotional_log")
+            .select("id, user_id, timestamp, emotion_label, confidence_score, emotional_score")
+            .eq("user_id", user_id)
+            .gt("timestamp", since_timestamp.isoformat())
+            .order("timestamp", desc=False)  # Ascending order (oldest first)
+        )
+        
+        res = query.execute()
+        
+        logger.debug(f"Query returned {len(res.data) if res.data else 0} emotion logs for user {user_id} since {since_timestamp}")
+        return res.data if res.data else []
+        
+    except Exception as e:
+        logger.error(f"Failed to query emotion logs: {e}", exc_info=True)
+        return []
