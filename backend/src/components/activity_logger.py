@@ -15,10 +15,24 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+# Malaysian timezone (UTC+8)
+try:
+    from zoneinfo import ZoneInfo
+    MALAYSIA_TZ = ZoneInfo("Asia/Kuala_Lumpur")
+except ImportError:
+    # Fallback for Python < 3.9
+    try:
+        import pytz
+        MALAYSIA_TZ = pytz.timezone("Asia/Kuala_Lumpur")
+    except ImportError:
+        logger.warning("Neither zoneinfo nor pytz available. Using UTC+8 offset manually.")
+        from datetime import timezone, timedelta
+        MALAYSIA_TZ = timezone(timedelta(hours=8))
+
 
 def get_context_time_of_day(timestamp: Optional[datetime] = None) -> str:
     """
-    Derive time of day context from timestamp.
+    Derive time of day context from timestamp using Malaysian timezone (UTC+8).
     
     Time periods:
     - morning: 5:00 - 11:59
@@ -27,13 +41,24 @@ def get_context_time_of_day(timestamp: Optional[datetime] = None) -> str:
     - night: 21:00 - 4:59
     
     Args:
-        timestamp: Datetime object. If None, uses current time.
+        timestamp: Datetime object. If None, uses current time in Malaysian timezone.
+                   If provided, assumes it's in UTC and converts to Malaysian time.
     
     Returns:
         One of: 'morning', 'afternoon', 'evening', 'night'
     """
     if timestamp is None:
-        timestamp = datetime.now()
+        # Get current time in Malaysian timezone
+        timestamp = datetime.now(MALAYSIA_TZ)
+    else:
+        # Assume timestamp is UTC, convert to Malaysian time
+        if timestamp.tzinfo is None:
+            # Naive datetime - assume UTC
+            from datetime import timezone as tz
+            timestamp = timestamp.replace(tzinfo=tz.utc)
+        
+        # Convert to Malaysian timezone
+        timestamp = timestamp.astimezone(MALAYSIA_TZ)
     
     hour = timestamp.hour
     

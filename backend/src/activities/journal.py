@@ -32,7 +32,7 @@ from src.components import (
     TerminationPhraseDetector,
     TerminationPhraseDetected
 )
-from src.supabase.database import upsert_journal
+from src.supabase.database import upsert_journal, log_activity_completion
 from src.utils.config_resolver import get_global_config_for_user, get_language_config
 from src.supabase.auth import get_current_user_id
 
