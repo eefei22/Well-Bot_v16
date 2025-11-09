@@ -2,11 +2,12 @@
 """
 Activity Logger Component
 
-Provides functional/logic for activity logging:
-- Time-of-day context derivation
-- Query logic for activity logs
+Provides functional/logic for intervention logging:
+- Time-of-day context derivation (for reference, not stored in new schema)
+- Query logic for intervention logs
 
 Database access is handled by supabase/database.py functions.
+Note: New schema uses intervention_log table instead of wb_activity_logs.
 """
 
 from typing import Optional, List, Dict, Any
@@ -75,22 +76,20 @@ def get_context_time_of_day(timestamp: Optional[datetime] = None) -> str:
 def query_activity_logs(
     user_id: str,
     activity_type: Optional[str] = None,
-    trigger_type: Optional[str] = None,
-    completed: Optional[bool] = None,
+    emotional_log_id: Optional[int] = None,
     limit: int = 100,
     days_back: int = 30
 ) -> List[Dict[str, Any]]:
     """
-    Query activity logs with filtering options.
+    Query intervention logs with filtering options.
     
     This function provides the query logic. Actual database access
     should be performed by calling supabase/database.py functions.
     
     Args:
         user_id: User ID to filter logs
-        activity_type: Optional filter by activity type ('journal', 'gratitude', 'todo', 'meditation', 'quote')
-        trigger_type: Optional filter by trigger type ('direct_command', 'suggestion_flow')
-        completed: Optional filter by completion status (True/False)
+        activity_type: Optional filter by intervention type ('journal', 'gratitude', 'todo', 'meditation', 'quote')
+        emotional_log_id: Optional filter by emotional_log_id (None for command-triggered, int for emotion-triggered)
         limit: Maximum number of records to return
         days_back: Number of days to look back from current time
     
@@ -100,12 +99,13 @@ def query_activity_logs(
     Note:
         This function should be called by database.py query functions
         that perform the actual database access.
+        The actual implementation is in database.py's query_recent_activity_logs()
     """
     # This function provides query logic/parameters
     # The actual database query should be implemented in database.py
     # This is a placeholder that returns empty list
-    # The real implementation will be in database.py's query_recent_activity_logs()
-    logger.debug(f"Query activity logs called with: user_id={user_id}, activity_type={activity_type}, "
-                 f"trigger_type={trigger_type}, completed={completed}, limit={limit}, days_back={days_back}")
+    # The real implementation is in database.py's query_recent_activity_logs()
+    logger.debug(f"Query intervention logs called with: user_id={user_id}, activity_type={activity_type}, "
+                 f"emotional_log_id={emotional_log_id}, limit={limit}, days_back={days_back}")
     return []
 

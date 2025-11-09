@@ -71,7 +71,7 @@ CREATE TABLE public.intervention_log (
   id bigint GENERATED ALWAYS AS IDENTITY NOT NULL,
   public_id uuid NOT NULL DEFAULT gen_random_uuid() UNIQUE,
   user_id uuid NOT NULL,
-  emotional_log_id bigint NOT NULL,
+  emotional_log_id bigint,
   intervention_type character varying NOT NULL,
   timestamp timestamp without time zone NOT NULL,
   duration interval,

@@ -261,13 +261,14 @@ class WellBotOrchestrator:
         activity_type = intent_to_activity_type.get(intent)
         
         # Log activity start if it's a trackable activity
+        # Command-triggered interventions have emotional_log_id=None
         if activity_type:
-            log_id = log_activity_start(
+            public_id = log_activity_start(
                 user_id=self.user_id,
                 activity_type=activity_type,
-                trigger_type="direct_command"
+                emotional_log_id=None  # Command-triggered, not emotion-triggered
             )
-            self._current_activity_log_id = log_id
+            self._current_activity_log_id = public_id  # Keep variable name for backward compatibility
         else:
             self._current_activity_log_id = None
 

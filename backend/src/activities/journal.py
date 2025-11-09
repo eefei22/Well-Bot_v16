@@ -32,7 +32,7 @@ from src.components import (
     TerminationPhraseDetector,
     TerminationPhraseDetected
 )
-from src.supabase.database import upsert_journal, log_activity_completion
+from src.supabase.database import upsert_journal
 from src.utils.config_resolver import get_global_config_for_user, get_language_config
 from src.supabase.auth import get_current_user_id
 
@@ -63,7 +63,7 @@ class JournalActivity:
         self.state = "INIT"
         self._active = False
         self._initialized = False
-        self._activity_log_id: Optional[str] = None  # Track log ID for completion
+        self._activity_public_id: Optional[str] = None  # Track public_id for duration tracking (optional)
         
         # Paragraph buffering
         self.buffers: List[str] = []
@@ -167,9 +167,9 @@ class JournalActivity:
             traceback.print_exc()
             return False
     
-    def set_activity_log_id(self, log_id: Optional[str]):
-        """Set the activity log ID for completion tracking."""
-        self._activity_log_id = log_id
+    def set_activity_log_id(self, public_id: Optional[str]):
+        """Set the activity public_id for duration tracking (optional)."""
+        self._activity_public_id = public_id
     
     def start(self):
         """Start the journal session"""
@@ -231,9 +231,8 @@ class JournalActivity:
                 if self._save():
                     completed = True
             
-            # Log completion status
-            if self._activity_log_id:
-                log_activity_completion(self._activity_log_id, completed)
+            # Note: Completion tracking removed in new schema
+            # Duration can be tracked via log_intervention_duration() if needed
             
             self._cleanup()
     
