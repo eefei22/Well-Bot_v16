@@ -31,6 +31,7 @@ __all__ = [
     'TerminationPhraseDetector',
     'TerminationPhraseDetected',
     'normalize_text',
+    'KeywordIntentMatcher',
     'DeepSeekClient',
     'UserContextInjector',
 ]
@@ -105,6 +106,11 @@ def __getattr__(name):
     elif name == 'normalize_text':
         from .termination_phrase import normalize_text
         return normalize_text
+    
+    # Keyword intent matcher (used for intent recognition)
+    elif name == 'KeywordIntentMatcher':
+        from .keyword_intent_matcher import KeywordIntentMatcher
+        return KeywordIntentMatcher
     
     # LLM client (used by _pipeline_smalltalk)
     elif name == 'DeepSeekClient':

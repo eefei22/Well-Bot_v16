@@ -27,11 +27,12 @@
       "stop recording"
     ],
     "prompts": {
-      "start": "Ready to journal. You can share anything you like and pause anytime to think. Say 'stop journal' when you're finished.",
+      "start": "Let's journal. You can share anything you like and pause anytime to think. Say 'stop journal' when you're finished.",
       "nudge": "Are you still there? Continue speaking or say 'stop journal' to finish.",
       "saving": "Saving your journal entry now.",
       "saved": "Journal entry saved with {word_count} words.",
-      "timeout": "Saving your journal entry now."
+      "timeout": "Saving your journal entry now.",
+      "no_content": "Nothing was recorded, ending journal session now."
     }
   },
   "quote": {
@@ -49,7 +50,7 @@
       "done",
       "that's enough"
     ],
-    "start_prompt": "Starting your meditation session now.",
+    "start_prompt": "Let's meditate. Starting your meditation session now.",
     "seed_system_prompt_completed": "You just completed a guided meditation session with the user. Transition into a warm, brief small talk. Ask one inviting, open question about how the meditation felt or what they experienced.",
     "seed_system_prompt_stopped": "The user stopped a guided meditation session halfway. Transition into a warm, brief small talk. Ask one inviting, open question about how they're feeling or if everything is okay.",
     "opener_completed": "How are you feeling after that meditation session?",
@@ -69,7 +70,7 @@
       "nudge": "Are you still there? Continue speaking or say 'done' when finished.",
       "saved": "Alright! I've saved your gratitude note.",
       "recording_error": "I'm sorry, I had trouble recording your gratitude note.",
-      "no_content": "I didn't catch what you said. Let's try again another time.",
+      "no_content": "I didn't catch any content. Let's try again another time.",
       "save_error": "I had trouble saving your gratitude note, but I heard what you said."
     },
     "seed_system_prompt": "The user just shared a gratitude note. Transition into a warm, brief small talk. Gratitude note: '{gratitude_note}'. Ask one inviting, open question related to gratitude or positivity.",
@@ -81,6 +82,10 @@
     "starting_activity_feedback": "Starting {activity} now",
     "no_match_feedback": "I didn't quite catch that.",
     "suggestions_unavailable": "Suggestions are not available now",
+    "prompts": {
+      "nudge": "Are you still there? Which activity would you like to try?",
+      "timeout": "I'll be here when you're ready. Just call my name when you want to try an activity."
+    },
     "activity_names": {
       "journaling": "Journaling",
       "gratitude": "Gratitude Practice",

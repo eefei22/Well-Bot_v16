@@ -1,43 +1,36 @@
 {
-  "latest_emotion_entry": {
-    "id": 21,
-    "user_id": "8517c97f-66ef-4955-86ed-531013d33d3e",
-    "timestamp": "2025-11-09T23:00:33",
-    "emotion_label": "Fear",
-    "confidence_score": 0.83,
-    "emotional_score": 34
-  },
+  "latest_emotion_entry": null,
   "latest_decision": {
-    "trigger_intervention": false,
-    "confidence_score": 0.0,
-    "reasoning": "Recent activity -490.7 minutes ago"
+    "trigger_intervention": true,
+    "confidence_score": 0.75,
+    "reasoning": "Negative emotion 'Angry' detected; Confidence 0.75 >= 0.7; Time since last activity: 930.9 minutes"
   },
   "latest_suggestion": {
     "ranked_activities": [
       {
-        "activity_type": "quote",
+        "activity_type": "journal",
         "rank": 1,
-        "score": 0.533
+        "score": 1.0
       },
       {
         "activity_type": "gratitude",
         "rank": 2,
-        "score": 1.0
-      },
-      {
-        "activity_type": "journal",
-        "rank": 3,
-        "score": 0.622
+        "score": 0.804
       },
       {
         "activity_type": "meditation",
+        "rank": 3,
+        "score": 0.72
+      },
+      {
+        "activity_type": "quote",
         "rank": 4,
-        "score": 0.436
+        "score": 0.686
       }
     ],
-    "reasoning": "Emotion: Fear; Time of day: morning; Top suggestion: gratitude (score: 1.000)"
+    "reasoning": "Emotion: Angry; Time of day: morning; Top suggestion: journal (score: 1.000)"
   },
-  "last_request_time": "2025-11-09T22:54:15.220665",
-  "last_response_time": "2025-11-09T22:54:16.684265",
-  "last_database_query_time": "2025-11-10T22:53:38.672803"
+  "last_request_time": "2025-11-10T23:25:51.795782",
+  "last_response_time": "2025-11-10T23:25:57.327154",
+  "last_database_query_time": "2025-11-11T00:36:59.552222"
 }

@@ -260,22 +260,24 @@ class WellBotOrchestrator:
         """Route the user to proper activity based on intent."""
         logger.info(f"🔄 Routing to activity: {intent}")
         
-        # Check for trigger_intervention before normal routing
-        try:
-            from src.utils.intervention_record import InterventionRecordManager
-            record_path = self.backend_dir / "config" / "intervention_record.json"
-            record_manager = InterventionRecordManager(record_path)
-            record = record_manager.load_record()
-            
-            decision = record.get("latest_decision", {})
-            trigger_intervention = decision.get("trigger_intervention", False)
-            
-            if trigger_intervention:
-                logger.info("🎯 trigger_intervention=true detected - launching activity suggestion")
-                self._start_activity_suggestion_activity()
-                return
-        except Exception as e:
-            logger.warning(f"Failed to check trigger_intervention: {e}")
+        # Only check trigger_intervention if user didn't explicitly request an activity
+        # If intent is "unknown", we can use intervention suggestions
+        if intent == "unknown":
+            try:
+                from src.utils.intervention_record import InterventionRecordManager
+                record_path = self.backend_dir / "config" / "intervention_record.json"
+                record_manager = InterventionRecordManager(record_path)
+                record = record_manager.load_record()
+                
+                decision = record.get("latest_decision", {})
+                trigger_intervention = decision.get("trigger_intervention", False)
+                
+                if trigger_intervention:
+                    logger.info("🎯 trigger_intervention=true detected - launching activity suggestion")
+                    self._start_activity_suggestion_activity()
+                    return
+            except Exception as e:
+                logger.warning(f"Failed to check trigger_intervention: {e}")
         
         # Stop intervention poller when starting an activity
         self._stop_intervention_poller()
@@ -314,12 +316,15 @@ class WellBotOrchestrator:
             self._start_spiritual_quote_activity()
         elif intent == "gratitude":
             self._start_gratitude_activity()
+        elif intent == "activity_suggestion":
+            logger.info("Activity suggestion intent detected - launching activity suggestion")
+            self._start_activity_suggestion_activity()
         elif intent == "termination":
             logger.info("👋 Termination intent detected – ending session")
             self._handle_termination()
         else:
-            logger.info(f"❓ Unknown intent '{intent}' – launching activity suggestion")
-            self._start_activity_suggestion_activity()
+            logger.info(f"❓ Unknown intent '{intent}' – prompting to repeat")
+            self._handle_unknown_intent(transcript)
 
     def _start_smalltalk_activity(self):
         """Start the smalltalk activity thread."""
@@ -598,14 +603,24 @@ class WellBotOrchestrator:
             logger.warning(f"Failed to stop STT session: {e}")
 
     def _handle_unknown_intent(self, transcript: str):
-        """Handle unknown/unrecognized intent by launching activity suggestion"""
-        logger.info(f"Handling unknown intent for transcript: '{transcript}' - launching activity suggestion")
+        """Handle unknown/unrecognized intent by prompting user to repeat and looping back"""
+        logger.info(f"Handling unknown intent for transcript: '{transcript}' - prompting to repeat")
         
-        # Stop any ongoing STT session
-        self._stop_stt_session()
+        # Load user-specific config for prompt
+        from src.utils.config_resolver import get_language_config
+        language_config = get_language_config(self.user_id)
+        wakeword_config = language_config.get("wakeword_responses", {})
+        prompts = wakeword_config.get("prompts", {})
         
-        # Launch activity suggestion instead of restarting wakeword
-        self._start_activity_suggestion_activity()
+        # Get prompt to ask user to repeat
+        repeat_prompt = prompts.get("unknown_intent", "I didn't quite catch that. Can you repeat that?")
+        
+        # Speak the prompt (this will mute mic during TTS)
+        self._speak(repeat_prompt)
+        
+        # After speaking, restart wakeword detection to listen again
+        logger.info("Restarting wakeword detection to listen for command again")
+        self._restart_wakeword_detection()
 
     def _handle_activity_unavailable(self, activity_name: str):
         """Handle unavailable activity with audio feedback"""
@@ -948,20 +963,24 @@ class WellBotOrchestrator:
             self.state = SystemState.ACTIVITY_ACTIVE
             self.current_activity = "activity_suggestion"
 
-        # Stop wake word pipeline first
+        # Stop wake word pipeline first and wait for STT to fully complete
         if self.voice_pipeline:
             logger.info("🔇 Pausing wake word pipeline before Activity Suggestion…")
             try:
-                import threading
-                stop_success = threading.Event()
-                def force_stop():
-                    try:
-                        self.voice_pipeline.stop()
-                        stop_success.set()
-                    except Exception:
-                        stop_success.set()
-                threading.Thread(target=force_stop, daemon=True).start()
-                stop_success.wait(timeout=5.0)
+                # Stop the pipeline (this will wait for STT thread)
+                self.voice_pipeline.stop()
+                
+                # Wait for STT teardown to ensure mic is fully released
+                logger.info("⏳ Waiting for STT teardown (mic/device release)…")
+                ok = self._wait_for_stt_teardown(timeout_s=3.0)
+                if not ok:
+                    logger.warning("⚠️ STT teardown wait timed out")
+                
+                # Add guard delay for Windows audio device release
+                logger.info("⏱️ Adding guard delay for Windows audio device release...")
+                time.sleep(0.2)
+                
+                logger.info("✅ Wake word pipeline fully stopped")
             except Exception as e:
                 logger.warning(f"Ignoring error while stopping voice pipeline: {e}")
 
@@ -982,6 +1001,12 @@ class WellBotOrchestrator:
                 
                 if success:
                     logger.info("✅ Activity Suggestion activity completed successfully")
+                    
+                    # Check if timeout occurred (special sentinel value)
+                    if selected_activity == "__timeout__":
+                        logger.info("Timeout occurred - skipping routing, will return to wakeword")
+                        # Don't route anywhere, just let finally block restart wakeword
+                        return
                     
                     if selected_activity:
                         # Route to selected activity

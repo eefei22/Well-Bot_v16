@@ -29,14 +29,16 @@ try:
     from .wakeword import WakeWordDetector, create_wake_word_detector
     from .mic_stream import MicStream
     from .tts import GoogleTTSClient
-    from .intent_recognition import IntentRecognition
-    from ..utils.config_loader import PORCUPINE_ACCESS_KEY, RHINO_ACCESS_KEY
+    from .stt import GoogleSTTService
+    from .keyword_intent_matcher import KeywordIntentMatcher
+    from ..utils.config_loader import PORCUPINE_ACCESS_KEY
 except ImportError:
     from wakeword import WakeWordDetector, create_wake_word_detector
     from mic_stream import MicStream
     from tts import GoogleTTSClient
-    from intent_recognition import IntentRecognition
-    from utils.config_loader import PORCUPINE_ACCESS_KEY, RHINO_ACCESS_KEY
+    from stt import GoogleSTTService
+    from keyword_intent_matcher import KeywordIntentMatcher
+    from utils.config_loader import PORCUPINE_ACCESS_KEY
 
 logger = logging.getLogger(__name__)
 
@@ -92,31 +94,22 @@ class VoicePipeline:
             logger.warning(f"Failed to initialize TTS service for wakeword: {e}")
             self.tts_service = None
 
-        # Initialize Rhino intent recognition with fixed English context
+        # Initialize STT service and keyword intent matcher
         backend_dir = Path(__file__).parent.parent.parent
-        context_path = backend_dir / "config" / "Intent" / "Well-Bot-Commands_en_windows_v3_0_0.rhn"
         
         try:
-            if not RHINO_ACCESS_KEY:
-                logger.error("RHINO_ACCESS_KEY not configured, cannot initialize Rhino")
-                self.intent_recognition = None
-            elif not context_path.exists():
-                logger.error(f"Rhino context file not found: {context_path}")
-                self.intent_recognition = None
-            else:
-                self.intent_recognition = IntentRecognition(
-                    access_key=RHINO_ACCESS_KEY,
-                    context_path=context_path,
-                    sensitivity=0.5,
-                    require_endpoint=True
-                )
-                logger.info(f"Rhino intent recognition initialized for user {self.user_id}")
-        except FileNotFoundError as e:
-            logger.error(f"Rhino context file not found: {e}", exc_info=True)
-            self.intent_recognition = None
+            # Initialize STT service
+            stt_language = self.global_config["language_codes"]["stt_language_code"]
+            self.stt_service = GoogleSTTService(language=stt_language, sample_rate=16000)
+            logger.info(f"STT service initialized for keyword matching (language: {stt_language})")
+            
+            # Initialize keyword intent matcher (uses user language preference)
+            self.intent_matcher = KeywordIntentMatcher(backend_dir=backend_dir, user_id=self.user_id)
+            logger.info(f"Keyword intent matcher initialized for user {self.user_id}")
         except Exception as e:
-            logger.error(f"Failed to initialize Rhino intent recognition: {e}", exc_info=True)
-            self.intent_recognition = None
+            logger.error(f"Failed to initialize STT service or keyword matcher: {e}", exc_info=True)
+            self.stt_service = None
+            self.intent_matcher = None
 
         self.active = False
         self.stt_active = False
@@ -125,7 +118,7 @@ class VoicePipeline:
 
         self.stt_timeout_s = stt_timeout_s  # how many seconds to wait for speech
 
-        logger.info(f"Pipeline initialized | Language: {lang} | Intent: {'Yes' if self.intent_recognition else 'No'} | Wakeword Audio: {'Yes' if self.wakeword_audio_path else 'No'}")
+        logger.info(f"Pipeline initialized | Language: {lang} | Intent: {'Yes' if self.intent_matcher else 'No'} | Wakeword Audio: {'Yes' if self.wakeword_audio_path else 'No'}")
 
     def _play_audio_file(self, audio_path: str) -> bool:
         """
@@ -168,11 +161,14 @@ class VoicePipeline:
         return False
 
     def _speak(self, text: str):
-        """Speak text using TTS"""
+        """Speak text using TTS with microphone muting"""
         if not self.tts_service:
             logger.warning("TTS service not available")
             return
         
+        # Note: We can't directly mute the mic here because it's in a separate thread
+        # The mic will be stopped when the STT session ends, which happens before TTS
+        # For wakeword responses, the mic is already stopped by the time we speak
         try:
             def text_gen():
                 yield text
@@ -246,79 +242,84 @@ class VoicePipeline:
         # Speak the prompt (this will block until TTS finishes)
         logger.info(f"Speaking wakeword prompt: {wakeword_prompt}")
         self._speak(wakeword_prompt)
-        logger.info("Wakeword prompt finished, starting Rhino intent recognition")
+        logger.info("Wakeword prompt finished, starting keyword intent recognition")
 
-        # Launch Rhino intent recognition thread AFTER TTS completes
-        logger.info("Launching Rhino intent recognition session")
-        self._stt_thread = threading.Thread(target=self._run_rhino_intent, daemon=True)
+        # Launch STT-based keyword intent recognition thread AFTER TTS completes
+        logger.info("Launching keyword intent recognition session")
+        self._stt_thread = threading.Thread(target=self._run_keyword_intent, daemon=True)
         self._stt_thread.start()
 
-    def _run_rhino_intent(self):
-        """Process audio frames with Rhino for intent recognition."""
-        if not self.intent_recognition:
-            logger.error("Rhino intent recognition not initialized, cannot process")
+    def _run_keyword_intent(self):
+        """Process audio with STT and match against keywords for intent recognition."""
+        if not self.stt_service or not self.intent_matcher:
+            logger.error("STT service or keyword matcher not initialized, cannot process")
             with self._lock:
                 self.stt_active = False
             return
         
-        logger.info("Rhino intent recognition session started")
+        logger.info("Keyword intent recognition session started")
         
-        # Use Rhino's required sample rate and frame length
-        rhino_sample_rate = self.intent_recognition.get_sample_rate()
-        rhino_frame_length = self.intent_recognition.get_frame_length()
-        
-        mic = MicStream(
-            rate=rhino_sample_rate,
-            chunk_size=rhino_frame_length
-        )
+        # Use standard STT parameters (16kHz)
+        mic = MicStream(rate=16000, chunk_size=1600)  # 100ms chunks at 16kHz
         
         intent_result: Optional[dict] = None
+        transcript: Optional[str] = None
         start_time = time.time()
 
         try:
             mic.start()
-            logger.info(f"Microphone active, awaiting speech (Rhino: {rhino_sample_rate}Hz, frame: {rhino_frame_length})")
+            logger.info("Microphone active, awaiting speech for keyword matching")
             
-            # Reset Rhino for new session
-            self.intent_recognition.reset()
+            # Capture transcript using STT
+            def on_transcript(text: str, is_final: bool):
+                nonlocal transcript
+                if is_final and text:
+                    transcript = text
+                    mic.stop()
             
-            # Process audio frames
-            for audio_chunk in mic.generator():
-                if time.time() - start_time > self.stt_timeout_s:
-                    logger.warning(f"No intent detected within {self.stt_timeout_s:.1f}s → timing out")
-                    break
-                
-                # Process frame with Rhino
-                if self.intent_recognition.process_bytes(audio_chunk):
-                    # Inference is ready
-                    intent_result = self.intent_recognition.get_inference()
-                    
-                    if intent_result:
-                        logger.info(f"[Pipeline] Intent detected: {intent_result.get('intent')}")
-                        break
-                    else:
-                        # Not understood, reset and continue
-                        self.intent_recognition.reset()
+            # Run STT with timeout
+            try:
+                self.stt_service.stream_recognize(
+                    mic.generator(),
+                    on_transcript,
+                    interim_results=True,
+                    single_utterance=True  # Stop after first final result
+                )
+            except Exception as e:
+                logger.error(f"STT error during keyword matching: {e}")
+            
+            # Check timeout
+            if time.time() - start_time > self.stt_timeout_s:
+                logger.warning(f"No speech detected within {self.stt_timeout_s:.1f}s → timing out")
+            
+            # Match transcript against keywords
+            if transcript:
+                logger.info(f"[Pipeline] Transcript received: '{transcript}'")
+                intent_result = self.intent_matcher.match_intent(transcript)
+                if intent_result:
+                    logger.info(f"[Pipeline] Intent detected: {intent_result.get('intent')}")
+                else:
+                    logger.info("[Pipeline] No intent matched from transcript")
             
             # If we didn't get an intent, set unknown
             if not intent_result:
                 intent_result = {"intent": "unknown", "confidence": 0.0}
                 logger.info("[Pipeline] No intent understood, defaulting to unknown")
             
-            # Invoke callback with empty transcript (no STT needed)
+            # Invoke callback with transcript and intent result
             if self.on_final_transcript:
                 try:
-                    self.on_final_transcript("", intent_result)
+                    self.on_final_transcript(transcript or "", intent_result)
                 except Exception as e:
                     logger.error(f"Error invoking final transcript callback: {e}")
             
         except Exception as e:
-            logger.error(f"Error during Rhino intent recognition: {e}", exc_info=True)
+            logger.error(f"Error during keyword intent recognition: {e}", exc_info=True)
         finally:
             mic.stop()
             with self._lock:
                 self.stt_active = False
-            logger.info("Rhino intent recognition session ended, returning to wakeword detection")
+            logger.info("Keyword intent recognition session ended, returning to wakeword detection")
 
     def start(self):
         if self.active:
@@ -343,10 +344,20 @@ class VoicePipeline:
             return
         logger.info("Stopping voice pipeline")
         try:
+            # Stop wakeword first
             self.wakeword.stop()
+            
+            # Wait for STT thread to complete if it's running
             with self._lock:
-                if self.stt_active:
+                if self.stt_active and self._stt_thread and self._stt_thread.is_alive():
                     logger.info("Waiting for intent recognition session to complete before fully stopping")
+            
+            # Wait for STT thread to finish (with timeout)
+            if self._stt_thread and self._stt_thread.is_alive():
+                self._stt_thread.join(timeout=2.0)
+                if self._stt_thread.is_alive():
+                    logger.warning("STT thread did not complete within timeout, continuing anyway")
+            
             self.active = False
             logger.info("Voice pipeline stopped")
         except Exception as e:
@@ -357,8 +368,7 @@ class VoicePipeline:
         try:
             self.stop()
             self.wakeword.cleanup()
-            if hasattr(self, 'intent_recognition') and self.intent_recognition:
-                self.intent_recognition.delete()
+            # STT service and keyword matcher don't need explicit cleanup
             logger.info("Pipeline cleanup done")
         except Exception as e:
             logger.error(f"Error during pipeline cleanup: {e}")

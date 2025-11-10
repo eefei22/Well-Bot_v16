@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Activity Suggestion Activity Class
-Presents ranked activity suggestions to users and routes them to activities based on Rhino intent recognition.
+Presents ranked activity suggestions to users and routes them to activities based on keyword matching.
 """
 
 import os
@@ -26,9 +26,9 @@ from src.components import (
     ConversationSession,
     SmallTalkSession,
     TerminationPhraseDetected,
-    IntentRecognition
+    KeywordIntentMatcher
 )
-from src.utils.config_loader import get_deepseek_config, RHINO_ACCESS_KEY
+from src.utils.config_loader import get_deepseek_config
 from src.utils.config_resolver import get_global_config_for_user, get_language_config
 from src.supabase.auth import get_current_user_id
 from src.supabase.database import get_user_language
@@ -49,7 +49,7 @@ class ActivitySuggestionActivity:
     Activity Suggestion Activity Class
     
     Presents ranked activity suggestions to users and routes them to the appropriate
-    activity based on Rhino intent recognition.
+    activity based on keyword matching.
     """
     
     def __init__(self, backend_dir: Path, user_id: Optional[str] = None):
@@ -62,7 +62,7 @@ class ActivitySuggestionActivity:
         self.session_manager: Optional[ConversationSession] = None
         self.llm_pipeline: Optional[SmallTalkSession] = None
         self.stt_service: Optional[GoogleSTTService] = None
-        self.intent_recognition: Optional[IntentRecognition] = None
+        self.intent_matcher: Optional[KeywordIntentMatcher] = None
         self.audio_config: Optional[dict] = None
         
         # Activity state
@@ -70,6 +70,7 @@ class ActivitySuggestionActivity:
         self._initialized = False
         self._selected_activity: Optional[str] = None  # Store selected activity for routing
         self._conversation_context: List[Dict[str, str]] = []  # Store conversation for smalltalk seeding
+        self._timeout_detected = False  # Flag to track if timeout occurred
         
         logger.info(f"ActivitySuggestionActivity initialized for user {self.user_id}")
     
@@ -93,39 +94,22 @@ class ActivitySuggestionActivity:
             logger.info(f"Configs loaded - Global section keys: {list(self.global_config.keys())}")
             logger.info(f"Language config section keys: {list(self.language_config.keys())}")
             
-            # Initialize Rhino intent recognition
-            logger.info("Initializing Rhino intent recognition...")
-            context_path = self.backend_dir / "config" / "Intent" / "Well-Bot-Commands_en_windows_v3_0_0.rhn"
-            try:
-                if not RHINO_ACCESS_KEY:
-                    logger.error("RHINO_ACCESS_KEY not configured, cannot initialize Rhino")
-                    # Will handle error in start() where TTS is available
-                    self.intent_recognition = None
-                elif not context_path.exists():
-                    logger.error(f"Rhino context file not found: {context_path}")
-                    self.intent_recognition = None
-                else:
-                    self.intent_recognition = IntentRecognition(
-                        access_key=RHINO_ACCESS_KEY,
-                        context_path=context_path,
-                        sensitivity=0.5,
-                        require_endpoint=True
-                    )
-                    logger.info("✓ Rhino intent recognition initialized")
-            except FileNotFoundError as e:
-                logger.error(f"Rhino context file not found: {e}", exc_info=True)
-                self.intent_recognition = None
-            except Exception as e:
-                logger.error(f"Failed to initialize Rhino intent recognition: {e}", exc_info=True)
-                self.intent_recognition = None
-            
-            # Initialize STT service (still needed for ConversationAudioManager)
+            # Initialize STT service (needed for ConversationAudioManager and keyword matching)
             logger.info("Initializing STT service...")
             stt_lang = self.global_config["language_codes"]["stt_language_code"]
             audio_settings = self.global_config.get("audio_settings", {})
             stt_sample_rate = audio_settings.get("stt_sample_rate", 16000)
             self.stt_service = GoogleSTTService(language=stt_lang, sample_rate=stt_sample_rate)
             logger.info("✓ STT service initialized")
+            
+            # Initialize keyword intent matcher (uses user language preference)
+            logger.info("Initializing keyword intent matcher...")
+            try:
+                self.intent_matcher = KeywordIntentMatcher(backend_dir=self.backend_dir, user_id=self.user_id)
+                logger.info("✓ Keyword intent matcher initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize keyword intent matcher: {e}", exc_info=True)
+                self.intent_matcher = None
             
             # Create mic factory
             def mic_factory():
@@ -313,24 +297,18 @@ class ActivitySuggestionActivity:
                 logger.info("No ranked activities available - using cold start suggestions without rankings")
                 
                 # Get cold start intro message (or use default)
+                # Note: cold_start_intro should contain the full message with all activities and proper punctuation
                 cold_start_intro = self.activity_suggestion_config.get(
                     "cold_start_intro",
                     "Here are some wellness activities you can try:"
                 )
                 
-                # Format all activities without rankings
-                activities_text = self._format_all_activities_without_rankings()
-                logger.debug(f"Formatted activities for cold start TTS:\n{activities_text}")
-                
-                # Combine intro message and activities
-                full_message = f"{cold_start_intro}\n\n{activities_text}"
-                
-                # Speak full message via TTS
-                self._speak(full_message)
-                logger.info(f"Spoke cold start activity suggestions: '{full_message[:50]}...'")
+                # Speak the complete cold start intro message via TTS
+                self._speak(cold_start_intro)
+                logger.info(f"Spoke cold start activity suggestions: '{cold_start_intro[:50]}...'")
                 
                 # Store conversation context (full message for smalltalk seeding)
-                self._conversation_context = [{"role": "assistant", "content": full_message}]
+                self._conversation_context = [{"role": "assistant", "content": cold_start_intro}]
                 
                 return True
             
@@ -366,25 +344,19 @@ class ActivitySuggestionActivity:
             return False
     
     def _listen_for_activity_choice(self) -> Optional[str]:
-        """Listen for user's activity selection using Rhino intent recognition"""
-        if not self.intent_recognition:
-            logger.error("Rhino intent recognition not initialized, cannot listen for activity choice")
+        """Listen for user's activity selection using STT and keyword matching"""
+        if not self.stt_service or not self.intent_matcher:
+            logger.error("STT service or keyword matcher not initialized, cannot listen for activity choice")
             return None
         
         try:
-            logger.info("Listening for activity choice with Rhino...")
+            logger.info("Listening for activity choice with keyword matching...")
             
-            # Get Rhino's required sample rate and frame length
-            rhino_sample_rate = self.intent_recognition.get_sample_rate()
-            rhino_frame_length = self.intent_recognition.get_frame_length()
-            
-            # Create microphone stream with Rhino parameters
-            mic = MicStream(
-                rate=rhino_sample_rate,
-                chunk_size=rhino_frame_length
-            )
+            # Use standard STT parameters (16kHz)
+            mic = MicStream(rate=16000, chunk_size=1600)  # 100ms chunks at 16kHz
             
             intent_result: Optional[dict] = None
+            transcript: Optional[str] = None
             start_time = time.time()
             
             # Get timeout from global config (same as wakeword pipeline)
@@ -392,30 +364,43 @@ class ActivitySuggestionActivity:
             
             try:
                 mic.start()
-                logger.info(f"Microphone active, awaiting speech (Rhino: {rhino_sample_rate}Hz, frame: {rhino_frame_length})")
+                logger.info("Microphone active, awaiting speech for keyword matching")
                 
-                # Reset Rhino for new session
-                self.intent_recognition.reset()
+                # Capture transcript using STT
+                def on_transcript(text: str, is_final: bool):
+                    nonlocal transcript
+                    if is_final and text:
+                        transcript = text
+                        mic.stop()
                 
-                # Process audio frames
-                for audio_chunk in mic.generator():
-                    if time.time() - start_time > timeout_s:
-                        logger.warning(f"No intent detected within {timeout_s:.1f}s → timing out")
-                        break
-                    
-                    # Process frame with Rhino
-                    if self.intent_recognition.process_bytes(audio_chunk):
-                        # Inference is ready
-                        intent_result = self.intent_recognition.get_inference()
-                        
-                        if intent_result:
-                            logger.info(f"Intent detected: {intent_result.get('intent')}")
-                            break
-                        else:
-                            # Not understood, reset and continue
-                            self.intent_recognition.reset()
+                # Run STT with timeout
+                try:
+                    self.stt_service.stream_recognize(
+                        mic.generator(),
+                        on_transcript,
+                        interim_results=True,
+                        single_utterance=True  # Stop after first final result
+                    )
+                except Exception as e:
+                    logger.error(f"STT error during keyword matching: {e}")
                 
-                # Map Rhino intent to activity type
+                # Check if activity was stopped (e.g., due to timeout)
+                if not self._active:
+                    logger.info("Activity was stopped during listening - returning None")
+                    return None
+                
+                # Check timeout
+                if time.time() - start_time > timeout_s:
+                    logger.warning(f"No speech detected within {timeout_s:.1f}s → timing out")
+                
+                # Match transcript against keywords
+                if transcript:
+                    logger.info(f"Transcript received: '{transcript}'")
+                    intent_result = self.intent_matcher.match_intent(transcript)
+                    if intent_result:
+                        logger.info(f"Intent detected: {intent_result.get('intent')}")
+                
+                # Map intent to activity type
                 if intent_result:
                     intent_name = intent_result.get("intent")
                     # Map recognized intents to activity types
@@ -428,17 +413,17 @@ class ActivitySuggestionActivity:
                     }
                     matched_activity = intent_to_activity.get(intent_name)
                     if matched_activity:
-                        logger.info(f"Mapped Rhino intent '{intent_name}' to activity '{matched_activity}'")
+                        logger.info(f"Mapped intent '{intent_name}' to activity '{matched_activity}'")
                         return matched_activity
                     else:
-                        logger.info(f"Rhino intent '{intent_name}' does not map to a known activity")
+                        logger.info(f"Intent '{intent_name}' does not map to a known activity")
                         return None
                 else:
-                    logger.info("No intent understood by Rhino")
+                    logger.info("No intent matched from transcript")
                     return None
                     
             except Exception as e:
-                logger.error(f"Error during Rhino processing: {e}", exc_info=True)
+                logger.error(f"Error during keyword matching: {e}", exc_info=True)
                 return None
             finally:
                 mic.stop()
@@ -516,15 +501,36 @@ class ActivitySuggestionActivity:
     def _handle_nudge(self):
         """Handle silence nudge"""
         logger.info("Silence nudge triggered in activity suggestion")
-        # Play nudge audio if available
-        if self.audio_config and self.audio_config.get("nudge_audio_path"):
-            nudge_path = self.backend_dir / self.audio_config["nudge_audio_path"]
-            if nudge_path.exists():
-                self.audio_manager.play_audio_file(str(nudge_path))
+        # Get nudge text from config and speak it using TTS
+        try:
+            prompts = self.activity_suggestion_config.get("prompts", {})
+            nudge_text = prompts.get("nudge", "Are you still there? Which activity would you like to try?")
+        except Exception as e:
+            logger.warning(f"Failed to load nudge prompt from config: {e}")
+            nudge_text = "Are you still there? Which activity would you like to try?"
+        
+        # Speak nudge with delays to prevent STT pickup
+        self._speak(nudge_text, is_nudge=True)
     
     def _handle_timeout(self):
         """Handle silence timeout"""
-        logger.info("Silence timeout triggered in activity suggestion - ending activity")
+        logger.info("Silence timeout triggered in activity suggestion - ending activity gracefully")
+        
+        # Set timeout flag so run() knows not to route to smalltalk
+        self._timeout_detected = True
+        
+        # Get timeout message from config and speak it
+        try:
+            prompts = self.activity_suggestion_config.get("prompts", {})
+            timeout_text = prompts.get("timeout", "I'll be here when you're ready. Just call my name when you want to try an activity.")
+        except Exception as e:
+            logger.warning(f"Failed to load timeout prompt from config: {e}")
+            timeout_text = "I'll be here when you're ready. Just call my name when you want to try an activity."
+        
+        # Speak timeout message
+        self._speak(timeout_text)
+        
+        # Stop the activity (this will trigger cleanup and return to wakeword)
         self.stop()
     
     def start(self) -> bool:
@@ -542,9 +548,9 @@ class ActivitySuggestionActivity:
             logger.error("❌ Components not properly initialized - cannot start activity")
             return False
         
-        # Check if Rhino is initialized (required for activity suggestion)
-        if not self.intent_recognition:
-            logger.error("❌ Rhino intent recognition not initialized - cannot start activity")
+        # Check if keyword matcher is initialized (required for activity suggestion)
+        if not self.intent_matcher:
+            logger.error("❌ Keyword intent matcher not initialized - cannot start activity")
             # Speak error message and return False
             unavailable_msg = self.activity_suggestion_config.get(
                 "suggestions_unavailable",
@@ -668,15 +674,7 @@ class ActivitySuggestionActivity:
             except Exception as e:
                 logger.warning(f"Error during STT cleanup: {e}")
         
-        # Cleanup Rhino intent recognition
-        if self.intent_recognition:
-            try:
-                logger.info("🧹 Cleaning up Rhino intent recognition...")
-                self.intent_recognition.delete()
-                self.intent_recognition = None
-                logger.info("✓ Rhino intent recognition cleaned up")
-            except Exception as e:
-                logger.warning(f"Error during Rhino cleanup: {e}")
+        # Keyword matcher doesn't need explicit cleanup
         
         # Force garbage collection
         try:
@@ -728,6 +726,7 @@ class ActivitySuggestionActivity:
         self._initialized = False
         self._selected_activity = None
         self._conversation_context = []
+        self._timeout_detected = False
         
         # Re-initialize components
         return self.initialize()
@@ -752,6 +751,12 @@ class ActivitySuggestionActivity:
             
             # Listen for user's activity choice
             matched_activity = self._listen_for_activity_choice()
+            
+            # Check if timeout occurred - if so, don't route to smalltalk, just return
+            if self._timeout_detected:
+                logger.info("Timeout detected - returning to wakeword without routing")
+                self._selected_activity = "__timeout__"  # Special sentinel value to indicate timeout
+                return True
             
             if matched_activity:
                 if matched_activity == "smalltalk":
@@ -812,7 +817,7 @@ if __name__ == "__main__":
             logger.info("The activity will:")
             logger.info("- Load ranked activities from intervention_record.json")
             logger.info("- Format and speak activity suggestions directly via TTS")
-            logger.info("- Listen for your activity choice using Rhino intent recognition")
+            logger.info("- Listen for your activity choice using keyword matching")
             logger.info("- Speak feedback and route to selected activity (or smalltalk if no match)")
             logger.info("- Press Ctrl+C to stop")
             

@@ -31,7 +31,8 @@
       "nudge": "你还在吗？继续说话或说'停止写日记'来完成。",
       "saving": "正在保存你的日记条目。",
       "saved": "日记条目已保存，共{word_count}字。",
-      "timeout": "正在保存你的日记条目。"
+      "timeout": "正在保存你的日记条目。",
+      "no_content": "没有记录到内容，现在结束日记会话。"
     }
   },
   "quote": {
@@ -65,18 +66,22 @@
       "nudge": "你还在吗？继续说话或说'完成了'来结束。",
       "saved": "谢谢你分享。我已经保存了你的感恩记录。",
       "recording_error": "抱歉，我录制你的感恩记录时遇到了问题。",
-      "no_content": "我没有听清楚。我们下次再试吧。",
+      "no_content": "没有记录到内容。我们下次再试吧。",
       "save_error": "我保存你的感恩记录时遇到了问题，但我听到了你说的话。"
     },
     "seed_system_prompt": "用户刚刚分享了一条感恩记录。请自然过渡到简短而温暖的闲聊。感恩记录：'{gratitude_note}'。请提出一个开放、友好的问题，与感恩或积极情绪相关。",
     "opener": "这很美好。你还有什么想说的吗？"
   },
   "activity_suggestion": {
-    "system_prompt": "你是Well-Bot，一个温暖且鼓励人心的健康助手。你正在向用户展示活动建议。请热情地打招呼，并明确地按照从最高排名到最低排名的顺序列出建议的活动。保持简短、友好和鼓励。列出活动后，询问他们想尝试哪一个。",
-    "cold_start_intro": "以下是一些您可以尝试的健康活动：",
+    "system_prompt": "以下是一些为您推荐的活动，它们根据我们过去的互动从高到低排名。",
+    "cold_start_intro": "以下是一些您可以尝试的健康活动。我们可以一起冥想，或者你想写日记？ 我也可以送你一句励志名言，或者来一次感恩练习。你随便选一个吧！",
     "starting_activity_feedback": "现在开始{activity}",
-    "no_match_feedback": "我没听清楚",
+    "no_match_feedback": "我没听清楚。不如我们来聊聊天吧！",
     "suggestions_unavailable": "建议现在不可用",
+    "prompts": {
+      "nudge": "你还在吗？你想尝试哪个活动？",
+      "timeout": "当你准备好了，随时叫我，我会在这里等你。"
+    },
     "activity_names": {
       "journaling": "写日记",
       "gratitude": "感恩练习",

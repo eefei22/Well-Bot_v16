@@ -209,6 +209,9 @@ class JournalActivity:
                     completed = True
             else:
                 logger.warning("No content to save (below word threshold or empty)")
+                # Speak message that nothing was recorded
+                no_content_msg = self.config.get("prompts", {}).get("no_content", "Nothing was recorded, ending journal session now.")
+                self._speak(no_content_msg)
                 completed = False
         except KeyboardInterrupt:
             logger.info("Journal session interrupted by user")
@@ -414,6 +417,9 @@ class JournalActivity:
         if not self.buffers:
             logger.warning("No content to save - buffers are empty")
             logger.warning(f"current_buffer was: '{self.current_buffer}'")
+            # Speak message that nothing was recorded
+            no_content_msg = self.config.get("prompts", {}).get("no_content", "Nothing was recorded, ending journal session now.")
+            self._speak(no_content_msg)
             return False
         
         body = "\n\n".join(self.buffers).strip()

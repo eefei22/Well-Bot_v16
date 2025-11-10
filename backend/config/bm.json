@@ -76,6 +76,10 @@
     "starting_activity_feedback": "Memulakan {activity} sekarang",
     "no_match_feedback": "Saya tidak begitu faham",
     "suggestions_unavailable": "Cadangan tidak tersedia sekarang",
+    "prompts": {
+      "nudge": "Adakah anda masih di situ? Aktiviti mana yang anda ingin cuba?",
+      "timeout": "Saya akan berada di sini apabila anda sudah bersedia. Hanya panggil nama saya apabila anda ingin mencuba aktiviti."
+    },
     "activity_names": {
       "journaling": "Menulis Jurnal",
       "gratitude": "Amalan Kesyukuran",
