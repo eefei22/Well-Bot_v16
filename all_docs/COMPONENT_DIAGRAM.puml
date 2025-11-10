@@ -1,0 +1,203 @@
+@startuml Well-Bot_Edge_Component_Diagram
+
+!theme plain
+skinparam componentStyle rectangle
+skinparam linetype ortho
+
+title Well-Bot Edge Application - Component Diagram (Source Code Structure)
+
+' ============================================
+' MAIN ORCHESTRATOR
+' ============================================
+component [main.py\nWellBotOrchestrator] as Main
+note right of Main: System entry point\nManages state & coordinates\nall components
+
+' ============================================
+' ACTIVITIES (src/activities/)
+' ============================================
+package "src/activities" {
+    component [smalltalk.py\nSmallTalkActivity] as SmallTalk
+    component [journal.py\nJournalActivity] as Journal
+    component [meditation.py\nMeditationActivity] as Meditation
+    component [gratitude.py\nGratitudeActivity] as Gratitude
+    component [spiritual_quote.py\nSpiritualQuoteActivity] as Quote
+    component [activity_suggestion.py\nActivitySuggestionActivity] as ActivitySuggestion
+}
+
+' ============================================
+' COMPONENTS (src/components/)
+' ============================================
+package "src/components" {
+    ' Voice Pipeline
+    component [_pipeline_wakeword.py\nVoicePipeline] as VoicePipeline
+    component [wakeword.py\nWakeWordDetector] as WakeWord
+    component [stt.py\nGoogleSTTService] as STT
+    component [intent_recognition.py\nIntentRecognition] as Intent
+    
+    ' Conversation
+    component [conversation_audio_manager.py\nConversationAudioManager] as AudioMgr
+    component [conversation_session.py\nConversationSession] as ConvSession
+    component [_pipeline_smalltalk.py\nSmallTalkSession] as SmallTalkSession
+    component [user_context_injector.py\nUserContextInjector] as ContextInjector
+    component [termination_phrase.py\nTerminationPhrase] as Termination
+    
+    ' Audio
+    component [mic_stream.py\nMicStream] as MicStream
+    component [tts.py\nGoogleTTSClient] as TTS
+    
+    ' LLM
+    component [llm.py\nLLMClient] as LLM
+    
+    ' Logging
+    component [activity_logger.py\nActivityLogger] as ActivityLogger
+}
+
+' ============================================
+' SUPABASE (src/supabase/)
+' ============================================
+package "src/supabase" {
+    component [client.py\nSupabaseClient] as SupabaseClient
+    component [database.py\nDatabase] as Database
+    component [auth.py\nAuth] as Auth
+}
+
+' ============================================
+' UTILS (src/utils/)
+' ============================================
+package "src/utils" {
+    component [config_loader.py\nConfigLoader] as ConfigLoader
+    component [config_resolver.py\nConfigResolver] as ConfigResolver
+    component [intervention_poller.py\nInterventionPoller] as InterventionPoller
+    component [intervention_client.py\nInterventionClient] as InterventionClient
+    component [intervention_record.py\nInterventionRecordManager] as InterventionRecord
+}
+
+' ============================================
+' EXTERNAL SERVICES
+' ============================================
+cloud "External Services" {
+    component [Google Cloud STT] as GoogleSTT
+    component [Google Cloud TTS] as GoogleTTS
+    component [Picovoice Porcupine] as Porcupine
+    component [Picovoice Rhino] as Rhino
+    component [DeepSeek API] as DeepSeek
+    component [Supabase Database] as SupabaseDB
+    component [Cloud Intervention Service] as CloudService
+}
+
+' ============================================
+' MAIN ORCHESTRATOR RELATIONSHIPS
+' ============================================
+Main --> "src/activities" : routes to activities
+Main --> VoicePipeline : manages
+Main --> InterventionPoller : manages
+Main --> ConfigResolver : uses
+
+' ============================================
+' ACTIVITY RELATIONSHIPS
+' ============================================
+SmallTalk --> AudioMgr : uses
+SmallTalk --> ConvSession : uses
+SmallTalk --> SmallTalkSession : uses
+SmallTalk --> ContextInjector : uses
+
+Journal --> AudioMgr : uses
+Journal --> Termination : uses
+Journal --> ActivityLogger : uses
+
+Meditation --> TTS : uses
+Meditation --> Termination : uses
+Meditation --> ActivityLogger : uses
+
+Gratitude --> AudioMgr : uses
+Gratitude --> ActivityLogger : uses
+
+Quote --> TTS : uses
+Quote --> ActivityLogger : uses
+
+ActivitySuggestion --> AudioMgr : uses
+ActivitySuggestion --> ConvSession : uses
+ActivitySuggestion --> SmallTalkSession : uses
+
+' ============================================
+' VOICE PIPELINE RELATIONSHIPS
+' ============================================
+VoicePipeline --> WakeWord : uses
+VoicePipeline --> STT : uses
+VoicePipeline --> Intent : uses
+
+' ============================================
+' COMPONENT INTERNAL RELATIONSHIPS
+' ============================================
+AudioMgr --> MicStream : uses
+AudioMgr --> STT : uses
+AudioMgr --> TTS : uses
+
+SmallTalkSession --> LLM : uses
+ContextInjector --> Database : uses
+ActivityLogger --> Database : uses
+
+' ============================================
+' SUPABASE RELATIONSHIPS
+' ============================================
+Database --> SupabaseClient : uses
+Auth --> SupabaseClient : uses
+SupabaseClient --> SupabaseDB : connects
+
+' ============================================
+' UTILS RELATIONSHIPS
+' ============================================
+ConfigResolver --> ConfigLoader : uses
+ConfigResolver --> Database : queries
+InterventionPoller --> Database : queries
+InterventionPoller --> InterventionClient : uses
+InterventionClient --> CloudService : HTTP
+InterventionPoller --> InterventionRecord : manages
+
+' ============================================
+' EXTERNAL SERVICE CONNECTIONS
+' ============================================
+STT --> GoogleSTT : API
+TTS --> GoogleTTS : API
+WakeWord --> Porcupine : SDK
+Intent --> Rhino : SDK
+LLM --> DeepSeek : API
+
+' ============================================
+' NOTES
+' ============================================
+note right of Main
+  **Orchestrator Responsibilities:**
+  - System state management
+  - Activity routing
+  - Voice pipeline coordination
+  - Intervention polling management
+end note
+
+note bottom of "src/activities"
+  **Activities:**
+  Each activity is a self-contained
+  wellness module that handles its
+  own conversation flow and state
+end note
+
+note bottom of VoicePipeline
+  **Voice Pipeline:**
+  Orchestrates wake word detection,
+  speech-to-text, and intent recognition
+  to process user voice commands
+end note
+
+note bottom of AudioMgr
+  **Audio Manager:**
+  Manages audio I/O for conversations,
+  coordinates microphone, STT, and TTS
+end note
+
+note bottom of Database
+  **Database Layer:**
+  Provides data persistence and retrieval
+  for activities, logs, and user context
+end note
+
+@enduml

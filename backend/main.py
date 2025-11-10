@@ -33,6 +33,7 @@ from src.activities.journal import JournalActivity
 from src.activities.spiritual_quote import SpiritualQuoteActivity
 from src.activities.meditation import MeditationActivity
 from src.activities.gratitude import GratitudeActivity
+from src.activities.activity_suggestion import ActivitySuggestionActivity
 from src.utils.config_resolver import get_global_config_for_user, resolve_language
 from src.supabase.auth import get_current_user_id
 from src.supabase.database import log_activity_start
@@ -81,6 +82,7 @@ class WellBotOrchestrator:
         self.spiritual_quote_activity: Optional[SpiritualQuoteActivity] = None
         self.meditation_activity: Optional[MeditationActivity] = None
         self.gratitude_activity: Optional[GratitudeActivity] = None
+        self.activity_suggestion_activity: Optional[ActivitySuggestionActivity] = None
         self.stt_service: Optional[GoogleSTTService] = None
         self.tts_service: Optional[GoogleTTSClient] = None
 
@@ -197,6 +199,12 @@ class WellBotOrchestrator:
             if not self.gratitude_activity.initialize():
                 raise RuntimeError("Failed to initialize Gratitude activity")
             logger.info("✓ Gratitude activity initialized")
+
+            logger.info("Initializing Activity Suggestion activity…")
+            self.activity_suggestion_activity = ActivitySuggestionActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+            if not self.activity_suggestion_activity.initialize():
+                raise RuntimeError("Failed to initialize Activity Suggestion activity")
+            logger.info("✓ Activity Suggestion activity initialized")
             
             return True
         except Exception as e:
@@ -252,6 +260,23 @@ class WellBotOrchestrator:
         """Route the user to proper activity based on intent."""
         logger.info(f"🔄 Routing to activity: {intent}")
         
+        # Check for trigger_intervention before normal routing
+        try:
+            from src.utils.intervention_record import InterventionRecordManager
+            record_path = self.backend_dir / "config" / "intervention_record.json"
+            record_manager = InterventionRecordManager(record_path)
+            record = record_manager.load_record()
+            
+            decision = record.get("latest_decision", {})
+            trigger_intervention = decision.get("trigger_intervention", False)
+            
+            if trigger_intervention:
+                logger.info("🎯 trigger_intervention=true detected - launching activity suggestion")
+                self._start_activity_suggestion_activity()
+                return
+        except Exception as e:
+            logger.warning(f"Failed to check trigger_intervention: {e}")
+        
         # Stop intervention poller when starting an activity
         self._stop_intervention_poller()
 
@@ -293,8 +318,8 @@ class WellBotOrchestrator:
             logger.info("👋 Termination intent detected – ending session")
             self._handle_termination()
         else:
-            logger.info(f"❓ Unknown intent '{intent}' – prompting user to repeat")
-            self._handle_unknown_intent(transcript)
+            logger.info(f"❓ Unknown intent '{intent}' – launching activity suggestion")
+            self._start_activity_suggestion_activity()
 
     def _start_smalltalk_activity(self):
         """Start the smalltalk activity thread."""
@@ -573,40 +598,14 @@ class WellBotOrchestrator:
             logger.warning(f"Failed to stop STT session: {e}")
 
     def _handle_unknown_intent(self, transcript: str):
-        """Handle unknown/unrecognized intent with audio feedback"""
-        logger.info(f"Handling unknown intent for transcript: '{transcript}'")
+        """Handle unknown/unrecognized intent by launching activity suggestion"""
+        logger.info(f"Handling unknown intent for transcript: '{transcript}' - launching activity suggestion")
         
         # Stop any ongoing STT session
         self._stop_stt_session()
         
-        # Load user-specific config
-        from src.utils.config_resolver import get_language_config
-        language_config = get_language_config(self.user_id)
-        wakeword_config = language_config.get("wakeword_responses", {})
-        use_audio_files = self.global_config["wakeword"].get("use_audio_files", False)
-        
-        # Play prompt repeat audio if enabled
-        if use_audio_files:
-            prompt_repeat_path = self.backend_dir / language_config["audio_paths"]["prompt_repeat_path"]
-            if prompt_repeat_path.exists():
-                self._play_audio_blocking(prompt_repeat_path)
-        
-        # TTS prompt from config
-        try:
-            prompts = wakeword_config.get("prompts", {})
-            unknown_prompt = prompts.get("unknown_intent", "I didn't quite catch that. Could you please repeat?")
-        except Exception as e:
-            logger.warning(f"Failed to load unknown intent prompt from config: {e}")
-            unknown_prompt = "I didn't quite catch that. Could you please repeat?"
-        
-        self._speak(unknown_prompt)
-        
-        # Reset state and restart wakeword detection (clean restart)
-        with self._lock:
-            self.state = SystemState.LISTENING
-        
-        logger.info("Restarting wakeword detection after unknown intent")
-        self._restart_wakeword_detection()
+        # Launch activity suggestion instead of restarting wakeword
+        self._start_activity_suggestion_activity()
 
     def _handle_activity_unavailable(self, activity_name: str):
         """Handle unavailable activity with audio feedback"""
@@ -932,6 +931,132 @@ class WellBotOrchestrator:
                 except Exception:
                     pass
                 # Restart wakeword
+                self._restart_wakeword_detection()
+
+        self._activity_thread = threading.Thread(target=run_activity, daemon=True)
+        self._activity_thread.start()
+
+    def _start_activity_suggestion_activity(self):
+        """Start the activity suggestion activity thread."""
+        logger.info("💡 Starting Activity Suggestion activity…")
+        
+        if self.activity_suggestion_activity is None:
+            logger.error("❌ Activity Suggestion activity is None - cannot start")
+            return
+        
+        with self._lock:
+            self.state = SystemState.ACTIVITY_ACTIVE
+            self.current_activity = "activity_suggestion"
+
+        # Stop wake word pipeline first
+        if self.voice_pipeline:
+            logger.info("🔇 Pausing wake word pipeline before Activity Suggestion…")
+            try:
+                import threading
+                stop_success = threading.Event()
+                def force_stop():
+                    try:
+                        self.voice_pipeline.stop()
+                        stop_success.set()
+                    except Exception:
+                        stop_success.set()
+                threading.Thread(target=force_stop, daemon=True).start()
+                stop_success.wait(timeout=5.0)
+            except Exception as e:
+                logger.warning(f"Ignoring error while stopping voice pipeline: {e}")
+
+        def run_activity():
+            try:
+                if self.activity_suggestion_activity is None:
+                    logger.error("❌ Activity Suggestion activity is None - cannot run")
+                    return
+                
+                success = self.activity_suggestion_activity.run()
+                
+                # Store selected activity and context before cleanup
+                selected_activity = None
+                conversation_context = []
+                if self.activity_suggestion_activity:
+                    selected_activity = self.activity_suggestion_activity.get_selected_activity()
+                    conversation_context = self.activity_suggestion_activity.get_conversation_context()
+                
+                if success:
+                    logger.info("✅ Activity Suggestion activity completed successfully")
+                    
+                    if selected_activity:
+                        # Route to selected activity
+                        logger.info(f"🎯 Routing to selected activity: {selected_activity}")
+                        # Use transcript from context if available, otherwise empty
+                        transcript = ""
+                        if conversation_context:
+                            # Get last user message
+                            for msg in reversed(conversation_context):
+                                if msg.get("role") == "user":
+                                    transcript = msg.get("content", "")
+                                    break
+                        
+                        # Cleanup before routing (routing will handle state)
+                        if self.activity_suggestion_activity:
+                            try:
+                                self.activity_suggestion_activity.cleanup()
+                                self.activity_suggestion_activity.reinitialize()
+                            except Exception as e:
+                                logger.warning(f"Error during cleanup before routing: {e}")
+                        
+                        # Route to the selected activity (this will handle state management)
+                        self._route_to_activity(selected_activity, transcript)
+                        return  # Don't restart wakeword - routing handles it
+                    else:
+                        # No match - route to smalltalk with context
+                        logger.info("No activity selected - routing to smalltalk with context")
+                        if conversation_context and self.smalltalk_activity:
+                            # Seed smalltalk with conversation context
+                            context_text = "\n".join([
+                                f"{msg.get('role', 'unknown')}: {msg.get('content', '')}"
+                                for msg in conversation_context
+                                if msg.get("role") in ["user", "assistant"]
+                            ])
+                            seed_prompt = f"Continue the conversation from activity suggestion. Previous context:\n{context_text}"
+                            self.smalltalk_activity.add_system_message(seed_prompt)
+                        
+                        # Cleanup before routing
+                        if self.activity_suggestion_activity:
+                            try:
+                                self.activity_suggestion_activity.cleanup()
+                                self.activity_suggestion_activity.reinitialize()
+                            except Exception as e:
+                                logger.warning(f"Error during cleanup before routing: {e}")
+                        
+                        # Route to smalltalk (this will handle state management)
+                        self._route_to_activity("smalltalk", "")
+                        return  # Don't restart wakeword - routing handles it
+                else:
+                    logger.error("❌ Activity Suggestion activity ended with failure")
+            except Exception as e:
+                logger.error(f"Error in Activity Suggestion activity: {e}", exc_info=True)
+            finally:
+                # Cleanup activity resources (only if we didn't route to another activity)
+                logger.info("🧹 Cleaning up Activity Suggestion activity resources...")
+                if self.activity_suggestion_activity:
+                    try:
+                        self.activity_suggestion_activity.cleanup()
+                        logger.info("✅ Activity Suggestion activity cleanup completed")
+                        
+                        # Re-initialize for next run
+                        logger.info("🔄 Re-initializing Activity Suggestion activity for next run...")
+                        if not self.activity_suggestion_activity.reinitialize():
+                            logger.error("❌ Failed to re-initialize Activity Suggestion activity")
+                        else:
+                            logger.info("✅ Activity Suggestion activity re-initialized successfully")
+                            
+                    except Exception as e:
+                        logger.warning(f"Error during activity cleanup/reinit: {e}")
+                
+                # Reset state and restart wakeword detection
+                with self._lock:
+                    self.state = SystemState.LISTENING
+                
+                logger.info("🔄 Restarting wake word detection after activity suggestion completion")
                 self._restart_wakeword_detection()
 
         self._activity_thread = threading.Thread(target=run_activity, daemon=True)

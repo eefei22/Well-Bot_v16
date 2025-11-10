@@ -15,19 +15,19 @@
   "latest_suggestion": {
     "ranked_activities": [
       {
-        "activity_type": "gratitude",
+        "activity_type": "quote",
         "rank": 1,
+        "score": 0.533
+      },
+      {
+        "activity_type": "gratitude",
+        "rank": 2,
         "score": 1.0
       },
       {
         "activity_type": "journal",
-        "rank": 2,
-        "score": 0.622
-      },
-      {
-        "activity_type": "quote",
         "rank": 3,
-        "score": 0.533
+        "score": 0.622
       },
       {
         "activity_type": "meditation",
@@ -39,5 +39,5 @@
   },
   "last_request_time": "2025-11-09T22:54:15.220665",
   "last_response_time": "2025-11-09T22:54:16.684265",
-  "last_database_query_time": "2025-11-09T22:58:06.510819"
+  "last_database_query_time": "2025-11-10T22:53:38.672803"
 }

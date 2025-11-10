@@ -71,6 +71,25 @@
     "seed_system_prompt": "用户刚刚分享了一条感恩记录。请自然过渡到简短而温暖的闲聊。感恩记录：'{gratitude_note}'。请提出一个开放、友好的问题，与感恩或积极情绪相关。",
     "opener": "这很美好。你还有什么想说的吗？"
   },
+  "activity_suggestion": {
+    "system_prompt": "你是Well-Bot，一个温暖且鼓励人心的健康助手。你正在向用户展示活动建议。请热情地打招呼，并明确地按照从最高排名到最低排名的顺序列出建议的活动。保持简短、友好和鼓励。列出活动后，询问他们想尝试哪一个。",
+    "cold_start_intro": "以下是一些您可以尝试的健康活动：",
+    "starting_activity_feedback": "现在开始{activity}",
+    "no_match_feedback": "我没听清楚",
+    "suggestions_unavailable": "建议现在不可用",
+    "activity_names": {
+      "journaling": "写日记",
+      "gratitude": "感恩练习",
+      "meditation": "冥想",
+      "quote": "励志名言"
+    },
+    "activity_descriptions": {
+      "meditation": "一种平静心灵、寻找内心宁静的方式",
+      "journaling": "一个反思和释放想法的机会",
+      "quote": "快速获得动力和视角",
+      "gratitude": "专注于美好，点亮你的一天"
+    }
+  },
   "wakeword_responses": {
     "prompts": {
       "wakeword_detected": "嘿，我听到你叫我。我能帮你什么？",

@@ -17,7 +17,7 @@ try:
     from .llm import DeepSeekClient
     from .tts import GoogleTTSClient
     from .termination_phrase import TerminationPhraseDetector, TerminationPhraseDetected, normalize_text
-    from ..supabase.database import start_conversation, add_message, end_conversation
+    from .conversation_session import ConversationSession
     from ..utils.config_loader import get_deepseek_config
 except ImportError:
     from mic_stream import MicStream
@@ -25,7 +25,7 @@ except ImportError:
     from llm import DeepSeekClient
     from tts import GoogleTTSClient
     from termination_phrase import TerminationPhraseDetector, TerminationPhraseDetected, normalize_text
-    from src.supabase.database import start_conversation, add_message, end_conversation
+    from conversation_session import ConversationSession
     from utils.config_loader import get_deepseek_config
 
 
@@ -49,11 +49,22 @@ class SmallTalkSession:
         system_prompt: Optional[str] = "You are a friendly, concise wellness assistant. Keep responses short unless asked.",
         language_code: str = "en-US",
         min_confidence: float = 0.0,
+        conversation_session: Optional[ConversationSession] = None,
     ):
         self.stt = stt
         self.mic_factory = mic_factory
         self.language_code = language_code
         self.min_confidence = min_confidence
+        
+        # Initialize or use provided ConversationSession
+        if conversation_session is None:
+            self.conversation_session = ConversationSession(
+                max_turns=20,
+                system_prompt=system_prompt or "You are a friendly assistant. Do not use emojis.",
+                language_code=language_code
+            )
+        else:
+            self.conversation_session = conversation_session
 
         # Initialize DeepSeek client with config from environment
         self.llm = DeepSeekClient(
@@ -90,7 +101,6 @@ class SmallTalkSession:
         if system_prompt:
             self.messages.append({"role": "system", "content": system_prompt})
 
-        self.conversation_id: Optional[str] = None
         self._active = False
 
     # ---- utterance capture ----
@@ -152,7 +162,7 @@ class SmallTalkSession:
         self._active = True
 
         try:
-            self.conversation_id = start_conversation(title="Small Talk")
+            self.conversation_session.start_session(title="Small Talk")
             print("🎤 Small-Talk session started. Speak after wakeword.")
         except Exception as e:
             logger.warning(f"Could not start conversation: {e}")
@@ -166,17 +176,15 @@ class SmallTalkSession:
                 print(f"\n[You] {user_text}")
                 self.messages.append({"role": "user", "content": user_text})
 
-                if self.conversation_id:
-                    try:
-                        add_message(
-                            conversation_id=self.conversation_id,
-                            role="user",
-                            content=user_text,
-                            intent="small_talk",
-                            lang=self.language_code
-                        )
-                    except Exception as e:
-                        logger.warning(f"Could not save user message: {e}")
+                # Save user message to database via ConversationSession
+                try:
+                    self.conversation_session.add_message(
+                        role="user",
+                        content=user_text,
+                        intent="small_talk"
+                    )
+                except Exception as e:
+                    logger.warning(f"Could not save user message: {e}")
 
                 # Stream LLM → TTS and play audio
                 print("[Assistant speaking audio] ", end="", flush=True)
@@ -190,24 +198,20 @@ class SmallTalkSession:
                     pass
 
                 # After streaming audio, store assistant text in DB
-                if self.conversation_id:
-                    try:
-                        add_message(
-                            conversation_id=self.conversation_id,
-                            role="assistant",
-                            content=self.messages[-1]["content"],
-                            lang=self.language_code
-                        )
-                    except Exception as e:
-                        logger.warning(f"Could not save assistant message: {e}")
+                try:
+                    self.conversation_session.add_message(
+                        role="assistant",
+                        content=self.messages[-1]["content"]
+                    )
+                except Exception as e:
+                    logger.warning(f"Could not save assistant message: {e}")
 
         except KeyboardInterrupt:
             logger.info("Interrupted by user")
         finally:
             self._active = False
-            if self.conversation_id:
-                try:
-                    end_conversation(self.conversation_id)
-                except Exception as e:
-                    logger.warning(f"Could not end conversation: {e}")
+            try:
+                self.conversation_session.end_conversation()
+            except Exception as e:
+                logger.warning(f"Could not end conversation: {e}")
             print("\nSession ended.")

@@ -28,14 +28,12 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
 try:
     from .wakeword import WakeWordDetector, create_wake_word_detector
     from .mic_stream import MicStream
-    from .stt import GoogleSTTService
     from .tts import GoogleTTSClient
     from .intent_recognition import IntentRecognition
     from ..utils.config_loader import PORCUPINE_ACCESS_KEY, RHINO_ACCESS_KEY
 except ImportError:
     from wakeword import WakeWordDetector, create_wake_word_detector
     from mic_stream import MicStream
-    from stt import GoogleSTTService
     from tts import GoogleTTSClient
     from intent_recognition import IntentRecognition
     from utils.config_loader import PORCUPINE_ACCESS_KEY, RHINO_ACCESS_KEY
@@ -45,24 +43,22 @@ logger = logging.getLogger(__name__)
 
 class VoicePipeline:
     """
-    Orchestrator that ties together wakeword detection, microphone streaming, and STT.
+    Orchestrator that ties together wakeword detection and intent recognition.
     Manages the complete voice pipeline flow and state transitions.
     """
 
     def __init__(
         self,
         wakeword_detector: WakeWordDetector,
-        stt_service: GoogleSTTService,
         lang: str = "en-US",
         user_id: Optional[str] = None,
         on_wake_callback: Optional[Callable[[], None]] = None,
         on_final_transcript: Optional[Callable[[str, Optional[dict]], None]] = None,
         intent_config_path: Optional[str] = None,
         preference_file_path: Optional[str] = None,
-        stt_timeout_s: float = 8.0  # new: timeout for speech after wakeword
+        stt_timeout_s: float = 8.0  # timeout for intent recognition after wakeword
     ):
         self.wakeword = wakeword_detector
-        self.stt = stt_service
         self.lang = lang
         self.on_wake_callback = on_wake_callback
         self.on_final_transcript = on_final_transcript
@@ -210,7 +206,7 @@ class VoicePipeline:
         logger.info("Wake word detected")
         with self._lock:
             if self.stt_active:
-                logger.warning("STT already active after wakeword – ignoring this wake event")
+                logger.warning("Intent recognition already active after wakeword – ignoring this wake event")
                 return
             self.stt_active = True
 
@@ -350,7 +346,7 @@ class VoicePipeline:
             self.wakeword.stop()
             with self._lock:
                 if self.stt_active:
-                    logger.info("Waiting for STT session to complete before fully stopping")
+                    logger.info("Waiting for intent recognition session to complete before fully stopping")
             self.active = False
             logger.info("Voice pipeline stopped")
         except Exception as e:
@@ -396,10 +392,8 @@ def create_voice_pipeline(
     stt_timeout_s: float = 8.0
 ) -> VoicePipeline:
     wakeword_detector = create_wake_word_detector(PORCUPINE_ACCESS_KEY, custom_keyword_file)
-    stt_service = GoogleSTTService(language=language)
     pipeline = VoicePipeline(
         wakeword_detector=wakeword_detector,
-        stt_service=stt_service,
         lang=language,
         user_id=user_id,
         on_wake_callback=on_wake_callback,

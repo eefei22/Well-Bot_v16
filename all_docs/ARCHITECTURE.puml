@@ -1,0 +1,137 @@
+@startuml Well-Bot_Edge_Architecture
+
+!theme plain
+skinparam componentStyle rectangle
+skinparam linetype ortho
+allowmixing
+
+title Well-Bot Edge Application - System Architecture
+
+' ============================================
+' MAIN ORCHESTRATOR (backend/main.py)
+' ============================================
+package "backend" {
+    component [WellBotOrchestrator\nmain.py] as Orchestrator
+}
+
+' ============================================
+' ACTIVITIES (backend/src/activities/)
+' ============================================
+package "src/activities" as Activities {
+    component [SmallTalkActivity] as SmallTalk
+    component [JournalActivity] as Journal
+    component [MeditationActivity] as Meditation
+    component [GratitudeActivity] as Gratitude
+    component [SpiritualQuoteActivity] as Quote
+    component [ActivitySuggestionActivity] as ActivitySuggestion
+}
+
+' ============================================
+' COMPONENTS (backend/src/components/)
+' ============================================
+package "src/components" as Components {
+    component [VoicePipeline] as VoicePipeline
+    component [WakeWordDetector] as WakeWord
+    component [GoogleSTTService] as STT
+    component [GoogleTTSClient] as TTS
+    component [IntentRecognition] as Intent
+    component [ConversationSession] as ConvSession
+    component [ConversationAudioManager] as AudioMgr
+    component [SmallTalkSession] as SmallTalkSession
+    component [UserContextInjector] as ContextInjector
+    component [MicStream] as MicStream
+    component [ActivityLogger] as ActivityLogger
+    component [TerminationPhrase] as Termination
+}
+
+' ============================================
+' SUPABASE (backend/src/supabase/)
+' ============================================
+package "src/supabase" as Supabase {
+    component [SupabaseClient] as SupabaseClient
+    component [Database] as Database
+    component [Auth] as Auth
+}
+
+' ============================================
+' UTILS (backend/src/utils/)
+' ============================================
+package "src/utils" as Utils {
+    component [ConfigLoader] as ConfigLoader
+    component [ConfigResolver] as ConfigResolver
+    component [InterventionPoller] as InterventionPoller
+    component [InterventionClient] as InterventionClient
+    component [InterventionRecordManager] as InterventionRecord
+}
+
+' ============================================
+' EXTERNAL SERVICES
+' ============================================
+cloud "External Services" {
+    component [Google Cloud STT] as GoogleSTT
+    component [Google Cloud TTS] as GoogleTTS
+    component [Picovoice Porcupine] as Porcupine
+    component [Picovoice Rhino] as Rhino
+    component [DeepSeek API] as DeepSeek
+    component [Supabase Database] as SupabaseDB
+    component [Cloud Intervention Service] as CloudService
+}
+
+' ============================================
+' RELATIONSHIPS
+' ============================================
+
+' Orchestrator manages everything
+Orchestrator --> Activities : routes to activities
+Orchestrator --> VoicePipeline : manages voice pipeline
+Orchestrator --> InterventionPoller : manages polling
+
+' Voice Pipeline internal flow
+VoicePipeline --> WakeWord : uses
+VoicePipeline --> STT : uses
+VoicePipeline --> Intent : uses
+
+' Activities depend on components
+Activities --> Components : uses
+
+' Component internal dependencies
+AudioMgr --> MicStream : uses
+AudioMgr --> STT : uses
+AudioMgr --> TTS : uses
+SmallTalkSession --> DeepSeek : API calls
+ContextInjector --> Database : queries
+ActivityLogger --> Database : logs
+
+' Infrastructure dependencies
+Utils --> Supabase : queries/config
+Components --> Supabase : queries
+Components --> Utils : uses config
+
+' External service connections
+STT --> GoogleSTT : API
+TTS --> GoogleTTS : API
+WakeWord --> Porcupine : SDK
+Intent --> Rhino : SDK
+SupabaseClient --> SupabaseDB : connects
+
+note right of Orchestrator
+  **System States:**
+  STARTING → LISTENING → 
+  PROCESSING → ACTIVITY_ACTIVE → 
+  SHUTTING_DOWN
+end note
+
+note bottom of VoicePipeline
+  **Flow:**
+  Wake word → STT → Intent → 
+  Return transcript + intent
+end note
+
+note bottom of InterventionPoller
+  **Polling:**
+  Every 5 min: Query DB → 
+  Call Cloud Service → 
+  Save to intervention_record.json
+end note
+
+@enduml
