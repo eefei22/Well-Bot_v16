@@ -24,16 +24,17 @@ backend_dir = Path(__file__).parent
 sys.path.append(str(backend_dir))
 
 # Import pipeline / components
-from src.components._pipeline_wakeword import create_voice_pipeline, VoicePipeline
 from src.components.stt import GoogleSTTService
 from src.components.tts import GoogleTTSClient
 from src.components.mic_stream import MicStream
-from src.activities.smalltalk import SmallTalkActivity
-from src.activities.journal import JournalActivity
-from src.activities.spiritual_quote import SpiritualQuoteActivity
-from src.activities.meditation import MeditationActivity
-from src.activities.gratitude import GratitudeActivity
-from src.activities.activity_suggestion import ActivitySuggestionActivity
+# Lazy import activities (only import when needed to reduce memory footprint)
+# from src.activities.smalltalk import SmallTalkActivity
+# from src.activities.journal import JournalActivity
+# from src.activities.spiritual_quote import SpiritualQuoteActivity
+# from src.activities.meditation import MeditationActivity
+# from src.activities.gratitude import GratitudeActivity
+# from src.activities.activity_suggestion import ActivitySuggestionActivity
+from src.activities.idle_mode import IdleModeActivity
 from src.utils.config_resolver import get_global_config_for_user, resolve_language
 from src.supabase.auth import get_current_user_id
 from src.supabase.database import log_activity_start
@@ -76,23 +77,16 @@ class WellBotOrchestrator:
         self.global_config = None
 
         # Components
-        self.voice_pipeline: Optional[VoicePipeline] = None
-        self.smalltalk_activity: Optional[SmallTalkActivity] = None
-        self.journal_activity: Optional[JournalActivity] = None
-        self.spiritual_quote_activity: Optional[SpiritualQuoteActivity] = None
-        self.meditation_activity: Optional[MeditationActivity] = None
-        self.gratitude_activity: Optional[GratitudeActivity] = None
-        self.activity_suggestion_activity: Optional[ActivitySuggestionActivity] = None
+        self.idle_mode_activity: Optional[IdleModeActivity] = None
+        # Activities are lazy-loaded (imported when needed)
+        self.smalltalk_activity = None
+        self.journal_activity = None
+        self.spiritual_quote_activity = None
+        self.meditation_activity = None
+        self.gratitude_activity = None
+        self.activity_suggestion_activity = None
         self.stt_service: Optional[GoogleSTTService] = None
         self.tts_service: Optional[GoogleTTSClient] = None
-
-        # Silence monitoring for wakeword
-        self._silence_timer: Optional[threading.Timer] = None
-        self._silence_lock = threading.Lock()
-        
-        # Mic management for audio playback
-        self._current_mic = None
-        self._mic_lock = threading.Lock()
 
         self.current_activity: Optional[str] = None
         self._activity_thread: Optional[threading.Thread] = None
@@ -117,16 +111,26 @@ class WellBotOrchestrator:
             return False
         return True
 
+    def _stop_idle_mode_for_activity(self):
+        """Stop idle mode activity before starting another activity"""
+        if self.idle_mode_activity:
+            logger.info("🔇 Stopping idle mode activity before starting new activity…")
+            try:
+                self.idle_mode_activity.stop()
+                logger.info("✅ Idle mode activity stopped successfully")
+            except Exception as e:
+                logger.warning(f"Ignoring error while stopping idle mode: {e}")
+                logger.info("⚠️ Continuing despite stop error...")
+        
+        # Add a tiny guard delay (Windows USB audio sometimes needs this)
+        logger.info("⏱️ Adding guard delay for Windows audio device release...")
+        time.sleep(0.15)
+
     def _wait_for_stt_teardown(self, timeout_s: float = 3.0) -> bool:
-        """Wait briefly for the voice pipeline's STT session and wakeword engine to fully stop."""
-        start = time.time()
-        while time.time() - start < timeout_s:
-            stt_active = self.voice_pipeline.is_stt_active() if self.voice_pipeline else False
-            wake_active = self.voice_pipeline.is_active() if self.voice_pipeline else False
-            if not stt_active and not wake_active:
-                return True
-            time.sleep(0.05)
-        return False
+        """Wait briefly for the idle mode activity to fully stop (legacy method, kept for compatibility)."""
+        # This method is no longer needed since idle_mode.stop() handles cleanup
+        # But kept for backward compatibility
+        return True
 
     def _initialize_components(self) -> bool:
         """Initialize STT, voice pipeline, activities."""
@@ -143,7 +147,7 @@ class WellBotOrchestrator:
             self.stt_service = GoogleSTTService(language=stt_language, sample_rate=16000)
             logger.info(f"✓ STT service initialized with language: {stt_language}")
 
-            logger.info("Initializing TTS service for wakeword responses…")
+            logger.info("Initializing TTS service…")
             from google.cloud import texttospeech
             self.tts_service = GoogleTTSClient(
                 voice_name=self.global_config["language_codes"]["tts_voice_name"],
@@ -155,102 +159,50 @@ class WellBotOrchestrator:
             )
             logger.info("✓ TTS service initialized")
 
-            logger.info("Initializing voice pipeline (wake word)…")
-            self.voice_pipeline = create_voice_pipeline(
-                access_key_file="",  # Deprecated - now uses environment variable
-                custom_keyword_file=str(self.wakeword_model_path),
-                language=self.global_config["language_codes"]["stt_language_code"],
-                user_id=self.user_id,  # Pass user_id
-                on_wake_callback=self._on_wake_detected,
-                on_final_transcript=self._on_transcript_received,
-                intent_config_path=None,  # Now loaded from language_config
-                preference_file_path=None,  # Now loaded from language_config
-                stt_timeout_s=self.global_config["wakeword"]["stt_timeout_s"]
+            logger.info("Initializing Idle Mode activity (wakeword detection)…")
+            self.idle_mode_activity = IdleModeActivity(
+                backend_dir=self.backend_dir,
+                user_id=self.user_id,
+                on_intent_detected=self._handle_intent_detected
             )
+            if not self.idle_mode_activity.initialize():
+                raise RuntimeError("Failed to initialize Idle Mode activity")
+            logger.info("✓ Idle Mode activity initialized")
 
-            logger.info("✓ Voice pipeline initialized")
-
-            logger.info("Initializing SmallTalk activity…")
-            self.smalltalk_activity = SmallTalkActivity(backend_dir=self.backend_dir, user_id=self.user_id)
-            if not self.smalltalk_activity.initialize():
-                raise RuntimeError("Failed to initialize SmallTalk activity")
-            logger.info("✓ SmallTalk activity initialized")
-
-            logger.info("Initializing Journal activity…")
-            self.journal_activity = JournalActivity(backend_dir=self.backend_dir, user_id=self.user_id)
-            if not self.journal_activity.initialize():
-                raise RuntimeError("Failed to initialize Journal activity")
-            logger.info("✓ Journal activity initialized")
-
-            logger.info("Initializing Spiritual Quote activity…")
-            self.spiritual_quote_activity = SpiritualQuoteActivity(backend_dir=self.backend_dir, user_id=self.user_id)
-            if not self.spiritual_quote_activity.initialize():
-                raise RuntimeError("Failed to initialize Spiritual Quote activity")
-            logger.info("✓ Spiritual Quote activity initialized")
-
-            logger.info("Initializing Meditation activity…")
-            self.meditation_activity = MeditationActivity(backend_dir=self.backend_dir, user_id=self.user_id)
-            if not self.meditation_activity.initialize():
-                raise RuntimeError("Failed to initialize Meditation activity")
-            logger.info("✓ Meditation activity initialized")
-
-            logger.info("Initializing Gratitude activity…")
-            self.gratitude_activity = GratitudeActivity(backend_dir=self.backend_dir, user_id=self.user_id)
-            if not self.gratitude_activity.initialize():
-                raise RuntimeError("Failed to initialize Gratitude activity")
-            logger.info("✓ Gratitude activity initialized")
-
-            logger.info("Initializing Activity Suggestion activity…")
-            self.activity_suggestion_activity = ActivitySuggestionActivity(backend_dir=self.backend_dir, user_id=self.user_id)
-            if not self.activity_suggestion_activity.initialize():
-                raise RuntimeError("Failed to initialize Activity Suggestion activity")
-            logger.info("✓ Activity Suggestion activity initialized")
+            # Activities are lazy-loaded - only initialize when needed
+            # This reduces memory footprint when idle_mode is running
             
             return True
         except Exception as e:
             logger.error(f"Component initialization failed: {e}", exc_info=True)
             return False
 
-    def _on_wake_detected(self):
-        """Callback when wake word is detected."""
+    def _handle_intent_detected(self, transcript: str, intent_result: Dict[str, Any]):
+        """
+        Callback when intent is detected by idle_mode activity.
+        
+        Args:
+            transcript: The user's speech transcript
+            intent_result: Dictionary with 'intent' and 'confidence' keys
+        """
+        logger.info(f"📝 Intent detected - Transcript: '{transcript}'")
+        
         with self._lock:
             if self.state != SystemState.LISTENING:
-                logger.warning(f"Wake word detected but system in state {self.state.value}, ignoring")
+                logger.warning(f"Intent detected but system in state {self.state.value}, ignoring")
                 return
-            logger.info("🎤 Wake word detected – transitioning to PROCESSING state")
+            
+            # Transition to processing state
             self.state = SystemState.PROCESSING
-        
-        # Track current microphone for muting during audio playback
-        if self.voice_pipeline and hasattr(self.voice_pipeline, '_stt_thread'):
-            # The microphone is managed by the voice pipeline's STT thread
-            # We'll get access to it through the pipeline's internal state
-            pass
-        
-        # Start silence monitoring after wake word detection
-        self._start_wakeword_silence_monitoring()
+            logger.info("🎯 Transitioning to PROCESSING state")
 
-    def _on_transcript_received(self, transcript: str, intent_result: Optional[Dict[str, Any]]):
-        """Callback when final transcript and intent are available."""
-        # Stop silence monitoring since we received a transcript
-        self._stop_wakeword_silence_monitoring()
-        
+        # Extract intent
+        intent = intent_result.get('intent', 'unknown')
+        confidence = intent_result.get('confidence', 0.0)
+        logger.info(f"🎯 Intent: {intent} (confidence: {confidence:.3f})")
+
+        # Transition to activity state
         with self._lock:
-            if self.state != SystemState.PROCESSING:
-                logger.warning(f"Transcript received but system in state {self.state.value}, ignoring")
-                return
-
-            logger.info(f"📝 Transcript: '{transcript}'")
-
-            intent = "unknown"
-            confidence = 0.0
-            if intent_result:
-                intent = intent_result.get('intent', 'unknown')
-                confidence = intent_result.get('confidence', 0.0)
-                logger.info(f"🎯 Intent: {intent} (confidence: {confidence:.3f})")
-            else:
-                logger.warning("No intent classification available; defaulting to smalltalk")
-
-            # Transition to activity
             self.state = SystemState.ACTIVITY_ACTIVE
         
         # Release lock before calling _route_to_activity to avoid deadlock
@@ -330,60 +282,21 @@ class WellBotOrchestrator:
         """Start the smalltalk activity thread."""
         logger.info("💬 Starting SmallTalk activity…")
         
-        # Safety check - ensure smalltalk_activity is initialized
+        # Lazy import and initialize if needed
         if self.smalltalk_activity is None:
-            logger.error("❌ SmallTalk activity is None - cannot start")
-            return
+            from src.activities.smalltalk import SmallTalkActivity
+            logger.info("Lazy loading SmallTalk activity...")
+            self.smalltalk_activity = SmallTalkActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+            if not self.smalltalk_activity.initialize():
+                logger.error("❌ Failed to initialize SmallTalk activity")
+                return
         
         with self._lock:
             self.state = SystemState.ACTIVITY_ACTIVE
             self.current_activity = "smalltalk"
 
-        # 1) Stop wake word pipeline first (this triggers Picovoice/Porcupine cleanup)
-        if self.voice_pipeline:
-            logger.info("🔇 Pausing wake word pipeline before SmallTalk…")
-            try:
-                logger.info("🔍 Calling voice_pipeline.stop()...")
-                
-                # Force stop with timeout
-                import threading
-                stop_success = threading.Event()
-                
-                def force_stop():
-                    try:
-                        self.voice_pipeline.stop()
-                        stop_success.set()
-                    except Exception as e:
-                        logger.error(f"Error in stop thread: {e}")
-                        stop_success.set()
-                
-                stop_thread = threading.Thread(target=force_stop, daemon=True)
-                stop_thread.start()
-                
-                # Wait for stop to complete with timeout
-                if stop_success.wait(timeout=5.0):
-                    logger.info("✅ voice_pipeline.stop() completed successfully")
-                else:
-                    logger.warning("⚠️ voice_pipeline.stop() timed out after 5s - forcing continuation")
-                    
-            except Exception as e:
-                logger.warning(f"Ignoring error while stopping voice pipeline: {e}")
-                logger.info("⚠️ Continuing despite stop error...")
-
-        # 2) Wait until STT/wakeword fully release audio devices
-        if self.voice_pipeline:
-            logger.info("⏳ Waiting for STT teardown (mic/device release)…")
-            ok = self._wait_for_stt_teardown(timeout_s=3.0)
-            if not ok:
-                logger.warning("⚠️ STT teardown wait timed out; proceeding anyway")
-
-        # 3) Add a tiny guard delay (Windows USB audio sometimes needs this)
-        logger.info("⏱️ Adding guard delay for Windows audio device release...")
-        time.sleep(0.15)
-
-        # 4) Sanity check - verify device state before activity starts
-        logger.info(f"🔍 Device state check - Wake active: {self.voice_pipeline.is_active() if self.voice_pipeline else None} | "
-                   f"STT active: {self.voice_pipeline.is_stt_active() if self.voice_pipeline else None}")
+        # Stop idle mode activity before starting SmallTalk
+        self._stop_idle_mode_for_activity()
 
         def run_activity():
             try:
@@ -428,7 +341,7 @@ class WellBotOrchestrator:
                 self._current_activity_log_id = None
                 
                 # When activity ends, restart wake word detection
-                self._restart_wakeword_detection()
+                self._restart_idle_mode()
 
         self._activity_thread = threading.Thread(target=run_activity, daemon=True)
         self._activity_thread.start()
@@ -445,279 +358,47 @@ class WellBotOrchestrator:
             self.state = SystemState.SHUTTING_DOWN
         self.stop()
 
-    def _start_wakeword_silence_monitoring(self):
-        """Start monitoring silence after wake word detection"""
-        with self._silence_lock:
-            if self._silence_timer:
-                self._silence_timer.cancel()
-            
-            # Use silence_timeout_seconds for the initial nudge timer
-            silence_timeout = self.global_config["wakeword"]["silence_timeout_seconds"]
-            self._silence_timer = threading.Timer(silence_timeout, self._handle_wakeword_nudge)
-            self._silence_timer.daemon = True
-            self._silence_timer.start()
-            logger.info(f"Started silence monitoring - nudge in {silence_timeout}s")
-
-    def _handle_wakeword_nudge(self):
-        """Handle nudge when user is silent after wake word"""
-        logger.info("User silent after wake word, playing nudge")
-        
-        # Stop STT session to mute microphone before playing audio
-        self._stop_stt_session()
-        
-        # Load user-specific config
-        from src.utils.config_resolver import get_language_config
-        language_config = get_language_config(self.user_id)
-        wakeword_config = language_config.get("wakeword_responses", {})
-        use_audio_files = self.global_config["wakeword"].get("use_audio_files", False)
-        
-        # Play nudge audio if enabled
-        if use_audio_files:
-            nudge_audio_path = self.backend_dir / language_config["audio_paths"]["nudge_audio_path"]
-            if nudge_audio_path.exists():
-                self._play_audio_blocking(nudge_audio_path)
-        
-        # TTS prompt from config
-        try:
-            prompts = wakeword_config.get("prompts", {})
-            nudge_prompt = prompts.get("nudge", "I'm listening. What would you like to do?")
-        except Exception as e:
-            logger.warning(f"Failed to load nudge prompt from config: {e}")
-            nudge_prompt = "I'm listening. What would you like to do?"
-        
-        self._speak(nudge_prompt)
-        
-        # Start final timeout timer
-        # This timer runs AFTER the nudge, so use nudge_timeout_seconds directly
-        with self._silence_lock:
-            nudge_timeout = self.global_config["wakeword"]["nudge_timeout_seconds"]
-            self._silence_timer = threading.Timer(nudge_timeout, self._handle_wakeword_timeout)
-            self._silence_timer.daemon = True
-            self._silence_timer.start()
-            logger.info(f"Started final timeout timer - timeout in {nudge_timeout}s")
-
-    def _handle_wakeword_timeout(self):
-        """Handle final timeout after wake word with no user speech"""
-        logger.info("User timeout after wake word, playing termination and restarting")
-        
-        # Stop STT session to mute microphone before playing audio
-        self._stop_stt_session()
-        
-        # Load user-specific config
-        from src.utils.config_resolver import get_language_config
-        language_config = get_language_config(self.user_id)
-        wakeword_config = language_config.get("wakeword_responses", {})
-        use_audio_files = self.global_config["wakeword"].get("use_audio_files", False)
-        
-        # Play termination audio if enabled
-        if use_audio_files:
-            termination_audio_path = self.backend_dir / language_config["audio_paths"]["termination_audio_path"]
-            if termination_audio_path.exists():
-                self._play_audio_blocking(termination_audio_path)
-        
-        # TTS prompt from config
-        try:
-            prompts = wakeword_config.get("prompts", {})
-            timeout_prompt = prompts.get("timeout", "I'll be here when you need me. Just say my name.")
-        except Exception as e:
-            logger.warning(f"Failed to load timeout prompt from config: {e}")
-            timeout_prompt = "I'll be here when you need me. Just say my name."
-        
-        self._speak(timeout_prompt)
-        
-        # Reset state and restart wake word detection
-        with self._lock:
-            self.state = SystemState.LISTENING
-        
-        logger.info("Restarting wake word detection after timeout")
-        self._restart_wakeword_detection()
-
-    def _stop_wakeword_silence_monitoring(self):
-        """Stop silence monitoring"""
-        with self._silence_lock:
-            if self._silence_timer:
-                self._silence_timer.cancel()
-                self._silence_timer = None
-                logger.info("Stopped silence monitoring")
-
-    def _play_audio_blocking(self, audio_path: Path):
-        """Play audio file synchronously"""
-        try:
-            if audio_path.exists():
-                # Use same audio playback method as wakeword pipeline
-                import subprocess
-                if sys.platform == "win32":
-                    ps_cmd = f'powershell -c "(New-Object Media.SoundPlayer \'{audio_path}\').PlaySync()"'
-                    subprocess.run(ps_cmd, shell=True, capture_output=True, timeout=10)
-                    logger.info(f"Played audio: {audio_path}")
-                else:
-                    logger.warning("Audio playback only supported on Windows")
-            else:
-                logger.error(f"Audio file not found: {audio_path}")
-        except Exception as e:
-            logger.error(f"Failed to play audio: {e}")
-
-    def _speak(self, text: str):
-        """Speak text using TTS (for wakeword responses)"""
-        if not self.tts_service:
-            logger.warning("TTS service not available")
-            return
-        
-        try:
-            def text_gen():
-                yield text
-            
-            # Generate PCM chunks
-            pcm_chunks = self.tts_service.stream_synthesize(text_gen())
-            
-            # Play PCM chunks using PyAudio
-            import pyaudio
-            pa = pyaudio.PyAudio()
-            stream = pa.open(
-                format=pyaudio.paInt16,
-                channels=1,
-                rate=24000,
-                output=True
-            )
-            
-            for chunk in pcm_chunks:
-                stream.write(chunk)
-            
-            stream.stop_stream()
-            stream.close()
-            pa.terminate()
-            
-            logger.info(f"TTS played: {text[:50]}...")
-        except Exception as e:
-            logger.error(f"TTS error: {e}")
-
-    def _stop_stt_session(self):
-        """Stop the current STT session and microphone to prevent TTS pickup"""
-        try:
-            if self.voice_pipeline:
-                # Stop the mic immediately to prevent picking up TTS
-                with self.voice_pipeline._lock:
-                    if self.voice_pipeline._current_mic and self.voice_pipeline._current_mic.is_running():
-                        logger.debug("Stopping mic in STT session to prevent TTS pickup")
-                        self.voice_pipeline._current_mic.stop()
-                        self.voice_pipeline._current_mic = None
-        except Exception as e:
-            logger.warning(f"Failed to stop STT session: {e}")
 
     def _handle_unknown_intent(self, transcript: str):
         """Handle unknown/unrecognized intent by prompting user to repeat and looping back"""
         logger.info(f"Handling unknown intent for transcript: '{transcript}' - prompting to repeat")
         
-        # Load user-specific config for prompt
-        from src.utils.config_resolver import get_language_config
-        language_config = get_language_config(self.user_id)
-        wakeword_config = language_config.get("wakeword_responses", {})
-        prompts = wakeword_config.get("prompts", {})
-        
-        # Get prompt to ask user to repeat
-        repeat_prompt = prompts.get("unknown_intent", "I didn't quite catch that. Can you repeat that?")
-        
-        # Speak the prompt (this will mute mic during TTS)
-        self._speak(repeat_prompt)
-        
-        # After speaking, restart wakeword detection to listen again
-        logger.info("Restarting wakeword detection to listen for command again")
-        self._restart_wakeword_detection()
+        # Note: TTS and audio playback are now handled by idle_mode activity
+        # We just need to restart idle_mode to listen again
+        logger.info("Restarting idle mode to listen for command again")
+        self._restart_idle_mode()
 
     def _handle_activity_unavailable(self, activity_name: str):
         """Handle unavailable activity with audio feedback"""
         logger.info(f"Handling unavailable activity: {activity_name}")
         
-        # Stop any ongoing STT session
-        self._stop_stt_session()
-        
-        # Load user-specific config
-        from src.utils.config_resolver import get_language_config
-        language_config = get_language_config(self.user_id)
-        wakeword_config = language_config.get("wakeword_responses", {})
-        use_audio_files = self.global_config["wakeword"].get("use_audio_files", False)
-        
-        # Play activity unavailable audio if enabled
-        if use_audio_files:
-            unavailable_path = self.backend_dir / language_config["audio_paths"]["activity_unavailable_path"]
-            if unavailable_path.exists():
-                self._play_audio_blocking(unavailable_path)
-        
-        # TTS prompt from config
-        try:
-            prompts = wakeword_config.get("prompts", {})
-            unavailable_prompt = prompts.get("activity_unavailable", "That feature isn't available yet. What else can I help you with?")
-        except Exception as e:
-            logger.warning(f"Failed to load activity unavailable prompt from config: {e}")
-            unavailable_prompt = "That feature isn't available yet. What else can I help you with?"
-        
-        self._speak(unavailable_prompt)
-        
-        # Reset state and restart wakeword detection (clean restart)
+        # Note: TTS and audio playback are now handled by idle_mode activity
+        # We just need to restart idle_mode
         with self._lock:
             self.state = SystemState.LISTENING
         
-        logger.info("Restarting wakeword detection after unavailable activity")
-        self._restart_wakeword_detection()
+        logger.info("Restarting idle mode after unavailable activity")
+        self._restart_idle_mode()
 
     def _start_journal_activity(self):
         """Start the journal activity thread."""
         logger.info("📖 Starting Journal activity…")
         
-        # Safety check - ensure journal_activity is initialized
+        # Lazy import and initialize if needed
         if self.journal_activity is None:
-            logger.error("❌ Journal activity is None - cannot start")
-            return
+            from src.activities.journal import JournalActivity
+            logger.info("Lazy loading Journal activity...")
+            self.journal_activity = JournalActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+            if not self.journal_activity.initialize():
+                logger.error("❌ Failed to initialize Journal activity")
+                return
         
         with self._lock:
             self.state = SystemState.ACTIVITY_ACTIVE
             self.current_activity = "journaling"
 
-        # 1) Stop wake word pipeline first (this triggers Picovoice/Porcupine cleanup)
-        if self.voice_pipeline:
-            logger.info("🔇 Pausing wake word pipeline before Journal…")
-            try:
-                logger.info("🔍 Calling voice_pipeline.stop()...")
-                
-                # Force stop with timeout
-                import threading
-                stop_success = threading.Event()
-                
-                def force_stop():
-                    try:
-                        self.voice_pipeline.stop()
-                        stop_success.set()
-                    except Exception as e:
-                        logger.error(f"Error in stop thread: {e}")
-                        stop_success.set()
-                
-                stop_thread = threading.Thread(target=force_stop, daemon=True)
-                stop_thread.start()
-                
-                # Wait for stop to complete with timeout
-                if stop_success.wait(timeout=5.0):
-                    logger.info("✅ voice_pipeline.stop() completed successfully")
-                else:
-                    logger.warning("⚠️ voice_pipeline.stop() timed out after 5s - forcing continuation")
-                    
-            except Exception as e:
-                logger.warning(f"Ignoring error while stopping voice pipeline: {e}")
-                logger.info("⚠️ Continuing despite stop error...")
-
-        # 2) Wait until STT/wakeword fully release audio devices
-        if self.voice_pipeline:
-            logger.info("⏳ Waiting for STT teardown (mic/device release)…")
-            ok = self._wait_for_stt_teardown(timeout_s=3.0)
-            if not ok:
-                logger.warning("⚠️ STT teardown wait timed out; proceeding anyway")
-
-        # 3) Add a tiny guard delay (Windows USB audio sometimes needs this)
-        logger.info("⏱️ Adding guard delay for Windows audio device release...")
-        time.sleep(0.15)
-
-        # 4) Sanity check - verify device state before activity starts
-        logger.info(f"🔍 Device state check - Wake active: {self.voice_pipeline.is_active() if self.voice_pipeline else None} | "
-                   f"STT active: {self.voice_pipeline.is_stt_active() if self.voice_pipeline else None}")
+        # Stop idle mode activity before starting Journal
+        self._stop_idle_mode_for_activity()
 
         def run_activity():
             try:
@@ -762,39 +443,30 @@ class WellBotOrchestrator:
                 self._current_activity_log_id = None
                 
                 # When activity ends, restart wake word detection
-                self._restart_wakeword_detection()
+                self._restart_idle_mode()
 
         self._activity_thread = threading.Thread(target=run_activity, daemon=True)
         self._activity_thread.start()
 
     def _start_spiritual_quote_activity(self):
         """Start the spiritual quote activity thread."""
-        logger.info("🧘 Starting Spiritual Quote activity…")
-
+        logger.info("📜 Starting Spiritual Quote activity…")
+        
+        # Lazy import and initialize if needed
         if self.spiritual_quote_activity is None:
-            logger.error("❌ Spiritual Quote activity is None - cannot start")
-            return
+            from src.activities.spiritual_quote import SpiritualQuoteActivity
+            logger.info("Lazy loading Spiritual Quote activity...")
+            self.spiritual_quote_activity = SpiritualQuoteActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+            if not self.spiritual_quote_activity.initialize():
+                logger.error("❌ Failed to initialize Spiritual Quote activity")
+                return
 
         with self._lock:
             self.state = SystemState.ACTIVITY_ACTIVE
             self.current_activity = "spiritual_quote"
 
-        # Stop wake word pipeline first
-        if self.voice_pipeline:
-            logger.info("🔇 Pausing wake word pipeline before Spiritual Quote…")
-            try:
-                import threading
-                stop_success = threading.Event()
-                def force_stop():
-                    try:
-                        self.voice_pipeline.stop()
-                        stop_success.set()
-                    except Exception:
-                        stop_success.set()
-                threading.Thread(target=force_stop, daemon=True).start()
-                stop_success.wait(timeout=5.0)
-            except Exception as e:
-                logger.warning(f"Ignoring error while stopping voice pipeline: {e}")
+        # Stop idle mode activity before starting Spiritual Quote
+        self._stop_idle_mode_for_activity()
 
         def run_activity():
             try:
@@ -824,7 +496,7 @@ class WellBotOrchestrator:
                 except Exception:
                     pass
                 # Restart wakeword
-                self._restart_wakeword_detection()
+                self._restart_idle_mode()
 
         self._activity_thread = threading.Thread(target=run_activity, daemon=True)
         self._activity_thread.start()
@@ -832,31 +504,22 @@ class WellBotOrchestrator:
     def _start_gratitude_activity(self):
         """Start the gratitude activity thread."""
         logger.info("🙏 Starting Gratitude activity…")
-
+        
+        # Lazy import and initialize if needed
         if self.gratitude_activity is None:
-            logger.error("❌ Gratitude activity is None - cannot start")
-            return
+            from src.activities.gratitude import GratitudeActivity
+            logger.info("Lazy loading Gratitude activity...")
+            self.gratitude_activity = GratitudeActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+            if not self.gratitude_activity.initialize():
+                logger.error("❌ Failed to initialize Gratitude activity")
+                return
 
         with self._lock:
             self.state = SystemState.ACTIVITY_ACTIVE
             self.current_activity = "gratitude"
 
-        # Stop wake word pipeline first
-        if self.voice_pipeline:
-            logger.info("🔇 Pausing wake word pipeline before Gratitude…")
-            try:
-                import threading
-                stop_success = threading.Event()
-                def force_stop():
-                    try:
-                        self.voice_pipeline.stop()
-                        stop_success.set()
-                    except Exception:
-                        stop_success.set()
-                threading.Thread(target=force_stop, daemon=True).start()
-                stop_success.wait(timeout=5.0)
-            except Exception as e:
-                logger.warning(f"Ignoring error while stopping voice pipeline: {e}")
+        # Stop idle mode activity before starting Gratitude
+        self._stop_idle_mode_for_activity()
 
         def run_activity():
             try:
@@ -886,7 +549,7 @@ class WellBotOrchestrator:
                 except Exception:
                     pass
                 # Restart wakeword
-                self._restart_wakeword_detection()
+                self._restart_idle_mode()
 
         self._activity_thread = threading.Thread(target=run_activity, daemon=True)
         self._activity_thread.start()
@@ -894,31 +557,22 @@ class WellBotOrchestrator:
     def _start_meditation_activity(self):
         """Start the meditation activity thread."""
         logger.info("🧘 Starting Meditation activity…")
-
+        
+        # Lazy import and initialize if needed
         if self.meditation_activity is None:
-            logger.error("❌ Meditation activity is None - cannot start")
-            return
+            from src.activities.meditation import MeditationActivity
+            logger.info("Lazy loading Meditation activity...")
+            self.meditation_activity = MeditationActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+            if not self.meditation_activity.initialize():
+                logger.error("❌ Failed to initialize Meditation activity")
+                return
 
         with self._lock:
             self.state = SystemState.ACTIVITY_ACTIVE
             self.current_activity = "meditation"
 
-        # Stop wake word pipeline first
-        if self.voice_pipeline:
-            logger.info("🔇 Pausing wake word pipeline before Meditation…")
-            try:
-                import threading
-                stop_success = threading.Event()
-                def force_stop():
-                    try:
-                        self.voice_pipeline.stop()
-                        stop_success.set()
-                    except Exception:
-                        stop_success.set()
-                threading.Thread(target=force_stop, daemon=True).start()
-                stop_success.wait(timeout=5.0)
-            except Exception as e:
-                logger.warning(f"Ignoring error while stopping voice pipeline: {e}")
+        # Stop idle mode activity before starting Meditation
+        self._stop_idle_mode_for_activity()
 
         def run_activity():
             try:
@@ -948,7 +602,7 @@ class WellBotOrchestrator:
                 except Exception:
                     pass
                 # Restart wakeword
-                self._restart_wakeword_detection()
+                self._restart_idle_mode()
 
         self._activity_thread = threading.Thread(target=run_activity, daemon=True)
         self._activity_thread.start()
@@ -957,34 +611,21 @@ class WellBotOrchestrator:
         """Start the activity suggestion activity thread."""
         logger.info("💡 Starting Activity Suggestion activity…")
         
+        # Lazy import and initialize if needed
         if self.activity_suggestion_activity is None:
-            logger.error("❌ Activity Suggestion activity is None - cannot start")
-            return
+            from src.activities.activity_suggestion import ActivitySuggestionActivity
+            logger.info("Lazy loading Activity Suggestion activity...")
+            self.activity_suggestion_activity = ActivitySuggestionActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+            if not self.activity_suggestion_activity.initialize():
+                logger.error("❌ Failed to initialize Activity Suggestion activity")
+                return
         
         with self._lock:
             self.state = SystemState.ACTIVITY_ACTIVE
             self.current_activity = "activity_suggestion"
 
-        # Stop wake word pipeline first and wait for STT to fully complete
-        if self.voice_pipeline:
-            logger.info("🔇 Pausing wake word pipeline before Activity Suggestion…")
-            try:
-                # Stop the pipeline (this will wait for STT thread)
-                self.voice_pipeline.stop()
-                
-                # Wait for STT teardown to ensure mic is fully released
-                logger.info("⏳ Waiting for STT teardown (mic/device release)…")
-                ok = self._wait_for_stt_teardown(timeout_s=3.0)
-                if not ok:
-                    logger.warning("⚠️ STT teardown wait timed out")
-                
-                # Add guard delay for Windows audio device release
-                logger.info("⏱️ Adding guard delay for Windows audio device release...")
-                time.sleep(0.2)
-                
-                logger.info("✅ Wake word pipeline fully stopped")
-            except Exception as e:
-                logger.warning(f"Ignoring error while stopping voice pipeline: {e}")
+        # Stop idle mode activity before starting Activity Suggestion
+        self._stop_idle_mode_for_activity()
 
         def run_activity():
             try:
@@ -1084,72 +725,106 @@ class WellBotOrchestrator:
                     self.state = SystemState.LISTENING
                 
                 logger.info("🔄 Restarting wake word detection after activity suggestion completion")
-                self._restart_wakeword_detection()
+                self._restart_idle_mode()
 
         self._activity_thread = threading.Thread(target=run_activity, daemon=True)
         self._activity_thread.start()
 
-    def _restart_wakeword_detection(self):
-        """Restart wake word detection after an activity ends."""
-        logger.info("🔄 Restarting wake word detection…")
+    def _start_idle_mode_activity(self):
+        """Start the idle mode activity in a thread with error handling"""
+        logger.info("🎬 Starting idle mode activity...")
         
-        # 1) Ensure complete cleanup of previous pipeline
-        if self.voice_pipeline:
-            logger.info("🧹 Performing complete pipeline cleanup...")
+        def run_idle_mode():
             try:
-                # Stop the pipeline completely
-                self.voice_pipeline.stop()
+                if not self.idle_mode_activity:
+                    logger.error("Idle mode activity is None - cannot start")
+                    return
                 
-                # Wait for complete teardown
-                logger.info("⏳ Waiting for complete pipeline teardown...")
-                ok = self._wait_for_stt_teardown(timeout_s=5.0)
-                if not ok:
-                    logger.warning("⚠️ Pipeline teardown wait timed out")
+                # Run the idle mode activity (this will block until intent detected)
+                success = self.idle_mode_activity.run()
+                
+                if success:
+                    logger.info("✅ Idle mode completed successfully (intent detected)")
+                else:
+                    logger.warning("⚠️ Idle mode exited without intent detection")
+                    
+            except Exception as e:
+                logger.error(f"Error running idle mode activity: {e}", exc_info=True)
+                # Attempt to restart idle mode on error
+                try:
+                    logger.info("Attempting to restart idle mode after error...")
+                    time.sleep(1.0)  # Brief delay before retry
+                    if self.idle_mode_activity:
+                        if self.idle_mode_activity.reinitialize():
+                            self._start_idle_mode_activity()
+                        else:
+                            logger.error("Failed to reinitialize idle mode after error")
+                except Exception as retry_error:
+                    logger.error(f"Failed to restart idle mode: {retry_error}")
+        
+        # Start idle mode in a daemon thread
+        idle_thread = threading.Thread(target=run_idle_mode, daemon=True)
+        idle_thread.start()
+        logger.info("✅ Idle mode activity thread started")
+
+    def _restart_idle_mode(self):
+        """Restart idle mode activity after an activity ends."""
+        logger.info("🔄 Restarting idle mode activity…")
+        
+        # 1) Ensure complete cleanup of previous idle mode
+        if self.idle_mode_activity:
+            logger.info("🧹 Performing complete idle mode cleanup...")
+            try:
+                # Stop the activity completely
+                self.idle_mode_activity.stop()
                 
                 # Cleanup resources
-                self.voice_pipeline.cleanup()
-                logger.info("✅ Pipeline cleanup completed")
+                self.idle_mode_activity.cleanup()
+                logger.info("✅ Idle mode cleanup completed")
+                
+                # Re-initialize for next run
+                logger.info("🔄 Re-initializing idle mode activity...")
+                if not self.idle_mode_activity.reinitialize():
+                    logger.error("❌ Failed to re-initialize idle mode activity")
+                    raise RuntimeError("Failed to re-initialize idle mode")
+                
+                logger.info("✅ Idle mode re-initialized successfully")
                 
                 # Add guard delay for Windows audio device release
                 time.sleep(0.2)
                 
             except Exception as e:
-                logger.warning(f"Error during pipeline cleanup: {e}")
+                logger.error(f"Error during idle mode cleanup/reinit: {e}", exc_info=True)
+                # Try to recreate the activity if reinit failed
+                try:
+                    logger.info("Attempting to recreate idle mode activity...")
+                    self.idle_mode_activity = IdleModeActivity(
+                        backend_dir=self.backend_dir,
+                        user_id=self.user_id,
+                        on_intent_detected=self._handle_intent_detected
+                    )
+                    if not self.idle_mode_activity.initialize():
+                        raise RuntimeError("Failed to recreate idle mode activity")
+                except Exception as recreate_error:
+                    logger.error(f"Failed to recreate idle mode activity: {recreate_error}", exc_info=True)
+                    with self._lock:
+                        self.state = SystemState.SHUTTING_DOWN
+                    return
         
-        # 2) Recreate the pipeline fresh to avoid resource conflicts
-        logger.info("🔄 Recreating voice pipeline fresh...")
-        try:
-            self.voice_pipeline = create_voice_pipeline(
-                access_key_file="",  # Deprecated - now uses environment variable
-                custom_keyword_file=str(self.wakeword_model_path),
-                language=self.global_config["language_codes"]["stt_language_code"],
-                user_id=self.user_id,  # Pass user_id for user-specific config
-                on_wake_callback=self._on_wake_detected,
-                on_final_transcript=self._on_transcript_received,
-                intent_config_path=None,  # Now loaded from language_config
-                preference_file_path=None,  # Now loaded from language_config
-                stt_timeout_s=self.global_config["wakeword"]["stt_timeout_s"]
-            )
-            logger.info("✅ Fresh voice pipeline created")
-        except Exception as e:
-            logger.error(f"Failed to recreate voice pipeline: {e}", exc_info=True)
-            with self._lock:
-                self.state = SystemState.SHUTTING_DOWN
-            return
-        
-        # 3) Start the fresh pipeline
+        # 2) Reset state
         with self._lock:
             self.state = SystemState.LISTENING
             self.current_activity = None
         
-        # Start intervention poller when returning to LISTENING state
+        # 3) Start intervention poller when returning to LISTENING state
         self._start_intervention_poller()
-            
+        
+        # 4) Start the idle mode activity
         try:
-            self.voice_pipeline.start()
-            logger.info("🎤 Wake word detection restarted – LISTENING for wake word")
+            self._start_idle_mode_activity()
+            logger.info("🎤 Idle mode restarted – LISTENING for wake word")
         except Exception as e:
-            logger.error(f"Failed to start fresh wake word pipeline: {e}", exc_info=True)
+            logger.error(f"Failed to restart idle mode: {e}", exc_info=True)
             with self._lock:
                 self.state = SystemState.SHUTTING_DOWN
 
@@ -1189,17 +864,22 @@ class WellBotOrchestrator:
                     logger.warning(f"Failed to initialize intervention polling service: {e}")
                     logger.warning("Continuing without intervention polling...")
             
-            if self.voice_pipeline:
-                self.voice_pipeline.start()
+            # Start idle mode activity
+            if self.idle_mode_activity:
+                self._start_idle_mode_activity()
+            else:
+                logger.error("Idle mode activity not initialized")
+                return False
+            
             with self._lock:
                 self.state = SystemState.LISTENING
             # Start poller when entering LISTENING state
             self._start_intervention_poller()
-            logger.info("🎤 Wake word detection started – system ready")
+            logger.info("🎤 Idle mode started – system ready")
             logger.info("Say the wake word to activate the system")
             return True
         except Exception as e:
-            logger.error(f"Failed to start voice pipeline: {e}", exc_info=True)
+            logger.error(f"Failed to start idle mode: {e}", exc_info=True)
             return False
 
     def stop(self):
@@ -1231,12 +911,12 @@ class WellBotOrchestrator:
             if self.meditation_activity.is_active():
                 self.meditation_activity.cleanup()
 
-        # Stop voice pipeline
-        if self.voice_pipeline:
-            logger.info("Stopping voice pipeline…")
-            self.voice_pipeline.stop()
+        # Stop idle mode activity
+        if self.idle_mode_activity:
+            logger.info("Stopping idle mode activity…")
+            self.idle_mode_activity.stop()
             try:
-                self.voice_pipeline.cleanup()
+                self.idle_mode_activity.cleanup()
             except Exception:
                 pass
 
@@ -1279,7 +959,7 @@ class WellBotOrchestrator:
             return {
                 "state": self.state.value,
                 "current_activity": self.current_activity,
-                "wakeword_active": bool(self.voice_pipeline and self.voice_pipeline.is_active()),
+                "wakeword_active": bool(self.idle_mode_activity and self.idle_mode_activity.is_active()),
                 "smalltalk_active": bool(self.smalltalk_activity and self.smalltalk_activity.is_active()),
                 "journal_active": bool(self.journal_activity and self.journal_activity.is_active()),
                 "quote_active": bool(self.spiritual_quote_activity and self.spiritual_quote_activity.is_active()),
