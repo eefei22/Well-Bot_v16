@@ -66,7 +66,7 @@
       "that's enough"
     ],
     "prompts": {
-      "start": "What are you grateful for today? You can share anything you like. When you're finished, say 'done' to save your entry.",
+      "start": "Let's try to practice gratitude. What are you grateful for today? You can share anything you like. When you're finished, say 'done' to save your entry.",
       "nudge": "Are you still there? Continue speaking or say 'done' when finished.",
       "saved": "Alright! I've saved your gratitude note.",
       "recording_error": "I'm sorry, I had trouble recording your gratitude note.",
@@ -84,7 +84,7 @@
     "suggestions_unavailable": "Suggestions are not available now",
     "prompts": {
       "nudge": "Are you still there? Which activity would you like to try?",
-      "timeout": "I'll be here when you're ready. Just call my name when you want to try an activity."
+      "timeout": "It seems like you're not there. I'll go take a break now. Just call my name when you're ready to talk again."
     },
     "activity_names": {
       "journaling": "Journaling",

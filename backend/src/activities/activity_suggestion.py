@@ -71,6 +71,8 @@ class ActivitySuggestionActivity:
         self._selected_activity: Optional[str] = None  # Store selected activity for routing
         self._conversation_context: List[Dict[str, str]] = []  # Store conversation for smalltalk seeding
         self._timeout_detected = False  # Flag to track if timeout occurred
+        self._listening_mic: Optional[MicStream] = None  # Reference to mic used in _listen_for_activity_choice
+        self._timeout_handler_finished = threading.Event()  # Event to signal when timeout handler completes
         
         logger.info(f"ActivitySuggestionActivity initialized for user {self.user_id}")
     
@@ -305,7 +307,7 @@ class ActivitySuggestionActivity:
                 
                 # Speak the complete cold start intro message via TTS
                 self._speak(cold_start_intro)
-                logger.info(f"Spoke cold start activity suggestions: '{cold_start_intro[:50]}...'")
+                logger.info(f"Spoke cold start activity suggestions (full text):\n{cold_start_intro}")
                 
                 # Store conversation context (full message for smalltalk seeding)
                 self._conversation_context = [{"role": "assistant", "content": cold_start_intro}]
@@ -328,7 +330,7 @@ class ActivitySuggestionActivity:
             
             # Speak full message via TTS
             self._speak(full_message)
-            logger.info(f"Spoke activity suggestions with intro: '{full_message[:50]}...'")
+            logger.info(f"Spoke activity suggestions with intro (full text):\n{full_message}")
             
             # Store conversation context (full message for smalltalk seeding)
             self._conversation_context = [{"role": "assistant", "content": full_message}]
@@ -349,11 +351,17 @@ class ActivitySuggestionActivity:
             logger.error("STT service or keyword matcher not initialized, cannot listen for activity choice")
             return None
         
+        # Check if timeout already occurred before starting
+        if self._timeout_detected or not self._active:
+            logger.info("Timeout already detected or activity not active - skipping listening")
+            return None
+        
         try:
             logger.info("Listening for activity choice with keyword matching...")
             
             # Use standard STT parameters (16kHz)
             mic = MicStream(rate=16000, chunk_size=1600)  # 100ms chunks at 16kHz
+            self._listening_mic = mic  # Store reference so timeout handler can stop it
             
             intent_result: Optional[dict] = None
             transcript: Optional[str] = None
@@ -369,9 +377,19 @@ class ActivitySuggestionActivity:
                 # Capture transcript using STT
                 def on_transcript(text: str, is_final: bool):
                     nonlocal transcript
+                    # Check if timeout occurred during callback
+                    if self._timeout_detected or not self._active:
+                        logger.info("Timeout detected in on_transcript callback - stopping mic")
+                        mic.stop()
+                        return
                     if is_final and text:
                         transcript = text
                         mic.stop()
+                
+                # Check timeout flag again right before STT call
+                if self._timeout_detected or not self._active:
+                    logger.info("Timeout detected before STT call - returning None")
+                    return None
                 
                 # Run STT with timeout
                 try:
@@ -385,7 +403,7 @@ class ActivitySuggestionActivity:
                     logger.error(f"STT error during keyword matching: {e}")
                 
                 # Check if activity was stopped (e.g., due to timeout)
-                if not self._active:
+                if not self._active or self._timeout_detected:
                     logger.info("Activity was stopped during listening - returning None")
                     return None
                 
@@ -427,10 +445,19 @@ class ActivitySuggestionActivity:
                 return None
             finally:
                 mic.stop()
+                self._listening_mic = None  # Clear reference
             
         except Exception as e:
             logger.error(f"Error listening for activity choice: {e}", exc_info=True)
             return None
+        finally:
+            # Ensure mic is cleared even if exception occurs
+            if self._listening_mic:
+                try:
+                    self._listening_mic.stop()
+                except:
+                    pass
+                self._listening_mic = None
     
     def _speak_starting_activity(self, activity_type: str):
         """Speak feedback message when starting an activity"""
@@ -499,39 +526,86 @@ class ActivitySuggestionActivity:
             self.llm_pipeline.messages.append({"role": "system", "content": content})
     
     def _handle_nudge(self):
-        """Handle silence nudge"""
-        logger.info("Silence nudge triggered in activity suggestion")
-        # Get nudge text from config and speak it using TTS
-        try:
-            prompts = self.activity_suggestion_config.get("prompts", {})
-            nudge_text = prompts.get("nudge", "Are you still there? Which activity would you like to try?")
-        except Exception as e:
-            logger.warning(f"Failed to load nudge prompt from config: {e}")
-            nudge_text = "Are you still there? Which activity would you like to try?"
+        """Handle silence nudge callback"""
+        logger.info("🔔 Handling silence nudge...")
         
-        # Speak nudge with delays to prevent STT pickup
-        self._speak(nudge_text, is_nudge=True)
+        try:
+            use_audio_files = self.global_smalltalk_config.get("use_audio_files", False)
+            
+            # Play nudge audio if enabled (with delays to prevent STT pickup)
+            if use_audio_files:
+                nudge_audio_path = self.backend_dir / self.audio_config["nudge_audio_path"]
+                if nudge_audio_path.exists():
+                    logger.info(f"Playing nudge audio with delays: {nudge_audio_path}")
+                    self.audio_manager.play_nudge_audio_with_delays(str(nudge_audio_path))
+                else:
+                    logger.warning(f"Nudge audio file not found: {nudge_audio_path}")
+            
+            # TTS prompt from config
+            try:
+                prompts = self.activity_suggestion_config.get("prompts", {})
+                nudge_prompt = prompts.get("nudge", "Are you still there? Which activity would you like to try?")
+                logger.info(f"Nudge prompt from config: '{nudge_prompt}'")
+            except Exception as e:
+                logger.warning(f"Failed to load nudge prompt from config: {e}", exc_info=True)
+                nudge_prompt = "Are you still there? Which activity would you like to try?"
+            
+            # Speak the nudge prompt (with delays to prevent STT pickup)
+            logger.info(f"Speaking nudge prompt...")
+            self._speak(nudge_prompt, is_nudge=True)
+            logger.info("✅ Nudge prompt spoken successfully")
+            
+        except Exception as e:
+            logger.error(f"❌ Error in _handle_nudge: {e}", exc_info=True)
     
     def _handle_timeout(self):
-        """Handle silence timeout"""
-        logger.info("Silence timeout triggered in activity suggestion - ending activity gracefully")
+        """Handle silence timeout callback"""
+        logger.info("⏰ Handling silence timeout...")
         
         # Set timeout flag so run() knows not to route to smalltalk
         self._timeout_detected = True
+        self._timeout_handler_finished.clear()  # Reset the event
         
-        # Get timeout message from config and speak it
+        # Stop the mic if it's currently listening (this will make stream_recognize return)
+        if self._listening_mic:
+            logger.info("Stopping listening mic due to timeout...")
+            try:
+                self._listening_mic.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping listening mic: {e}")
+        
         try:
-            prompts = self.activity_suggestion_config.get("prompts", {})
-            timeout_text = prompts.get("timeout", "I'll be here when you're ready. Just call my name when you want to try an activity.")
+            use_audio_files = self.global_smalltalk_config.get("use_audio_files", False)
+            
+            # Play termination audio if enabled
+            if use_audio_files:
+                termination_audio_path = self.backend_dir / self.audio_config["termination_audio_path"]
+                if termination_audio_path.exists():
+                    logger.info(f"Playing termination audio: {termination_audio_path}")
+                    self.audio_manager.play_audio_file(str(termination_audio_path))
+                else:
+                    logger.warning(f"Termination audio file not found: {termination_audio_path}")
+            
+            # TTS prompt from config
+            try:
+                prompts = self.activity_suggestion_config.get("prompts", {})
+                timeout_prompt = prompts.get("timeout", "It seems like you're not there. I'll go take a break now. Just call my name when you're ready to talk again.")
+                logger.info(f"Timeout prompt from config: '{timeout_prompt}'")
+            except Exception as e:
+                logger.warning(f"Failed to load timeout prompt from config: {e}", exc_info=True)
+                timeout_prompt = "It seems like you're not there. I'll go take a break now. Just call my name when you're ready to talk again."
+            
+            # Speak the timeout prompt
+            logger.info(f"Speaking timeout prompt...")
+            self._speak(timeout_prompt)
+            logger.info("✅ Timeout prompt spoken successfully")
+            
         except Exception as e:
-            logger.warning(f"Failed to load timeout prompt from config: {e}")
-            timeout_text = "I'll be here when you're ready. Just call my name when you want to try an activity."
-        
-        # Speak timeout message
-        self._speak(timeout_text)
-        
-        # Stop the activity (this will trigger cleanup and return to wakeword)
-        self.stop()
+            logger.error(f"❌ Error in _handle_timeout: {e}", exc_info=True)
+        finally:
+            # Signal that timeout handler has finished (allows run() to proceed with cleanup)
+            logger.info("Timeout handler finished - signaling completion")
+            self._timeout_handler_finished.set()
     
     def start(self) -> bool:
         """Start the Activity Suggestion activity"""
@@ -604,6 +678,15 @@ class ActivitySuggestionActivity:
         
         logger.info("🛑 Stopping Activity Suggestion activity...")
         self._active = False
+        
+        # Stop listening mic if it's active (this will interrupt STT)
+        if self._listening_mic:
+            logger.info("Stopping listening mic...")
+            try:
+                self._listening_mic.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping listening mic: {e}")
+            self._listening_mic = None
         
         # Stop silence monitoring
         if self.audio_manager:
@@ -727,6 +810,8 @@ class ActivitySuggestionActivity:
         self._selected_activity = None
         self._conversation_context = []
         self._timeout_detected = False
+        self._listening_mic = None  # Clear mic reference
+        self._timeout_handler_finished.clear()  # Reset timeout handler event
         
         # Re-initialize components
         return self.initialize()
@@ -752,10 +837,18 @@ class ActivitySuggestionActivity:
             # Listen for user's activity choice
             matched_activity = self._listen_for_activity_choice()
             
-            # Check if timeout occurred - if so, don't route to smalltalk, just return
+            # Check if timeout occurred - if so, wait for timeout handler to finish, then return
             if self._timeout_detected:
+                logger.info("Timeout detected - waiting for timeout handler to finish...")
+                # Wait up to 10 seconds for timeout handler to complete (includes 5s TTS delay)
+                if self._timeout_handler_finished.wait(timeout=10.0):
+                    logger.info("Timeout handler finished - proceeding with cleanup")
+                else:
+                    logger.warning("Timeout waiting for timeout handler to finish - proceeding anyway")
                 logger.info("Timeout detected - returning to wakeword without routing")
                 self._selected_activity = "__timeout__"  # Special sentinel value to indicate timeout
+                # Stop the activity (cleanup will be handled by orchestrator)
+                self.stop()
                 return True
             
             if matched_activity:

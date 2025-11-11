@@ -1,121 +1,124 @@
 {
   "smalltalk": {
-    "system_prompt": "你是Well-Bot，一个友好的情感健康助手，正在与用户进行闲聊。保持你的回复随意、简短和简洁。不要使用表情符号。以下是用户说的：",
+    "system_prompt": "你是 Well-Bot，一个友善的情绪健康助理，正在和用户轻松聊天。保持语气自然、简短、简洁。不要使用表情符号，并且一定要提出后续问题。",
     "termination_phrases": [
-      "好的，再见",
-      "我现在要走了",
-      "回头聊",
-      "停止说话",
+      "好吧，再见",
+      "我现在得走了",
+      "待会儿聊",
+      "别聊了",
       "退出"
     ],
     "prompts": {
-      "start": "你想聊什么？",
-      "nudge": "嘿，你还在吗？随时继续我们的对话。",
-      "timeout": "看起来你不在。我先休息一下。等你准备好了，随时叫我。",
-      "end": "好的，回头聊，再见！"
+      "start": "我们来聊聊吧！你现在在想什么？",
+      "nudge": "嘿，你还在吗？随时可以继续聊。",
+      "timeout": "好像你暂时离开了。我先休息一下，你准备好再叫我。",
+      "end": "好的，待会儿聊，再见！"
     }
   },
   "journal": {
     "termination_phrases": [
-      "停止写日记",
+      "停止记录",
       "保存日记",
       "结束记录",
-      "就这样",
-      "完成写日记",
-      "写日记完成",
+      "就这些",
+      "完成日记",
+      "写完了",
       "结束日记",
       "停止录音"
     ],
     "prompts": {
-      "start": "准备开始写日记。提示音后开始说话。你可以随时暂停思考。说完时说'停止写日记'。",
-      "nudge": "你还在吗？继续说话或说'停止写日记'来完成。",
-      "saving": "正在保存你的日记条目。",
-      "saved": "日记条目已保存，共{word_count}字。",
-      "timeout": "正在保存你的日记条目。",
-      "no_content": "没有记录到内容，现在结束日记会话。"
+      "start": "我们来写日记吧。你可以随意分享任何想法，中途也可以暂停思考。写完后说“停止记录”就可以结束。",
+      "nudge": "你还在吗？可以继续说，或者说“停止记录”来结束。",
+      "saving": "正在保存你的日记内容。",
+      "saved": "日记已保存，共记录了 {word_count} 个字。",
+      "timeout": "正在保存你的日记内容。",
+      "no_content": "没有记录到内容，结束日记会话。"
     }
   },
   "quote": {
-    "preamble": "给你一句名言。",
-    "seed_system_prompt": "你刚刚向用户分享了这句名言。请自然过渡到简短而温暖的闲聊。名言：‘{quote}’。请提出一个开放、友好的问题，邀请用户分享看法。",
-    "opener": "你对这句名言有什么想法？"
+    "preamble": "送你一句话：",
+    "seed_system_prompt": "你刚刚和用户分享了这句话。请过渡到温暖、简短的闲聊。引用内容：'{quote}'。提出一个与主题相关、开放而有启发性的问题。",
+    "opener": "你觉得这句话怎么样？"
   },
   "meditation": {
     "termination_phrases": [
       "停止冥想",
       "结束冥想",
       "够了",
-      "完成冥想"
+      "完成冥想",
+      "停",
+      "结束",
+      "够了"
     ],
-    "start_prompt": "现在开始你的冥想课程。",
-    "seed_system_prompt_completed": "你刚刚与用户完成了一次引导冥想。请自然过渡到简短而温暖的闲聊。提出一个开放、友好的问题，询问冥想的感觉或体验。",
-    "seed_system_prompt_stopped": "用户中途停止了引导冥想。请自然过渡到简短而温暖的闲聊。提出一个开放、友好的问题，询问他们的感受或是否一切正常。",
-    "opener_completed": "这次冥想感觉如何？",
-    "opener_stopped": "我注意到你停止了冥想。你感觉怎么样？"
+    "start_prompt": "我们开始冥想吧。现在开始引导冥想。",
+    "seed_system_prompt_completed": "你刚刚和用户完成了一次引导式冥想。请过渡到温暖、简短的闲聊。提出一个关于他们感受或体验的开放问题。",
+    "seed_system_prompt_stopped": "用户在冥想中途停止。请过渡到温暖、简短的闲聊，询问他们的感受或是否一切安好。",
+    "opener_completed": "冥想结束后你感觉怎么样？",
+    "opener_stopped": "我注意到你提前结束了冥想，一切还好吗？"
   },
   "gratitude": {
     "termination_phrases": [
       "完成",
-      "完成了",
+      "就这些",
       "就这样",
-      "好了",
-      "说完了"
+      "结束",
+      "保存",
+      "够了"
     ],
     "prompts": {
-      "start": "今天你有什么要感恩的吗？提示音后开始说话。说完后说'完成了'来保存。",
-      "nudge": "你还在吗？继续说话或说'完成了'来结束。",
-      "saved": "谢谢你分享。我已经保存了你的感恩记录。",
-      "recording_error": "抱歉，我录制你的感恩记录时遇到了问题。",
-      "no_content": "没有记录到内容。我们下次再试吧。",
-      "save_error": "我保存你的感恩记录时遇到了问题，但我听到了你说的话。"
+      "start": "我们来练习感恩吧。今天你想感激什么呢？可以分享任何让你心怀感激的事。结束时说“完成”就可以保存记录。",
+      "nudge": "你还在吗？可以继续说，或者说“完成”来结束。",
+      "saved": "好的！我已经保存了你的感恩笔记。",
+      "recording_error": "抱歉，我在记录你的感恩笔记时出了点问题。",
+      "no_content": "我没有听到内容，下次我们再试试吧。",
+      "save_error": "保存时出了点问题，但我听到了你说的话。"
     },
-    "seed_system_prompt": "用户刚刚分享了一条感恩记录。请自然过渡到简短而温暖的闲聊。感恩记录：'{gratitude_note}'。请提出一个开放、友好的问题，与感恩或积极情绪相关。",
-    "opener": "这很美好。你还有什么想说的吗？"
+    "seed_system_prompt": "用户刚刚分享了一条感恩笔记。请过渡到温暖、简短的闲聊。感恩笔记内容：'{gratitude_note}'。提出一个与感恩或积极情绪相关的开放问题。",
+    "opener": "谢谢你的分享！说完这些你感觉怎么样？"
   },
   "activity_suggestion": {
-    "system_prompt": "以下是一些为您推荐的活动，它们根据我们过去的互动从高到低排名。",
-    "cold_start_intro": "以下是一些您可以尝试的健康活动。我们可以一起冥想，或者你想写日记？ 我也可以送你一句励志名言，或者来一次感恩练习。你随便选一个吧！",
-    "starting_activity_feedback": "现在开始{activity}",
-    "no_match_feedback": "我没听清楚。不如我们来聊聊天吧！",
-    "suggestions_unavailable": "建议现在不可用",
+    "system_prompt": "以下是为你推荐的一些活动，按照我们以往的互动从高到低排序。",
+    "cold_start_intro": "以下是一些您可以尝试的健康活动。我们可以一起冥想，或者你想写日记？ 我也可以送你一句励志名言，或者来一次感恩练习。你随便选一个吧",
+    "starting_activity_feedback": "正在开始 {activity}",
+    "no_match_feedback": "我没有听清楚。",
+    "suggestions_unavailable": "目前无法提供建议。",
     "prompts": {
-      "nudge": "你还在吗？你想尝试哪个活动？",
-      "timeout": "当你准备好了，随时叫我，我会在这里等你。"
+      "nudge": "你还在吗？你想尝试哪个活动？我们可以一起冥想，或者你想写日记？ 我也可以送你一句励志名言，或者来一次感恩练习。你随便选一个吧",
+      "timeout": "看起来你不在，我先休息一下。等你准备好了，随时叫我。"
     },
     "activity_names": {
       "journaling": "写日记",
       "gratitude": "感恩练习",
       "meditation": "冥想",
-      "quote": "励志名言"
+      "quote": "励志语录"
     },
     "activity_descriptions": {
-      "meditation": "一种平静心灵、寻找内心宁静的方式",
-      "journaling": "一个反思和释放想法的机会",
-      "quote": "快速获得动力和视角",
-      "gratitude": "专注于美好，点亮你的一天"
+      "meditation": "一种让心灵平静、找到内在安宁的练习。",
+      "journaling": "一个反思与释放思绪的机会。",
+      "quote": "一剂短暂的动力与启发。",
+      "gratitude": "专注于美好，点亮你的一天。"
     }
   },
   "wakeword_responses": {
     "prompts": {
-      "wakeword_detected": "嘿，我听到你叫我。我能帮你什么？",
-      "nudge": "我在听。你想做什么？",
-      "timeout": "当你需要我的时候，我在这里。只要叫我的名字。",
-      "unknown_intent": "我没听清楚。你能重复一遍吗？",
-      "activity_unavailable": "那个功能还没有。我还能帮你什么？"
+      "wakeword_detected": "嘿，我听到你叫我了。今天想做什么？",
+      "nudge": "我在听呢。你想做什么？",
+      "timeout": "我会在这里等你，准备好时再叫我。",
+      "unknown_intent": "我没听清楚。你可以再叫我一次，我就能帮你啦。",
+      "activity_unavailable": "这个活动现在不能进行。我们试试别的好吗？"
     }
   },
   "audio_paths": {
-    "wokeword_audio_path": "assets/MANDARIN/wokeword_CN_male.wav",
-    "start_smalltalk_audio_path": "assets/MANDARIN/start_smalltalk_CN_male.wav",
-    "start_journal_audio_path": "assets/MANDARIN/start_journal_CN_male.wav",
-    "start_gratitude_audio_path": "assets/MANDARIN/start_gratitude_CN_male.wav",
-    "start_meditation_audio_path": "assets/MANDARIN/start_meditation_CN_male.wav",
-    "start__quote_audio_path": "assets/MANDARIN/start_quote_CN_male.wav",
-    "nudge_audio_path": "assets/MANDARIN/inactivity_nudge_CN_male.wav",
-    "termination_audio_path": "assets/MANDARIN/termination_CN_male.wav",
-    "end_audio_path": "assets/MANDARIN/end_smalltalk_CN_male.wav",
-    "prompt_repeat_path": "assets/MANDARIN/prompt_repeat_CN_male.wav",
-    "activity_unavailable_path": "assets/MANDARIN/activity_unavailable_CN_male.wav"
+    "wokeword_audio_path": "assets/ENGLISH/wokeword_EN_male.wav",
+    "start_smalltalk_audio_path": "assets/ENGLISH/start_smalltalk_EN_male.wav",
+    "start_journal_audio_path": "assets/ENGLISH/start_journal_EN_male.wav",
+    "start_gratitude_audio_path": "assets/ENGLISH/start_gratitude_EN_male.wav",
+    "start_meditation_audio_path": "assets/ENGLISH/start_meditation_EN_male.wav",
+    "start__quote_audio_path": "assets/ENGLISH/start_quote_EN_male.wav",
+    "nudge_audio_path": "assets/ENGLISH/inactivity_nudge_EN_male.wav",
+    "termination_audio_path": "assets/ENGLISH/termination_EN_male.wav",
+    "end_audio_path": "assets/ENGLISH/end_smalltalk_EN_male.wav",
+    "prompt_repeat_path": "assets/ENGLISH/prompt_repeat_EN_male.wav",
+    "activity_unavailable_path": "assets/ENGLISH/activity_unavailable_EN_male.wav"
   }
 }
-

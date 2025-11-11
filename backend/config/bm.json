@@ -78,7 +78,7 @@
     "suggestions_unavailable": "Cadangan tidak tersedia sekarang",
     "prompts": {
       "nudge": "Adakah anda masih di situ? Aktiviti mana yang anda ingin cuba?",
-      "timeout": "Saya akan berada di sini apabila anda sudah bersedia. Hanya panggil nama saya apabila anda ingin mencuba aktiviti."
+      "timeout": "Nampaknya anda tiada di situ. Saya akan berehat sekarang. Panggil nama saya apabila anda sudah bersedia untuk bercakap lagi."
     },
     "activity_names": {
       "journaling": "Menulis Jurnal",

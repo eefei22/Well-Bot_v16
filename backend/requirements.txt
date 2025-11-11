@@ -1,6 +1,7 @@
-# py -3.12 -m venv venv 
-#.\venv\Scripts\Activate.ps1
-# pip install -r backend/requirements.txt
+# cd Well-Bot_edge
+# .\venv\Scripts\activate
+# cd backend             
+# python main.py 
 
 
 google-cloud-speech==2.21.0

@@ -7,12 +7,24 @@ It runs in the background and triggers callbacks when wake words are detected.
 
 import os
 import sys
-import pvporcupine
+import logging
+
+try:
+    import pvporcupine
+    PORCUPINE_AVAILABLE = True
+except ImportError:
+    PORCUPINE_AVAILABLE = False
+    pvporcupine = None
+
 import pyaudio
 import struct
 import threading
 from typing import Optional, List, Callable
-import logging
+
+logger = logging.getLogger(__name__)
+
+if not PORCUPINE_AVAILABLE:
+    logger.warning("pvporcupine not available - wake word detection will not work")
 
 # Add the backend directory to the path to import config
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -58,6 +70,10 @@ class WakeWordDetector:
         Returns:
             True if initialization successful, False otherwise
         """
+        if not PORCUPINE_AVAILABLE:
+            logger.error("pvporcupine is not available - cannot initialize wake word detector")
+            return False
+            
         try:
             keyword_paths = []
             keywords = []
