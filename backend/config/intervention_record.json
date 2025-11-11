@@ -1,0 +1,36 @@
+{
+  "latest_emotion_entry": null,
+  "latest_decision": {
+    "trigger_intervention": true,
+    "confidence_score": 0.75,
+    "reasoning": "Negative emotion 'Angry' detected; Confidence 0.75 >= 0.7; Time since last activity: 930.9 minutes"
+  },
+  "latest_suggestion": {
+    "ranked_activities": [
+      {
+        "activity_type": "journal",
+        "rank": 3,
+        "score": 1.0
+      },
+      {
+        "activity_type": "gratitude",
+        "rank": 1,
+        "score": 0.804
+      },
+      {
+        "activity_type": "meditation",
+        "rank": 2,
+        "score": 0.72
+      },
+      {
+        "activity_type": "quote",
+        "rank": 4,
+        "score": 0.686
+      }
+    ],
+    "reasoning": "Emotion: Angry; Time of day: morning; Top suggestion: journal (score: 1.000)"
+  },
+  "last_request_time": "2025-11-10T23:25:51.795782",
+  "last_response_time": "2025-11-10T23:25:57.327154",
+  "last_database_query_time": "2025-11-11T16:38:24.676114"
+}

@@ -1,0 +1,65 @@
+{
+  "smalltalk": [
+    "bercakap",
+    "berbual",
+    "perbualan",
+    "bosan"
+  ],
+  "journaling": [
+    "jurnal",
+    "menulis jurnal",
+    "mula jurnal",
+    "catat",
+    "rekod",
+    "hari ini",
+    "pemikiran"
+  ],
+  "meditation": [
+    "meditasi",
+    "bermeditasi",
+    "meditasi",
+    "panduan",
+    "tertekan"
+  ],
+  "quote": [
+    "petikan",
+    "rohani",
+    "inspirasi",
+    "memberi inspirasi",
+    "motivasi",
+    "tidak bermotivasi",
+    "hilang",
+    "sedih",
+    "semangat"
+  ],
+  "gratitude": [
+    "kesyukuran",
+    "menghargai",
+    "penghargaan",
+    "bersyukur",
+    "berterima kasih",
+    "kepuasan"
+  ],
+  "termination": [
+    "selamat tinggal",
+    "bye",
+    "selesai",
+    "berhenti",
+    "tamat",
+    "itu sahaja",
+    "cukup",
+    "berhenti bercakap"
+  ],
+  "activity_suggestion": [
+    "cadangan",
+    "saranan",
+    "tidak tahu",
+    "saya tidak tahu",
+    "apa",
+    "bantuan",
+    "pilihan",
+    "cadangkan",
+    "apa yang patut saya buat"
+  ]
+}
+

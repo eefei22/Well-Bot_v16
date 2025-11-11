@@ -66,8 +66,6 @@ CREATE TABLE public.wb_activity_logs (
   id uuid NOT NULL DEFAULT gen_random_uuid(),
   user_id uuid NOT NULL,
   type text NOT NULL CHECK (type = ANY (ARRAY['journal'::text, 'gratitude'::text, 'todo'::text, 'meditation'::text, 'quote'::text])),
-  ref_id uuid,
-  action text NOT NULL,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
   CONSTRAINT wb_activity_logs_pkey PRIMARY KEY (id),
   CONSTRAINT wb_activity_event_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)

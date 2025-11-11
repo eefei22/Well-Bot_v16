@@ -74,8 +74,10 @@ Thumbs.db
 *.log
 logs/
 
-# Testing output
+# OTHER FILES AND FOLDERS
 backend/testing/output/
+backend/config/user_persona.json
+backend/src/supabase/migrations/
 
 # Temporary files
 *.tmp

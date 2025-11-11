@@ -33,8 +33,11 @@ from src.activities.journal import JournalActivity
 from src.activities.spiritual_quote import SpiritualQuoteActivity
 from src.activities.meditation import MeditationActivity
 from src.activities.gratitude import GratitudeActivity
+from src.activities.activity_suggestion import ActivitySuggestionActivity
 from src.utils.config_resolver import get_global_config_for_user, resolve_language
 from src.supabase.auth import get_current_user_id
+from src.supabase.database import log_activity_start
+from src.utils.intervention_poller import InterventionPoller
 
 # Configure logging
 logging.basicConfig(
@@ -79,6 +82,7 @@ class WellBotOrchestrator:
         self.spiritual_quote_activity: Optional[SpiritualQuoteActivity] = None
         self.meditation_activity: Optional[MeditationActivity] = None
         self.gratitude_activity: Optional[GratitudeActivity] = None
+        self.activity_suggestion_activity: Optional[ActivitySuggestionActivity] = None
         self.stt_service: Optional[GoogleSTTService] = None
         self.tts_service: Optional[GoogleTTSClient] = None
 
@@ -92,6 +96,10 @@ class WellBotOrchestrator:
 
         self.current_activity: Optional[str] = None
         self._activity_thread: Optional[threading.Thread] = None
+        self._current_activity_log_id: Optional[str] = None  # Track log ID for completion
+
+        # Intervention polling service
+        self.intervention_poller: Optional[InterventionPoller] = None
 
         logger.info("WellBotOrchestrator initialized")
 
@@ -191,6 +199,12 @@ class WellBotOrchestrator:
             if not self.gratitude_activity.initialize():
                 raise RuntimeError("Failed to initialize Gratitude activity")
             logger.info("✓ Gratitude activity initialized")
+
+            logger.info("Initializing Activity Suggestion activity…")
+            self.activity_suggestion_activity = ActivitySuggestionActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+            if not self.activity_suggestion_activity.initialize():
+                raise RuntimeError("Failed to initialize Activity Suggestion activity")
+            logger.info("✓ Activity Suggestion activity initialized")
             
             return True
         except Exception as e:
@@ -245,6 +259,52 @@ class WellBotOrchestrator:
     def _route_to_activity(self, intent: str, transcript: str):
         """Route the user to proper activity based on intent."""
         logger.info(f"🔄 Routing to activity: {intent}")
+        
+        # Only check trigger_intervention if user didn't explicitly request an activity
+        # If intent is "unknown", we can use intervention suggestions
+        if intent == "unknown":
+            try:
+                from src.utils.intervention_record import InterventionRecordManager
+                record_path = self.backend_dir / "config" / "intervention_record.json"
+                record_manager = InterventionRecordManager(record_path)
+                record = record_manager.load_record()
+                
+                decision = record.get("latest_decision", {})
+                trigger_intervention = decision.get("trigger_intervention", False)
+                
+                if trigger_intervention:
+                    logger.info("🎯 trigger_intervention=true detected - launching activity suggestion")
+                    self._start_activity_suggestion_activity()
+                    return
+            except Exception as e:
+                logger.warning(f"Failed to check trigger_intervention: {e}")
+        
+        # Stop intervention poller when starting an activity
+        self._stop_intervention_poller()
+
+        # Map intent to activity type for logging
+        intent_to_activity_type = {
+            "smalltalk": None,  # Smalltalk is not logged as an activity
+            "journaling": "journal",
+            "meditation": "meditation",
+            "quote": "quote",
+            "gratitude": "gratitude",
+            "termination": None,
+        }
+        
+        activity_type = intent_to_activity_type.get(intent)
+        
+        # Log activity start if it's a trackable activity
+        # Command-triggered interventions have emotional_log_id=None
+        if activity_type:
+            public_id = log_activity_start(
+                user_id=self.user_id,
+                activity_type=activity_type,
+                emotional_log_id=None  # Command-triggered, not emotion-triggered
+            )
+            self._current_activity_log_id = public_id  # Keep variable name for backward compatibility
+        else:
+            self._current_activity_log_id = None
 
         if intent == "smalltalk":
             self._start_smalltalk_activity()
@@ -256,11 +316,14 @@ class WellBotOrchestrator:
             self._start_spiritual_quote_activity()
         elif intent == "gratitude":
             self._start_gratitude_activity()
+        elif intent == "activity_suggestion":
+            logger.info("Activity suggestion intent detected - launching activity suggestion")
+            self._start_activity_suggestion_activity()
         elif intent == "termination":
             logger.info("👋 Termination intent detected – ending session")
             self._handle_termination()
         else:
-            logger.info(f"❓ Unknown intent '{intent}' – prompting user to repeat")
+            logger.info(f"❓ Unknown intent '{intent}' – prompting to repeat")
             self._handle_unknown_intent(transcript)
 
     def _start_smalltalk_activity(self):
@@ -332,6 +395,10 @@ class WellBotOrchestrator:
                     logger.error("❌ SmallTalk activity is None - cannot run")
                     return
                 
+                # Pass log_id to activity for completion tracking
+                if hasattr(self.smalltalk_activity, 'set_activity_log_id'):
+                    self.smalltalk_activity.set_activity_log_id(self._current_activity_log_id)
+                
                 success = self.smalltalk_activity.run()
                 if success:
                     logger.info("✅ SmallTalk activity completed successfully")
@@ -357,6 +424,9 @@ class WellBotOrchestrator:
                     except Exception as e:
                         logger.warning(f"Error during activity cleanup/reinit: {e}")
                 
+                # Clear log ID
+                self._current_activity_log_id = None
+                
                 # When activity ends, restart wake word detection
                 self._restart_wakeword_detection()
 
@@ -381,11 +451,12 @@ class WellBotOrchestrator:
             if self._silence_timer:
                 self._silence_timer.cancel()
             
-            nudge_timeout = self.global_config["wakeword"]["nudge_timeout_seconds"]
-            self._silence_timer = threading.Timer(nudge_timeout, self._handle_wakeword_nudge)
+            # Use silence_timeout_seconds for the initial nudge timer
+            silence_timeout = self.global_config["wakeword"]["silence_timeout_seconds"]
+            self._silence_timer = threading.Timer(silence_timeout, self._handle_wakeword_nudge)
             self._silence_timer.daemon = True
             self._silence_timer.start()
-            logger.info(f"Started silence monitoring - nudge in {nudge_timeout}s")
+            logger.info(f"Started silence monitoring - nudge in {silence_timeout}s")
 
     def _handle_wakeword_nudge(self):
         """Handle nudge when user is silent after wake word"""
@@ -417,14 +488,13 @@ class WellBotOrchestrator:
         self._speak(nudge_prompt)
         
         # Start final timeout timer
+        # This timer runs AFTER the nudge, so use nudge_timeout_seconds directly
         with self._silence_lock:
-            silence_timeout = self.global_config["wakeword"]["silence_timeout_seconds"]
             nudge_timeout = self.global_config["wakeword"]["nudge_timeout_seconds"]
-            remaining_time = silence_timeout - nudge_timeout
-            self._silence_timer = threading.Timer(remaining_time, self._handle_wakeword_timeout)
+            self._silence_timer = threading.Timer(nudge_timeout, self._handle_wakeword_timeout)
             self._silence_timer.daemon = True
             self._silence_timer.start()
-            logger.info(f"Started final timeout timer - timeout in {remaining_time}s")
+            logger.info(f"Started final timeout timer - timeout in {nudge_timeout}s")
 
     def _handle_wakeword_timeout(self):
         """Handle final timeout after wake word with no user speech"""
@@ -522,50 +592,36 @@ class WellBotOrchestrator:
             logger.error(f"TTS error: {e}")
 
     def _stop_stt_session(self):
-        """Stop the current STT session to mute microphone"""
+        """Stop the current STT session and microphone to prevent TTS pickup"""
         try:
-            if self.voice_pipeline and hasattr(self.voice_pipeline, '_stt_thread'):
-                # The STT session is running in a separate thread
-                # We can't directly stop it, but we can wait for it to complete
-                # The STT session will timeout naturally after stt_timeout_s
-                logger.debug("STT session will timeout naturally, microphone will be muted")
+            if self.voice_pipeline:
+                # Stop the mic immediately to prevent picking up TTS
+                with self.voice_pipeline._lock:
+                    if self.voice_pipeline._current_mic and self.voice_pipeline._current_mic.is_running():
+                        logger.debug("Stopping mic in STT session to prevent TTS pickup")
+                        self.voice_pipeline._current_mic.stop()
+                        self.voice_pipeline._current_mic = None
         except Exception as e:
             logger.warning(f"Failed to stop STT session: {e}")
 
     def _handle_unknown_intent(self, transcript: str):
-        """Handle unknown/unrecognized intent with audio feedback"""
-        logger.info(f"Handling unknown intent for transcript: '{transcript}'")
+        """Handle unknown/unrecognized intent by prompting user to repeat and looping back"""
+        logger.info(f"Handling unknown intent for transcript: '{transcript}' - prompting to repeat")
         
-        # Stop any ongoing STT session
-        self._stop_stt_session()
-        
-        # Load user-specific config
+        # Load user-specific config for prompt
         from src.utils.config_resolver import get_language_config
         language_config = get_language_config(self.user_id)
         wakeword_config = language_config.get("wakeword_responses", {})
-        use_audio_files = self.global_config["wakeword"].get("use_audio_files", False)
+        prompts = wakeword_config.get("prompts", {})
         
-        # Play prompt repeat audio if enabled
-        if use_audio_files:
-            prompt_repeat_path = self.backend_dir / language_config["audio_paths"]["prompt_repeat_path"]
-            if prompt_repeat_path.exists():
-                self._play_audio_blocking(prompt_repeat_path)
+        # Get prompt to ask user to repeat
+        repeat_prompt = prompts.get("unknown_intent", "I didn't quite catch that. Can you repeat that?")
         
-        # TTS prompt from config
-        try:
-            prompts = wakeword_config.get("prompts", {})
-            unknown_prompt = prompts.get("unknown_intent", "I didn't quite catch that. Could you please repeat?")
-        except Exception as e:
-            logger.warning(f"Failed to load unknown intent prompt from config: {e}")
-            unknown_prompt = "I didn't quite catch that. Could you please repeat?"
+        # Speak the prompt (this will mute mic during TTS)
+        self._speak(repeat_prompt)
         
-        self._speak(unknown_prompt)
-        
-        # Reset state and restart wakeword detection (clean restart)
-        with self._lock:
-            self.state = SystemState.LISTENING
-        
-        logger.info("Restarting wakeword detection after unknown intent")
+        # After speaking, restart wakeword detection to listen again
+        logger.info("Restarting wakeword detection to listen for command again")
         self._restart_wakeword_detection()
 
     def _handle_activity_unavailable(self, activity_name: str):
@@ -673,6 +729,10 @@ class WellBotOrchestrator:
                     logger.error("❌ Journal activity is None - cannot run")
                     return
                 
+                # Pass log_id to activity for completion tracking
+                if hasattr(self.journal_activity, 'set_activity_log_id'):
+                    self.journal_activity.set_activity_log_id(self._current_activity_log_id)
+                
                 success = self.journal_activity.run()
                 if success:
                     logger.info("✅ Journal activity completed successfully")
@@ -697,6 +757,9 @@ class WellBotOrchestrator:
                             
                     except Exception as e:
                         logger.warning(f"Error during activity cleanup/reinit: {e}")
+                
+                # Clear log ID
+                self._current_activity_log_id = None
                 
                 # When activity ends, restart wake word detection
                 self._restart_wakeword_detection()
@@ -738,6 +801,11 @@ class WellBotOrchestrator:
                 if self.spiritual_quote_activity is None:
                     logger.error("❌ Spiritual Quote activity is None - cannot run")
                     return
+                
+                # Pass log_id to activity for completion tracking
+                if hasattr(self.spiritual_quote_activity, 'set_activity_log_id'):
+                    self.spiritual_quote_activity.set_activity_log_id(self._current_activity_log_id)
+                
                 ok = self.spiritual_quote_activity.run()
                 if ok:
                     logger.info("✅ Spiritual Quote activity completed")
@@ -746,6 +814,9 @@ class WellBotOrchestrator:
             except Exception as e:
                 logger.error(f"Error in Spiritual Quote activity: {e}", exc_info=True)
             finally:
+                # Clear log ID
+                self._current_activity_log_id = None
+                
                 # Re-initialize for next run
                 try:
                     self.spiritual_quote_activity = SpiritualQuoteActivity(backend_dir=self.backend_dir, user_id=self.user_id)
@@ -792,6 +863,11 @@ class WellBotOrchestrator:
                 if self.gratitude_activity is None:
                     logger.error("❌ Gratitude activity is None - cannot run")
                     return
+                
+                # Pass log_id to activity for completion tracking
+                if hasattr(self.gratitude_activity, 'set_activity_log_id'):
+                    self.gratitude_activity.set_activity_log_id(self._current_activity_log_id)
+                
                 ok = self.gratitude_activity.run()
                 if ok:
                     logger.info("✅ Gratitude activity completed")
@@ -800,6 +876,9 @@ class WellBotOrchestrator:
             except Exception as e:
                 logger.error(f"Error in Gratitude activity: {e}", exc_info=True)
             finally:
+                # Clear log ID
+                self._current_activity_log_id = None
+                
                 # Re-initialize for next run
                 try:
                     self.gratitude_activity = GratitudeActivity(backend_dir=self.backend_dir, user_id=self.user_id)
@@ -846,6 +925,11 @@ class WellBotOrchestrator:
                 if self.meditation_activity is None:
                     logger.error("❌ Meditation activity is None - cannot run")
                     return
+                
+                # Pass log_id to activity for completion tracking
+                if hasattr(self.meditation_activity, 'set_activity_log_id'):
+                    self.meditation_activity.set_activity_log_id(self._current_activity_log_id)
+                
                 ok = self.meditation_activity.run()
                 if ok:
                     logger.info("✅ Meditation activity completed")
@@ -854,6 +938,9 @@ class WellBotOrchestrator:
             except Exception as e:
                 logger.error(f"Error in Meditation activity: {e}", exc_info=True)
             finally:
+                # Clear log ID
+                self._current_activity_log_id = None
+                
                 # Re-initialize for next run
                 try:
                     self.meditation_activity = MeditationActivity(backend_dir=self.backend_dir, user_id=self.user_id)
@@ -861,6 +948,142 @@ class WellBotOrchestrator:
                 except Exception:
                     pass
                 # Restart wakeword
+                self._restart_wakeword_detection()
+
+        self._activity_thread = threading.Thread(target=run_activity, daemon=True)
+        self._activity_thread.start()
+
+    def _start_activity_suggestion_activity(self):
+        """Start the activity suggestion activity thread."""
+        logger.info("💡 Starting Activity Suggestion activity…")
+        
+        if self.activity_suggestion_activity is None:
+            logger.error("❌ Activity Suggestion activity is None - cannot start")
+            return
+        
+        with self._lock:
+            self.state = SystemState.ACTIVITY_ACTIVE
+            self.current_activity = "activity_suggestion"
+
+        # Stop wake word pipeline first and wait for STT to fully complete
+        if self.voice_pipeline:
+            logger.info("🔇 Pausing wake word pipeline before Activity Suggestion…")
+            try:
+                # Stop the pipeline (this will wait for STT thread)
+                self.voice_pipeline.stop()
+                
+                # Wait for STT teardown to ensure mic is fully released
+                logger.info("⏳ Waiting for STT teardown (mic/device release)…")
+                ok = self._wait_for_stt_teardown(timeout_s=3.0)
+                if not ok:
+                    logger.warning("⚠️ STT teardown wait timed out")
+                
+                # Add guard delay for Windows audio device release
+                logger.info("⏱️ Adding guard delay for Windows audio device release...")
+                time.sleep(0.2)
+                
+                logger.info("✅ Wake word pipeline fully stopped")
+            except Exception as e:
+                logger.warning(f"Ignoring error while stopping voice pipeline: {e}")
+
+        def run_activity():
+            try:
+                if self.activity_suggestion_activity is None:
+                    logger.error("❌ Activity Suggestion activity is None - cannot run")
+                    return
+                
+                success = self.activity_suggestion_activity.run()
+                
+                # Store selected activity and context before cleanup
+                selected_activity = None
+                conversation_context = []
+                if self.activity_suggestion_activity:
+                    selected_activity = self.activity_suggestion_activity.get_selected_activity()
+                    conversation_context = self.activity_suggestion_activity.get_conversation_context()
+                
+                if success:
+                    logger.info("✅ Activity Suggestion activity completed successfully")
+                    
+                    # Check if timeout occurred (special sentinel value)
+                    if selected_activity == "__timeout__":
+                        logger.info("Timeout occurred - skipping routing, will return to wakeword")
+                        # Don't route anywhere, just let finally block restart wakeword
+                        return
+                    
+                    if selected_activity:
+                        # Route to selected activity
+                        logger.info(f"🎯 Routing to selected activity: {selected_activity}")
+                        # Use transcript from context if available, otherwise empty
+                        transcript = ""
+                        if conversation_context:
+                            # Get last user message
+                            for msg in reversed(conversation_context):
+                                if msg.get("role") == "user":
+                                    transcript = msg.get("content", "")
+                                    break
+                        
+                        # Cleanup before routing (routing will handle state)
+                        if self.activity_suggestion_activity:
+                            try:
+                                self.activity_suggestion_activity.cleanup()
+                                self.activity_suggestion_activity.reinitialize()
+                            except Exception as e:
+                                logger.warning(f"Error during cleanup before routing: {e}")
+                        
+                        # Route to the selected activity (this will handle state management)
+                        self._route_to_activity(selected_activity, transcript)
+                        return  # Don't restart wakeword - routing handles it
+                    else:
+                        # No match - route to smalltalk with context
+                        logger.info("No activity selected - routing to smalltalk with context")
+                        if conversation_context and self.smalltalk_activity:
+                            # Seed smalltalk with conversation context
+                            context_text = "\n".join([
+                                f"{msg.get('role', 'unknown')}: {msg.get('content', '')}"
+                                for msg in conversation_context
+                                if msg.get("role") in ["user", "assistant"]
+                            ])
+                            seed_prompt = f"Continue the conversation from activity suggestion. Previous context:\n{context_text}"
+                            self.smalltalk_activity.add_system_message(seed_prompt)
+                        
+                        # Cleanup before routing
+                        if self.activity_suggestion_activity:
+                            try:
+                                self.activity_suggestion_activity.cleanup()
+                                self.activity_suggestion_activity.reinitialize()
+                            except Exception as e:
+                                logger.warning(f"Error during cleanup before routing: {e}")
+                        
+                        # Route to smalltalk (this will handle state management)
+                        self._route_to_activity("smalltalk", "")
+                        return  # Don't restart wakeword - routing handles it
+                else:
+                    logger.error("❌ Activity Suggestion activity ended with failure")
+            except Exception as e:
+                logger.error(f"Error in Activity Suggestion activity: {e}", exc_info=True)
+            finally:
+                # Cleanup activity resources (only if we didn't route to another activity)
+                logger.info("🧹 Cleaning up Activity Suggestion activity resources...")
+                if self.activity_suggestion_activity:
+                    try:
+                        self.activity_suggestion_activity.cleanup()
+                        logger.info("✅ Activity Suggestion activity cleanup completed")
+                        
+                        # Re-initialize for next run
+                        logger.info("🔄 Re-initializing Activity Suggestion activity for next run...")
+                        if not self.activity_suggestion_activity.reinitialize():
+                            logger.error("❌ Failed to re-initialize Activity Suggestion activity")
+                        else:
+                            logger.info("✅ Activity Suggestion activity re-initialized successfully")
+                            
+                    except Exception as e:
+                        logger.warning(f"Error during activity cleanup/reinit: {e}")
+                
+                # Reset state and restart wakeword detection
+                with self._lock:
+                    self.state = SystemState.LISTENING
+                
+                logger.info("🔄 Restarting wake word detection after activity suggestion completion")
                 self._restart_wakeword_detection()
 
         self._activity_thread = threading.Thread(target=run_activity, daemon=True)
@@ -918,6 +1141,9 @@ class WellBotOrchestrator:
         with self._lock:
             self.state = SystemState.LISTENING
             self.current_activity = None
+        
+        # Start intervention poller when returning to LISTENING state
+        self._start_intervention_poller()
             
         try:
             self.voice_pipeline.start()
@@ -942,10 +1168,33 @@ class WellBotOrchestrator:
             return False
 
         try:
+            # Initialize intervention polling service (but don't start yet - will start when entering LISTENING state)
+            if self.global_config:
+                try:
+                    record_file_path = self.backend_dir / "config" / "intervention_record.json"
+                    # Get cloud service URL from environment (CLOUD_SERVICE_URL) or config
+                    import os
+                    from dotenv import load_dotenv
+                    load_dotenv()
+                    service_url = os.getenv("CLOUD_SERVICE_URL")
+                    
+                    self.intervention_poller = InterventionPoller(
+                        user_id=self.user_id,
+                        record_file_path=record_file_path,
+                        poll_interval_minutes=5,
+                        service_url=service_url
+                    )
+                    logger.info("✓ Intervention polling service initialized (will start when listening)")
+                except Exception as e:
+                    logger.warning(f"Failed to initialize intervention polling service: {e}")
+                    logger.warning("Continuing without intervention polling...")
+            
             if self.voice_pipeline:
                 self.voice_pipeline.start()
             with self._lock:
                 self.state = SystemState.LISTENING
+            # Start poller when entering LISTENING state
+            self._start_intervention_poller()
             logger.info("🎤 Wake word detection started – system ready")
             logger.info("Say the wake word to activate the system")
             return True
@@ -959,6 +1208,9 @@ class WellBotOrchestrator:
 
         with self._lock:
             self.state = SystemState.SHUTTING_DOWN
+
+        # Stop intervention polling service
+        self._stop_intervention_poller()
 
         # Stop activity if active
         if self.current_activity == "smalltalk" and self.smalltalk_activity:
@@ -994,6 +1246,27 @@ class WellBotOrchestrator:
             self.tts_service = None
 
         logger.info("✅ Well-Bot Orchestrator stopped")
+    
+    def _start_intervention_poller(self):
+        """Start the intervention polling service if not already running."""
+        if self.intervention_poller:
+            try:
+                # Check if already running by checking internal state
+                # We'll use a simple approach: try to start (start() checks if already running)
+                self.intervention_poller.start()
+                logger.debug("Intervention poller started/resumed")
+            except Exception as e:
+                logger.warning(f"Failed to start intervention poller: {e}")
+    
+    def _stop_intervention_poller(self):
+        """Stop the intervention polling service."""
+        if self.intervention_poller:
+            logger.info("Stopping intervention polling service…")
+            try:
+                self.intervention_poller.stop()
+                logger.info("✓ Intervention polling service stopped")
+            except Exception as e:
+                logger.warning(f"Error stopping intervention polling service: {e}")
 
     def is_active(self) -> bool:
         """Check if the orchestrator is still active (not shutting down)."""

@@ -63,6 +63,7 @@ class JournalActivity:
         self.state = "INIT"
         self._active = False
         self._initialized = False
+        self._activity_public_id: Optional[str] = None  # Track public_id for duration tracking (optional)
         
         # Paragraph buffering
         self.buffers: List[str] = []
@@ -166,6 +167,10 @@ class JournalActivity:
             traceback.print_exc()
             return False
     
+    def set_activity_log_id(self, public_id: Optional[str]):
+        """Set the activity public_id for duration tracking (optional)."""
+        self._activity_public_id = public_id
+    
     def start(self):
         """Start the journal session"""
         if not self._initialized:
@@ -175,6 +180,7 @@ class JournalActivity:
         self._active = True
         logger.info("Starting journal session...")
         
+        completed = False
         try:
             # State: PROMPT_START
             self._prompt_start()
@@ -185,7 +191,8 @@ class JournalActivity:
             # Auto-save if we have content (normal completion)
             if not self._termination_detected and self._has_content():
                 self.state = "SAVING"
-                self._save()
+                if self._save():
+                    completed = True
             
             self.state = "DONE"
             logger.info("Journal session completed successfully")
@@ -198,24 +205,38 @@ class JournalActivity:
             if has_content:
                 logger.info("Content validated, proceeding to save...")
                 self.state = "SAVING"
-                self._save()
+                if self._save():
+                    completed = True
             else:
                 logger.warning("No content to save (below word threshold or empty)")
+                # Speak message that nothing was recorded
+                no_content_msg = self.config.get("prompts", {}).get("no_content", "Nothing was recorded, ending journal session now.")
+                self._speak(no_content_msg)
+                completed = False
         except KeyboardInterrupt:
             logger.info("Journal session interrupted by user")
             if self._has_content():
                 self.state = "SAVING"
-                self._save()
+                if self._save():
+                    completed = True
+            else:
+                completed = False
         except Exception as e:
             logger.error(f"Error during journal session: {e}")
             import traceback
             traceback.print_exc()
+            completed = False
         finally:
             # If terminated by timeout, save before cleanup (only if not already saved)
             if self._termination_detected and not self._saved and self._has_content():
                 logger.info("Saving accumulated content after timeout termination")
                 self.state = "SAVING"
-                self._save()
+                if self._save():
+                    completed = True
+            
+            # Note: Completion tracking removed in new schema
+            # Duration can be tracked via log_intervention_duration() if needed
+            
             self._cleanup()
     
     def _prompt_start(self):
@@ -379,12 +400,12 @@ class JournalActivity:
             logger.debug(f"_has_content (non-Chinese): {word_count} words, threshold: {threshold}")
             return word_count >= threshold
     
-    def _save(self):
+    def _save(self) -> bool:
         """Save journal entry to database"""
         # Prevent duplicate saves
         if self._saved:
             logger.info("Journal already saved, skipping duplicate save")
-            return
+            return True
         
         logger.info("Saving journal entry to database...")
         logger.info(f"Current state - buffers count: {len(self.buffers)}, current_buffer: '{self.current_buffer[:50]}...'")
@@ -396,7 +417,10 @@ class JournalActivity:
         if not self.buffers:
             logger.warning("No content to save - buffers are empty")
             logger.warning(f"current_buffer was: '{self.current_buffer}'")
-            return
+            # Speak message that nothing was recorded
+            no_content_msg = self.config.get("prompts", {}).get("no_content", "Nothing was recorded, ending journal session now.")
+            self._speak(no_content_msg)
+            return False
         
         body = "\n\n".join(self.buffers).strip()
         
@@ -445,11 +469,13 @@ class JournalActivity:
                 confirmation = f"Journal entry saved with {word_count} words."
             
             self._speak(confirmation)
+            return True
             
         except Exception as e:
             logger.error(f"Failed to save journal entry: {e}")
             import traceback
             traceback.print_exc()
+            return False
     
     def _generate_title(self) -> str:
         """Generate default title from timestamp"""

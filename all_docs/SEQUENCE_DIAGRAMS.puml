@@ -1,0 +1,291 @@
+@startuml Main_System_Flow
+
+title Main System Flow - Wake Word to Activity
+
+actor User
+participant "WellBotOrchestrator" as Orchestrator
+participant "VoicePipeline" as Pipeline
+participant "WakeWordDetector" as WakeWord
+participant "STT Service" as STT
+participant "Intent Recognition" as Intent
+participant "Activity" as Activity
+
+User -> Orchestrator: System starts
+Orchestrator -> Pipeline: start()
+Pipeline -> WakeWord: begin monitoring
+activate WakeWord
+
+User -> WakeWord: Says wake word
+WakeWord -> Orchestrator: _on_wake_detected()
+Orchestrator -> Orchestrator: state = PROCESSING
+Orchestrator -> Pipeline: start STT session
+Pipeline -> STT: streaming_recognize()
+activate STT
+
+User -> STT: Speaks command
+STT -> Intent: process audio frames
+activate Intent
+Intent -> Intent: classify intent
+Intent -> STT: return intent
+deactivate Intent
+
+STT -> Orchestrator: _on_transcript_received(transcript, intent)
+deactivate STT
+deactivate WakeWord
+
+Orchestrator -> Orchestrator: state = ACTIVITY_ACTIVE
+Orchestrator -> Orchestrator: _route_to_activity(intent)
+Orchestrator -> Activity: start activity
+activate Activity
+
+Activity -> Activity: execute activity logic
+Activity -> User: Play response (TTS)
+
+Activity -> Orchestrator: activity completes
+deactivate Activity
+
+Orchestrator -> Orchestrator: _restart_wakeword_detection()
+Orchestrator -> Pipeline: recreate and start
+Pipeline -> WakeWord: begin monitoring
+activate WakeWord
+
+@enduml
+
+' ============================================
+' SEQUENCE DIAGRAM: SmallTalk Activity Flow
+' ============================================
+@startuml SmallTalk_Activity_Flow
+
+title SmallTalk Activity - Conversation Flow
+
+participant "SmallTalkActivity" as Activity
+participant "ConversationAudioManager" as AudioMgr
+participant "MicStream" as Mic
+participant "STT Service" as STT
+participant "UserContextInjector" as Context
+participant "SmallTalkSession" as LLM
+participant "TTS Service" as TTS
+database "Supabase" as DB
+
+Activity -> AudioMgr: capture_user_speech()
+AudioMgr -> Mic: start()
+activate Mic
+AudioMgr -> STT: streaming_recognize()
+activate STT
+
+User -> Mic: Speaks
+Mic -> STT: audio frames
+STT -> STT: transcribe
+STT -> AudioMgr: final transcript
+deactivate STT
+deactivate Mic
+
+AudioMgr -> Activity: return transcript
+
+Activity -> Context: inject_context()
+Context -> DB: fetch persona_facts
+Context -> DB: fetch daily_context
+DB -> Context: return context
+Context -> Activity: return formatted context
+
+Activity -> LLM: generate_response(transcript, context)
+activate LLM
+LLM -> LLM: call DeepSeek API
+LLM -> Activity: stream response
+deactivate LLM
+
+Activity -> AudioMgr: play_tts_response(text)
+AudioMgr -> TTS: synthesize(text)
+activate TTS
+TTS -> AudioMgr: audio chunks
+deactivate TTS
+AudioMgr -> User: play audio
+
+Activity -> Activity: check termination phrase
+alt Termination detected
+    Activity -> Activity: exit loop
+else Continue conversation
+    Activity -> AudioMgr: capture_user_speech() (loop)
+end
+
+@enduml
+
+' ============================================
+' SEQUENCE DIAGRAM: Intervention Service Flow
+' ============================================
+@startuml Intervention_Service_Flow
+
+title Intervention Service - Polling and Triggering
+
+participant "InterventionPoller" as Poller
+database "Supabase DB" as DB
+participant "InterventionClient" as Client
+participant "Cloud Service" as Cloud
+participant "InterventionRecordManager" as RecordMgr
+participant "WellBotOrchestrator" as Orchestrator
+participant "ActivitySuggestionActivity" as Activity
+
+loop Every 5 minutes
+    Poller -> DB: query_emotional_logs_since(last_check)
+    DB -> Poller: return new emotion logs
+    
+    alt New emotion logs found
+        Poller -> Client: request_intervention(emotion_logs)
+        Client -> Cloud: POST /api/intervention/suggest
+        activate Cloud
+        Cloud -> Cloud: analyze emotions
+        Cloud -> Cloud: generate suggestions
+        Cloud -> Client: return decision + suggestions
+        deactivate Cloud
+        Client -> Poller: return response
+        
+        Poller -> RecordMgr: save_record(decision, suggestions)
+        RecordMgr -> RecordMgr: write to intervention_record.json
+    end
+end
+
+User -> Orchestrator: Says wake word
+Orchestrator -> Orchestrator: _on_wake_detected()
+Orchestrator -> Orchestrator: _on_transcript_received()
+Orchestrator -> RecordMgr: load_record()
+RecordMgr -> Orchestrator: return record
+
+alt trigger_intervention == true
+    Orchestrator -> Activity: start ActivitySuggestionActivity
+    activate Activity
+    Activity -> Activity: suggest activity based on intervention
+    Activity -> User: present suggestion
+    Activity -> Orchestrator: route to selected activity
+    deactivate Activity
+else Normal routing
+    Orchestrator -> Orchestrator: route to normal activity
+end
+
+@enduml
+
+' ============================================
+' COMPONENT DIAGRAM: Configuration System
+' ============================================
+@startuml Configuration_System
+
+title Configuration System Architecture
+
+package "Configuration Files" {
+    file "global.json" as GlobalConfig
+    file "en.json" as ENConfig
+    file "cn.json" as CNConfig
+    file "bm.json" as BMConfig
+    file ".env" as EnvFile
+}
+
+[ConfigLoader] as Loader
+note right of Loader
+  **Methods:**
+  - load_global_config()
+  - load_language_config(lang)
+end note
+
+[ConfigResolver] as Resolver
+note right of Resolver
+  **Methods:**
+  - resolve_language(user_id)
+  - get_global_config_for_user(user_id)
+  - get_language_config(user_id)
+  
+  **Attributes:**
+  - _language_cache
+  - _config_cache
+end note
+
+database "Supabase" as DB {
+    [users table] as UsersTable
+    note right of UsersTable
+      + language
+    end note
+}
+
+[WellBotOrchestrator] as Orchestrator
+[Activities] as Activities
+[VoicePipeline] as Pipeline
+
+Loader --> GlobalConfig : reads
+Loader --> ENConfig : reads
+Loader --> CNConfig : reads
+Loader --> BMConfig : reads
+Loader --> EnvFile : reads
+
+Resolver --> Loader : uses
+Resolver --> DB : queries user language
+
+Orchestrator --> Resolver : gets config
+Activities --> Resolver : gets config
+Pipeline --> Resolver : gets config
+
+note bottom of Resolver
+  **Caching:**
+  - Language cache (5 min TTL)
+  - Config cache (in-memory)
+end note
+
+@enduml
+
+' ============================================
+' DEPLOYMENT DIAGRAM: System Deployment
+' ============================================
+@startuml Deployment_Diagram
+
+title Well-Bot Edge Application - Deployment View
+
+node "Edge Device" as EdgeDevice {
+    [Well-Bot Edge App] as EdgeApp
+    [Orchestrator] as Orchestrator
+    [Activities] as Activities
+    [Components] as Components
+    database "intervention_record.json" as LocalFile
+    folder "config/" as ConfigFolder
+    folder "assets/" as AssetsFolder
+}
+
+cloud "Google Cloud Platform" as GCP {
+    [Speech-to-Text API] as GoogleSTT
+    [Text-to-Speech API] as GoogleTTS
+}
+
+cloud "Picovoice" as PicovoiceCloud {
+    [Porcupine] as Porcupine
+    [Rhino] as Rhino
+}
+
+cloud "DeepSeek" as DeepSeekCloud {
+    [DeepSeek API] as DeepSeek
+}
+
+cloud "Supabase Cloud" as SupabaseCloud {
+    database "PostgreSQL Database" as SupabaseDB
+}
+
+cloud "Cloud Run" as CloudRun {
+    [Intervention Service] as CloudService
+}
+
+EdgeApp --> GoogleSTT : HTTPS
+EdgeApp --> GoogleTTS : HTTPS
+EdgeApp --> Porcupine : SDK
+EdgeApp --> Rhino : SDK
+EdgeApp --> DeepSeek : HTTPS
+EdgeApp --> SupabaseDB : HTTPS
+EdgeApp --> CloudService : HTTPS
+EdgeApp --> LocalFile : file I/O
+EdgeApp --> ConfigFolder : reads
+EdgeApp --> AssetsFolder : reads
+
+note right of EdgeDevice
+  **Local Resources:**
+  - Audio files (assets/)
+  - Config files (config/)
+  - Wake word model (.ppn)
+  - Intent context (.rhn)
+end note
+
+@enduml
+

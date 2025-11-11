@@ -54,6 +54,7 @@ class SpiritualQuoteActivity:
         self.audio_paths = None
         self._initialized = False
         self._active = False
+        self._activity_public_id: Optional[str] = None  # Track public_id for duration tracking (optional)
 
     def initialize(self) -> bool:
         try:
@@ -103,11 +104,16 @@ class SpiritualQuoteActivity:
         pcm = self.tts.stream_synthesize(gen())
         self.audio_manager.play_tts_stream(pcm)
 
+    def set_activity_log_id(self, public_id: Optional[str]):
+        """Set the activity public_id for duration tracking (optional)."""
+        self._activity_public_id = public_id
+
     def run(self) -> bool:
         if not self._initialized:
             logger.error("SpiritualQuote activity not initialized")
             return False
 
+        completed = False
         try:
             self._active = True
             # 1) Fetch religion and quote
@@ -116,6 +122,7 @@ class SpiritualQuoteActivity:
             if not quote:
                 logger.info("No quote available; informing user")
                 self._speak("I'm sorry, I don't have a quote for you right now.")
+                completed = False
                 return True
 
             # 2) Speak intro and quote (localized)
@@ -126,6 +133,7 @@ class SpiritualQuoteActivity:
 
             # 3) Mark seen
             mark_quote_seen(self.user_id, quote["id"])
+            completed = True  # Quote was successfully delivered
 
             # 4) Handoff to SmallTalk with seeded context (localized, from config)
             seed_tmpl = quote_cfg.get(
@@ -148,8 +156,12 @@ class SpiritualQuoteActivity:
             return ok
         except Exception as e:
             logger.error(f"SpiritualQuote activity error: {e}", exc_info=True)
+            completed = False
             return False
         finally:
+            # Note: Completion tracking removed in new schema
+            # Duration can be tracked via log_intervention_duration() if needed
+            
             self._active = False
 
     def cleanup(self):

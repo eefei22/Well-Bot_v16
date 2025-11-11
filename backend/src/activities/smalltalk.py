@@ -174,6 +174,27 @@ class SmallTalkActivity:
         if self.llm_pipeline:
             self.llm_pipeline.messages.append({"role": "system", "content": content})
     
+    def _should_notify_context_processor(self) -> bool:
+        """
+        Check if context processor should be notified based on turn count.
+        
+        Returns:
+            True if turn count >= 4, False otherwise
+        """
+        if not self.session_manager:
+            logger.warning("Session manager not available, cannot check turn count")
+            return False
+        
+        turn_count = self.session_manager.get_turn_count()
+        should_notify = turn_count >= 4
+        
+        if should_notify:
+            logger.info(f"Turn count ({turn_count}) >= 4, context processor will be notified")
+        else:
+            logger.info(f"Turn count ({turn_count}) < 4, skipping context processor notification")
+        
+        return should_notify
+    
     def notify_context_processor(self, user_id: str, conversation_id: Optional[str] = None) -> bool:
         """
         Notify the context processor service to reprocess context after a conversation completes.
@@ -461,9 +482,9 @@ class SmallTalkActivity:
             except Exception as e:
                 logger.warning(f"Error during session cleanup: {e}")
         
-        # Notify context processor service (non-blocking)
+        # Notify context processor service (non-blocking) - only if >= 4 turns
         # Use non-daemon thread for cleanup to ensure it completes
-        if self.user_id:
+        if self.user_id and self._should_notify_context_processor():
             try:
                 # Run in a separate thread to avoid blocking cleanup
                 def notify_async():
@@ -484,6 +505,8 @@ class SmallTalkActivity:
             except Exception as e:
                 logger.error(f"Failed to start context processor notification thread: {e}")
                 logger.exception(e)
+        elif self.user_id:
+            logger.info("Skipping context processor notification - turn count < 4")
         
         # Clear config caches (optional - only if you want to clear on each cleanup)
         try:
@@ -660,8 +683,8 @@ class SmallTalkActivity:
                     if self.audio_manager:
                         self.audio_manager.stop()
                     
-                    # Notify context processor service (non-blocking)
-                    if self.user_id:
+                    # Notify context processor service (non-blocking) - only if >= 4 turns
+                    if self.user_id and self._should_notify_context_processor():
                         try:
                             def notify_async():
                                 try:
@@ -678,16 +701,29 @@ class SmallTalkActivity:
                         except Exception as e:
                             logger.error(f"Failed to start context processor notification thread: {e}")
                             logger.exception(e)
+                    elif self.user_id:
+                        logger.info("Skipping context processor notification - turn count < 4")
                     
                     break
                 
                 # Generate and play response
                 logger.info("[Assistant speaking]")
+                # Mute microphone BEFORE LLM streaming starts (LLM streaming happens immediately in _stream_llm_and_tts)
+                with self.audio_manager._mic_lock:
+                    if self.audio_manager._current_mic and self.audio_manager._current_mic.is_running():
+                        self.audio_manager._current_mic.mute()
+                        logger.debug("Microphone muted before LLM/TTS processing")
+                
                 try:
                     response_chunks = self.llm_pipeline._stream_llm_and_tts()
                     self.audio_manager.play_tts_stream(response_chunks)
                 except Exception as e:
                     logger.error(f"Error during LLM/TTS processing: {e}")
+                    # Ensure mic is unmuted even if there's an error
+                    with self.audio_manager._mic_lock:
+                        if self.audio_manager._current_mic and self.audio_manager._current_mic.is_running():
+                            self.audio_manager._current_mic.unmute()
+                            logger.debug("Microphone unmuted after error")
                     continue
                 
                 # Get assistant text and save to database
@@ -697,9 +733,9 @@ class SmallTalkActivity:
                 # Complete turn and reset silence timer
                 if not self.session_manager.complete_turn(user_text, assistant_text):
                     logger.info("Max turns reached, ending session")
-                    # Notify context processor service (non-blocking)
+                    # Notify context processor service (non-blocking) - only if >= 4 turns
                     conversation_id = self.session_manager.get_conversation_id() if self.session_manager else None
-                    if self.user_id:
+                    if self.user_id and self._should_notify_context_processor():
                         try:
                             def notify_async():
                                 try:
@@ -716,6 +752,8 @@ class SmallTalkActivity:
                         except Exception as e:
                             logger.error(f"Failed to start context processor notification thread: {e}")
                             logger.exception(e)
+                    elif self.user_id:
+                        logger.info("Skipping context processor notification - turn count < 4")
                     break
                 
                 self.audio_manager.reset_silence_timer()
@@ -723,9 +761,9 @@ class SmallTalkActivity:
                 # Check if activity was stopped after turn completion
                 if not self._active:
                     logger.info("Activity stopped after turn completion, exiting conversation loop")
-                    # Notify context processor service (non-blocking)
+                    # Notify context processor service (non-blocking) - only if >= 4 turns
                     conversation_id = self.session_manager.get_conversation_id() if self.session_manager else None
-                    if self.user_id:
+                    if self.user_id and self._should_notify_context_processor():
                         try:
                             def notify_async():
                                 try:
@@ -742,6 +780,8 @@ class SmallTalkActivity:
                         except Exception as e:
                             logger.error(f"Failed to start context processor notification thread: {e}")
                             logger.exception(e)
+                    elif self.user_id:
+                        logger.info("Skipping context processor notification - turn count < 4")
                     break
             
             logger.info("✅ Conversation loop completed successfully")
@@ -831,8 +871,8 @@ class SmallTalkActivity:
             if self.audio_manager:
                 self.audio_manager.stop()
             
-            # Notify context processor service (non-blocking)
-            if self.user_id:
+            # Notify context processor service (non-blocking) - only if >= 4 turns
+            if self.user_id and self._should_notify_context_processor():
                 try:
                     def notify_async():
                         try:
@@ -849,6 +889,8 @@ class SmallTalkActivity:
                 except Exception as e:
                     logger.error(f"Failed to start context processor notification thread: {e}")
                     logger.exception(e)
+            elif self.user_id:
+                logger.info("Skipping context processor notification - turn count < 4")
     
     def get_status(self) -> dict:
         """Get current activity status"""

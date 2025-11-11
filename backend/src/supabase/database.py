@@ -5,7 +5,7 @@ import logging
 import random
 import json
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +14,60 @@ logger = logging.getLogger(__name__)
 # DEV_USER_ID = "8517c97f-66ef-4955-86ed-531013d33d3e"
 
 sb = get_supabase(service=True)
+
+# ---------- User helper functions ----------
+
+def normalize_gender(gender: str) -> str:
+    """
+    Normalize gender value to match new schema constraints.
+    
+    Args:
+        gender: Gender string (case-insensitive, can be 'male', 'female', 'other')
+    
+    Returns:
+        Normalized gender: 'Male' or 'Female'
+        Defaults to 'Male' for 'other' or invalid values (with warning)
+    """
+    if not gender:
+        logger.warning("Empty gender value provided, defaulting to 'Male'")
+        return 'Male'
+    
+    gender_lower = gender.strip().lower()
+    
+    if gender_lower == 'male':
+        return 'Male'
+    elif gender_lower == 'female':
+        return 'Female'
+    elif gender_lower == 'other':
+        logger.warning(f"Gender 'other' mapped to 'Male' (schema constraint)")
+        return 'Male'
+    else:
+        logger.warning(f"Invalid gender value '{gender}', defaulting to 'Male'")
+        return 'Male'
+
+
+def get_user_display_name(user_id: str) -> Optional[str]:
+    """
+    Get user's display name: prefer_name if set, otherwise full_name.
+    
+    Args:
+        user_id: User UUID
+    
+    Returns:
+        Display name string or None if user not found
+    """
+    try:
+        user = fetch_user_by_id(user_id)
+        if not user:
+            return None
+        
+        # Prefer prefer_name, fallback to full_name
+        display_name = user.get('prefer_name') or user.get('full_name')
+        return display_name
+    except Exception as e:
+        logger.error(f"Failed to get display name for user {user_id}: {e}")
+        return None
+
 
 def get_user_language(user_id: str) -> Optional[str]:
     """
@@ -372,3 +426,196 @@ def load_user_context_from_local(backend_dir: Optional[Path] = None) -> Optional
     except Exception as e:
         logger.warning(f"Failed to load user context from local file: {e}")
         return None
+
+
+# ---------- Activity Logging helpers ----------
+
+def log_activity_start(
+    user_id: str,
+    activity_type: str,
+    emotional_log_id: Optional[int] = None
+) -> Optional[str]:
+    """
+    Log the start of an intervention/activity.
+    
+    Args:
+        user_id: User ID
+        activity_type: Type of intervention ('journal', 'gratitude', 'todo', 'meditation', 'quote')
+        emotional_log_id: Optional emotional_log ID if intervention was triggered by emotion detection.
+                         None for command-triggered interventions.
+    
+    Returns:
+        Public ID (UUID string) if successful, None if failed.
+        Non-blocking: errors are logged but don't raise exceptions.
+    """
+    try:
+        # Validate enum values match schema constraints
+        valid_activity_types = ['journal', 'gratitude', 'todo', 'meditation', 'quote']
+        
+        if activity_type not in valid_activity_types:
+            logger.error(f"Invalid activity_type: {activity_type}. Must be one of {valid_activity_types}")
+            return None
+        
+        # Get current timestamp (timezone-naive for intervention_log)
+        current_timestamp = datetime.now().replace(tzinfo=None)
+        
+        payload = {
+            "user_id": user_id,
+            "intervention_type": activity_type,
+            "timestamp": current_timestamp.isoformat(),
+            "emotional_log_id": emotional_log_id  # None for command-triggered interventions
+        }
+        
+        res = sb.table("intervention_log").insert(payload).execute()
+        public_id = res.data[0]["public_id"]
+        logger.info(f"Intervention log started: {public_id} for user {user_id}, intervention_type={activity_type}, emotional_log_id={emotional_log_id}")
+        return public_id
+        
+    except Exception as e:
+        logger.error(f"Failed to log intervention start: {e}", exc_info=True)
+        return None
+
+
+def log_intervention_duration(public_id: str, duration_seconds: Optional[float] = None) -> bool:
+    """
+    Update intervention log with duration.
+    
+    Args:
+        public_id: Public ID (UUID string) from log_activity_start()
+        duration_seconds: Duration in seconds. If None, duration will be calculated from timestamp.
+    
+    Returns:
+        True if successful, False if failed.
+        Non-blocking: errors are logged but don't raise exceptions.
+    """
+    try:
+        if not public_id:
+            logger.warning("log_intervention_duration called with empty public_id")
+            return False
+        
+        update_data = {}
+        
+        if duration_seconds is not None:
+            # Convert seconds to interval format (PostgreSQL interval)
+            update_data["duration"] = f"{duration_seconds} seconds"
+        else:
+            # Calculate duration from timestamp to now
+            # First fetch the log to get timestamp
+            res = sb.table("intervention_log").select("timestamp").eq("public_id", public_id).limit(1).execute()
+            if res.data:
+                log_timestamp = datetime.fromisoformat(res.data[0]["timestamp"].replace('Z', '+00:00'))
+                if log_timestamp.tzinfo:
+                    log_timestamp = log_timestamp.replace(tzinfo=None)
+                now = datetime.now()
+                duration_seconds = (now - log_timestamp).total_seconds()
+                update_data["duration"] = f"{duration_seconds} seconds"
+            else:
+                logger.warning(f"No intervention log found to update: {public_id}")
+                return False
+        
+        res = sb.table("intervention_log").update(update_data).eq("public_id", public_id).execute()
+        
+        if res.data:
+            logger.info(f"Intervention log updated: {public_id}, duration={update_data.get('duration')}")
+            return True
+        else:
+            logger.warning(f"No log record found to update: {public_id}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Failed to log intervention duration: {e}", exc_info=True)
+        return False
+
+
+def query_recent_activity_logs(
+    user_id: str,
+    activity_type: Optional[str] = None,
+    emotional_log_id: Optional[int] = None,
+    limit: int = 100,
+    days_back: int = 30
+) -> List[Dict[str, Any]]:
+    """
+    Query recent intervention logs with filtering options.
+    
+    Args:
+        user_id: User ID to filter logs
+        activity_type: Optional filter by intervention type ('journal', 'gratitude', 'todo', 'meditation', 'quote')
+        emotional_log_id: Optional filter by emotional_log_id (None for command-triggered, int for emotion-triggered)
+        limit: Maximum number of records to return
+        days_back: Number of days to look back from current time
+    
+    Returns:
+        List of log record dictionaries, ordered by timestamp descending.
+        Returns empty list if query fails.
+    """
+    try:
+        # Calculate cutoff timestamp (timezone-naive)
+        cutoff_time = datetime.now().replace(tzinfo=None) - timedelta(days=days_back)
+        
+        # Build query
+        query = (
+            sb.table("intervention_log")
+            .select("*")
+            .eq("user_id", user_id)
+            .gte("timestamp", cutoff_time.isoformat())
+        )
+        
+        # Apply optional filters
+        if activity_type:
+            query = query.eq("intervention_type", activity_type)
+        
+        if emotional_log_id is not None:
+            if emotional_log_id:
+                query = query.eq("emotional_log_id", emotional_log_id)
+            else:
+                # Filter for command-triggered (emotional_log_id is NULL)
+                query = query.is_("emotional_log_id", "null")
+        
+        # Order by timestamp descending and limit
+        query = query.order("timestamp", desc=True).limit(limit)
+        
+        res = query.execute()
+        
+        logger.debug(f"Query returned {len(res.data) if res.data else 0} intervention logs for user {user_id}")
+        return res.data if res.data else []
+        
+    except Exception as e:
+        logger.error(f"Failed to query intervention logs: {e}", exc_info=True)
+        return []
+
+
+def query_emotional_logs_since(user_id: str, since_timestamp: datetime) -> List[Dict[str, Any]]:
+    """
+    Query emotional_log table for entries with timestamp greater than since_timestamp.
+    
+    Args:
+        user_id: User ID to filter logs
+        since_timestamp: Datetime object (timezone-naive). Only entries with timestamp > since_timestamp will be returned
+    
+    Returns:
+        List of emotion log dictionaries, ordered by timestamp ascending.
+        Each entry contains: id, user_id, timestamp, emotion_label, confidence_score, emotional_score
+        Returns empty list if query fails.
+    """
+    try:
+        # Ensure timestamp is timezone-naive for database query
+        if since_timestamp.tzinfo is not None:
+            since_timestamp = since_timestamp.replace(tzinfo=None)
+        
+        # Build query
+        query = (
+            sb.table("emotional_log")
+            .select("id, user_id, timestamp, emotion_label, confidence_score, emotional_score")
+            .eq("user_id", user_id)
+            .gt("timestamp", since_timestamp.isoformat())
+            .order("timestamp", desc=False)  # Ascending order (oldest first)
+        )
+        
+        res = query.execute()
+        
+        logger.debug(f"Query returned {len(res.data) if res.data else 0} emotion logs for user {user_id} since {since_timestamp}")
+        return res.data if res.data else []
+        
+    except Exception as e:
+        logger.error(f"Failed to query emotion logs: {e}", exc_info=True)
+        return []
