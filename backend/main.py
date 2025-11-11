@@ -451,11 +451,12 @@ class WellBotOrchestrator:
             if self._silence_timer:
                 self._silence_timer.cancel()
             
-            nudge_timeout = self.global_config["wakeword"]["nudge_timeout_seconds"]
-            self._silence_timer = threading.Timer(nudge_timeout, self._handle_wakeword_nudge)
+            # Use silence_timeout_seconds for the initial nudge timer
+            silence_timeout = self.global_config["wakeword"]["silence_timeout_seconds"]
+            self._silence_timer = threading.Timer(silence_timeout, self._handle_wakeword_nudge)
             self._silence_timer.daemon = True
             self._silence_timer.start()
-            logger.info(f"Started silence monitoring - nudge in {nudge_timeout}s")
+            logger.info(f"Started silence monitoring - nudge in {silence_timeout}s")
 
     def _handle_wakeword_nudge(self):
         """Handle nudge when user is silent after wake word"""
@@ -487,14 +488,13 @@ class WellBotOrchestrator:
         self._speak(nudge_prompt)
         
         # Start final timeout timer
+        # This timer runs AFTER the nudge, so use nudge_timeout_seconds directly
         with self._silence_lock:
-            silence_timeout = self.global_config["wakeword"]["silence_timeout_seconds"]
             nudge_timeout = self.global_config["wakeword"]["nudge_timeout_seconds"]
-            remaining_time = silence_timeout - nudge_timeout
-            self._silence_timer = threading.Timer(remaining_time, self._handle_wakeword_timeout)
+            self._silence_timer = threading.Timer(nudge_timeout, self._handle_wakeword_timeout)
             self._silence_timer.daemon = True
             self._silence_timer.start()
-            logger.info(f"Started final timeout timer - timeout in {remaining_time}s")
+            logger.info(f"Started final timeout timer - timeout in {nudge_timeout}s")
 
     def _handle_wakeword_timeout(self):
         """Handle final timeout after wake word with no user speech"""
@@ -592,13 +592,15 @@ class WellBotOrchestrator:
             logger.error(f"TTS error: {e}")
 
     def _stop_stt_session(self):
-        """Stop the current STT session to mute microphone"""
+        """Stop the current STT session and microphone to prevent TTS pickup"""
         try:
-            if self.voice_pipeline and hasattr(self.voice_pipeline, '_stt_thread'):
-                # The STT session is running in a separate thread
-                # We can't directly stop it, but we can wait for it to complete
-                # The STT session will timeout naturally after stt_timeout_s
-                logger.debug("STT session will timeout naturally, microphone will be muted")
+            if self.voice_pipeline:
+                # Stop the mic immediately to prevent picking up TTS
+                with self.voice_pipeline._lock:
+                    if self.voice_pipeline._current_mic and self.voice_pipeline._current_mic.is_running():
+                        logger.debug("Stopping mic in STT session to prevent TTS pickup")
+                        self.voice_pipeline._current_mic.stop()
+                        self.voice_pipeline._current_mic = None
         except Exception as e:
             logger.warning(f"Failed to stop STT session: {e}")
 

@@ -12,7 +12,7 @@
   },
   "wakeword": {
     "silence_timeout_seconds": 10,
-    "nudge_timeout_seconds": 15,
+    "nudge_timeout_seconds": 30,
     "stt_timeout_s": 8.0,
     "use_audio_files": false
   },
@@ -44,6 +44,13 @@
   },
   "meditation": {
     "meditation_start_delay_seconds": 3.0,
+    "use_audio_files": false
+  },
+  "activity_suggestion": {
+    "silence_timeout_seconds": 10,
+    "nudge_timeout_seconds": 30,
+    "nudge_pre_delay_ms": 200,
+    "nudge_post_delay_ms": 300,
     "use_audio_files": false
   },
   "context_service_url": "https://user-context-well-bot-520080168829.asia-south1.run.app",

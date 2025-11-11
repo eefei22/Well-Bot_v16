@@ -115,6 +115,7 @@ class VoicePipeline:
         self.stt_active = False
         self._lock = threading.Lock()
         self._stt_thread: Optional[threading.Thread] = None
+        self._current_mic: Optional[MicStream] = None  # Track current mic for muting
 
         self.stt_timeout_s = stt_timeout_s  # how many seconds to wait for speech
 
@@ -166,9 +167,12 @@ class VoicePipeline:
             logger.warning("TTS service not available")
             return
         
-        # Note: We can't directly mute the mic here because it's in a separate thread
-        # The mic will be stopped when the STT session ends, which happens before TTS
-        # For wakeword responses, the mic is already stopped by the time we speak
+        # Mute the mic before speaking to prevent TTS feedback
+        with self._lock:
+            if self._current_mic and self._current_mic.is_running():
+                logger.debug("Muting microphone before TTS")
+                self._current_mic.mute()
+        
         try:
             def text_gen():
                 yield text
@@ -196,6 +200,12 @@ class VoicePipeline:
             logger.info(f"TTS played: {text[:50]}...")
         except Exception as e:
             logger.error(f"TTS error: {e}")
+        finally:
+            # Unmute the mic after speaking (if it's still running)
+            with self._lock:
+                if self._current_mic and self._current_mic.is_running():
+                    logger.debug("Unmuting microphone after TTS")
+                    self._current_mic.unmute()
 
 
     def _on_wake(self):
@@ -262,6 +272,10 @@ class VoicePipeline:
         # Use standard STT parameters (16kHz)
         mic = MicStream(rate=16000, chunk_size=1600)  # 100ms chunks at 16kHz
         
+        # Store mic reference for muting during TTS
+        with self._lock:
+            self._current_mic = mic
+        
         intent_result: Optional[dict] = None
         transcript: Optional[str] = None
         start_time = time.time()
@@ -275,9 +289,11 @@ class VoicePipeline:
                 nonlocal transcript
                 if is_final and text:
                     transcript = text
+                    # Stop mic immediately when we get final transcript
                     mic.stop()
             
-            # Run STT with timeout
+            # Run STT - no timeout check here since silence monitoring handles it
+            # The mic will be stopped by the orchestrator when nudge/timeout is triggered
             try:
                 self.stt_service.stream_recognize(
                     mic.generator(),
@@ -288,9 +304,9 @@ class VoicePipeline:
             except Exception as e:
                 logger.error(f"STT error during keyword matching: {e}")
             
-            # Check timeout
-            if time.time() - start_time > self.stt_timeout_s:
-                logger.warning(f"No speech detected within {self.stt_timeout_s:.1f}s → timing out")
+            # Note: We don't check STT timeout here anymore
+            # Silence monitoring in the orchestrator handles nudge/timeout timing
+            # The mic will be stopped by the orchestrator before TTS plays
             
             # Match transcript against keywords
             if transcript:
@@ -306,6 +322,11 @@ class VoicePipeline:
                 intent_result = {"intent": "unknown", "confidence": 0.0}
                 logger.info("[Pipeline] No intent understood, defaulting to unknown")
             
+            # Ensure mic is stopped before invoking callback (which may trigger TTS)
+            if mic.is_running():
+                logger.debug("Stopping mic before invoking callback")
+                mic.stop()
+            
             # Invoke callback with transcript and intent result
             if self.on_final_transcript:
                 try:
@@ -316,8 +337,11 @@ class VoicePipeline:
         except Exception as e:
             logger.error(f"Error during keyword intent recognition: {e}", exc_info=True)
         finally:
-            mic.stop()
+            # Ensure mic is stopped and cleared
+            if mic.is_running():
+                mic.stop()
             with self._lock:
+                self._current_mic = None
                 self.stt_active = False
             logger.info("Keyword intent recognition session ended, returning to wakeword detection")
 
@@ -347,6 +371,13 @@ class VoicePipeline:
             # Stop wakeword first
             self.wakeword.stop()
             
+            # Stop mic immediately to prevent picking up any TTS from activities
+            with self._lock:
+                if self._current_mic and self._current_mic.is_running():
+                    logger.debug("Stopping mic during pipeline stop")
+                    self._current_mic.stop()
+                    self._current_mic = None
+            
             # Wait for STT thread to complete if it's running
             with self._lock:
                 if self.stt_active and self._stt_thread and self._stt_thread.is_alive():
@@ -357,6 +388,16 @@ class VoicePipeline:
                 self._stt_thread.join(timeout=2.0)
                 if self._stt_thread.is_alive():
                     logger.warning("STT thread did not complete within timeout, continuing anyway")
+            
+            # Ensure mic is cleared
+            with self._lock:
+                if self._current_mic:
+                    try:
+                        if self._current_mic.is_running():
+                            self._current_mic.stop()
+                    except:
+                        pass
+                    self._current_mic = None
             
             self.active = False
             logger.info("Voice pipeline stopped")

@@ -92,6 +92,7 @@ class ActivitySuggestionActivity:
             self.activity_suggestion_config = self.language_config.get("activity_suggestion", {})
             self.audio_paths = self.language_config.get("audio_paths", {})
             self.global_smalltalk_config = self.global_config.get("smalltalk", {})
+            self.global_activity_suggestion_config = self.global_config.get("activity_suggestion", {})
             
             logger.info(f"Configs loaded - Global section keys: {list(self.global_config.keys())}")
             logger.info(f"Language config section keys: {list(self.language_config.keys())}")
@@ -118,12 +119,14 @@ class ActivitySuggestionActivity:
                 return MicStream()
             
             # Prepare audio configuration for ConversationAudioManager
+            # Use activity_suggestion config section if available, fallback to smalltalk
+            activity_config = self.global_activity_suggestion_config or self.global_smalltalk_config
             audio_config = {
                 "backend_dir": str(self.backend_dir),
-                "silence_timeout_seconds": self.global_smalltalk_config.get("silence_timeout_seconds", 30),
-                "nudge_timeout_seconds": self.global_smalltalk_config.get("nudge_timeout_seconds", 15),
-                "nudge_pre_delay_ms": self.global_smalltalk_config.get("nudge_pre_delay_ms", 200),
-                "nudge_post_delay_ms": self.global_smalltalk_config.get("nudge_post_delay_ms", 300),
+                "silence_timeout_seconds": activity_config.get("silence_timeout_seconds", 30),
+                "nudge_timeout_seconds": activity_config.get("nudge_timeout_seconds", 15),
+                "nudge_pre_delay_ms": activity_config.get("nudge_pre_delay_ms", 200),
+                "nudge_post_delay_ms": activity_config.get("nudge_post_delay_ms", 300),
                 "nudge_audio_path": self.audio_paths.get("nudge_audio_path"),
                 "termination_audio_path": self.audio_paths.get("termination_audio_path"),
                 "end_audio_path": self.audio_paths.get("end_audio_path"),
