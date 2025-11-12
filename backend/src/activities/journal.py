@@ -228,11 +228,18 @@ class JournalActivity:
             completed = False
         finally:
             # If terminated by timeout, save before cleanup (only if not already saved)
-            if self._termination_detected and not self._saved and self._has_content():
-                logger.info("Saving accumulated content after timeout termination")
-                self.state = "SAVING"
-                if self._save():
-                    completed = True
+            if self._termination_detected and not self._saved:
+                if self._has_content():
+                    logger.info("Saving accumulated content after timeout termination")
+                    self.state = "SAVING"
+                    if self._save():
+                        completed = True
+                else:
+                    logger.warning("No content to save after timeout (below word threshold or empty)")
+                    # Speak message that nothing was recorded
+                    no_content_msg = self.config.get("prompts", {}).get("no_content", "Nothing was recorded, ending journal session now.")
+                    self._speak(no_content_msg)
+                    completed = False
             
             # Note: Completion tracking removed in new schema
             # Duration can be tracked via log_intervention_duration() if needed

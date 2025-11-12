@@ -35,6 +35,7 @@ from src.components.stt import GoogleSTTService
 from src.components.keyword_intent_matcher import KeywordIntentMatcher
 from src.utils.config_loader import PORCUPINE_ACCESS_KEY
 from src.utils.config_resolver import get_global_config_for_user, get_language_config
+from src.utils.intervention_record import InterventionRecordManager
 from src.supabase.auth import get_current_user_id
 
 logger = logging.getLogger(__name__)
@@ -96,6 +97,7 @@ class IdleModeActivity:
         
         # Intent detection flag (to exit run() after intent detected)
         self._intent_detected = threading.Event()
+        self._timeout_occurred = threading.Event()  # Flag for timeout (no intent)
         self._detected_transcript: Optional[str] = None
         self._detected_intent: Optional[Dict[str, Any]] = None
         
@@ -254,8 +256,8 @@ class IdleModeActivity:
             # Wait for intent to be detected or activity to be stopped
             logger.info("Waiting for wake word detection and intent recognition...")
             
-            # Wait for intent detection event (with timeout check for activity state)
-            while self._active and not self._intent_detected.is_set():
+            # Wait for intent detection event or timeout (with timeout check for activity state)
+            while self._active and not self._intent_detected.is_set() and not self._timeout_occurred.is_set():
                 time.sleep(0.1)  # Small sleep to avoid busy waiting
             
             # Check if intent was detected
@@ -264,6 +266,12 @@ class IdleModeActivity:
                 # Stop the activity
                 self.stop()
                 return True
+            elif self._timeout_occurred.is_set():
+                # Timeout occurred - no intent detected, just clean up and restart
+                logger.info("⏰ Timeout occurred - no intent detected, cleaning up to restart idle mode")
+                # Stop the activity
+                self.stop()
+                return False
             else:
                 # Activity was stopped externally
                 logger.info("Idle mode stopped externally")
@@ -299,6 +307,7 @@ class IdleModeActivity:
         self._active = False
         self._initialized = False
         self._intent_detected.clear()
+        self._timeout_occurred.clear()
         self._detected_transcript = None
         self._detected_intent = None
         
@@ -486,38 +495,65 @@ class IdleModeActivity:
             except Exception as e:
                 logger.error(f"STT error during keyword matching: {e}")
             
-            # Match transcript against keywords
-            if transcript:
-                logger.info(f"[IdleMode] Transcript received: '{transcript}'")
-                intent_result = self.intent_matcher.match_intent(transcript)
-                if intent_result:
-                    logger.info(f"[IdleMode] Intent detected: {intent_result.get('intent')}")
-                else:
-                    logger.info("[IdleMode] No intent matched from transcript")
-            
-            # If we didn't get an intent, set unknown
-            if not intent_result:
-                intent_result = {"intent": "unknown", "confidence": 0.0}
-                logger.info("[IdleMode] No intent understood, defaulting to unknown")
-            
-            # Ensure mic is stopped before invoking callback
+            # Ensure mic is stopped
             if mic.is_running():
-                logger.debug("Stopping mic before invoking callback")
+                logger.debug("Stopping mic before processing transcript")
                 mic.stop()
             
-            # Store results and signal intent detection
-            self._detected_transcript = transcript or ""
-            self._detected_intent = intent_result
-            
-            # Invoke callback if provided
-            if self.on_intent_detected:
-                try:
-                    self.on_intent_detected(self._detected_transcript, self._detected_intent)
-                except Exception as e:
-                    logger.error(f"Error invoking intent detected callback: {e}")
-            
-            # Signal that intent was detected (this will cause run() to exit)
-            self._intent_detected.set()
+            # Only proceed with intent recognition if transcript has at least one word
+            if transcript and transcript.strip():
+                # Check if transcript has at least one word (not just whitespace)
+                words = transcript.strip().split()
+                if len(words) > 0:
+                    logger.info(f"[IdleMode] Transcript received: '{transcript}'")
+                    intent_result = self.intent_matcher.match_intent(transcript)
+                    if intent_result:
+                        logger.info(f"[IdleMode] Intent detected: {intent_result.get('intent')}")
+                    else:
+                        logger.info("[IdleMode] No intent matched from transcript")
+                        # If no intent matched, set unknown
+                        intent_result = {"intent": "unknown", "confidence": 0.0}
+                        logger.info("[IdleMode] No intent understood, defaulting to unknown")
+                    
+                    # Store results and signal intent detection
+                    self._detected_transcript = transcript
+                    self._detected_intent = intent_result
+                    
+                    # If intent is unknown, check if we should trigger intervention and speak prompt
+                    if intent_result.get("intent") == "unknown":
+                        try:
+                            record_path = self.backend_dir / "config" / "intervention_record.json"
+                            record_manager = InterventionRecordManager(record_path)
+                            record = record_manager.load_record()
+                            
+                            decision = record.get("latest_decision", {}) if record else {}
+                            trigger_intervention = decision.get("trigger_intervention", False)
+                            
+                            if trigger_intervention:
+                                # Load and speak the unknown intent prompt
+                                activity_suggestion_config = self.language_config.get("activity_suggestion", {})
+                                unknown_intent_prompt = activity_suggestion_config.get(
+                                    "unknown_intent_prompt",
+                                    "I didn't quite catch that, but let me suggest something for you"
+                                )
+                                logger.info(f"Speaking unknown intent prompt: {unknown_intent_prompt}")
+                                self._speak(unknown_intent_prompt)
+                        except Exception as e:
+                            logger.warning(f"Failed to check trigger_intervention or speak prompt: {e}")
+                    
+                    # Invoke callback if provided
+                    if self.on_intent_detected:
+                        try:
+                            self.on_intent_detected(self._detected_transcript, self._detected_intent)
+                        except Exception as e:
+                            logger.error(f"Error invoking intent detected callback: {e}")
+                    
+                    # Signal that intent was detected (this will cause run() to exit)
+                    self._intent_detected.set()
+                else:
+                    logger.info("[IdleMode] Transcript is empty or whitespace only - skipping intent recognition")
+            else:
+                logger.info("[IdleMode] No transcript received - skipping intent recognition")
             
         except Exception as e:
             logger.error(f"Error during keyword intent recognition: {e}", exc_info=True)
@@ -570,6 +606,27 @@ class IdleModeActivity:
         
         self._speak(nudge_prompt)
         
+        # After nudge TTS finishes, restart STT session to continue listening for speech
+        # This replicates the same flow as after wake word detection
+        logger.info("Restarting STT session after nudge to continue listening for speech")
+        
+        # Check if STT thread is still running (it should have been stopped by _stop_stt_session)
+        # If it's still running, wait for it to finish
+        if self._stt_thread and self._stt_thread.is_alive():
+            logger.info("Waiting for previous STT thread to finish...")
+            self._stt_thread.join(timeout=1.0)
+            if self._stt_thread.is_alive():
+                logger.warning("Previous STT thread did not finish within timeout")
+        
+        # Reset stt_active flag
+        with self._lock:
+            self.stt_active = True
+        
+        # Launch new STT-based keyword intent recognition thread
+        logger.info("Launching keyword intent recognition session after nudge")
+        self._stt_thread = threading.Thread(target=self._run_keyword_intent, daemon=True)
+        self._stt_thread.start()
+        
         # Start final timeout timer
         # This timer runs AFTER the nudge, so use nudge_timeout_seconds directly
         with self._silence_lock:
@@ -606,12 +663,10 @@ class IdleModeActivity:
         
         self._speak(timeout_prompt)
         
-        # Signal timeout (this will cause run() to exit and main will restart idle_mode)
-        # Set intent to unknown so main can handle it appropriately
-        self._detected_transcript = ""
-        self._detected_intent = {"intent": "unknown", "confidence": 0.0}
-        self._intent_detected.set()
-        logger.info("Timeout detected - signaling intent detection to exit idle mode")
+        # Signal timeout occurred (no intent detected) - this will cause run() to return False
+        # and main.py will restart idle_mode to return to wakeword listening
+        self._timeout_occurred.set()
+        logger.info("Timeout detected - no intent detected, will restart idle mode")
 
     def _stop_silence_monitoring(self):
         """Stop silence monitoring"""

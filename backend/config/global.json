@@ -12,7 +12,7 @@
   },
   "wakeword": {
     "silence_timeout_seconds": 10,
-    "nudge_timeout_seconds": 30,
+    "nudge_timeout_seconds": 10,
     "stt_timeout_s": 8.0,
     "use_audio_files": false
   },
@@ -48,7 +48,7 @@
   },
   "activity_suggestion": {
     "silence_timeout_seconds": 20,
-    "nudge_timeout_seconds": 40,
+    "nudge_timeout_seconds": 20,
     "nudge_pre_delay_ms": 200,
     "nudge_post_delay_ms": 300,
     "use_audio_files": false

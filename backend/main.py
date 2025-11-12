@@ -740,13 +740,17 @@ class WellBotOrchestrator:
                     logger.error("Idle mode activity is None - cannot start")
                     return
                 
-                # Run the idle mode activity (this will block until intent detected)
+                # Run the idle mode activity (this will block until intent detected or timeout)
                 success = self.idle_mode_activity.run()
                 
                 if success:
                     logger.info("✅ Idle mode completed successfully (intent detected)")
+                    # Intent was detected - routing will be handled by _handle_intent_detected callback
                 else:
-                    logger.warning("⚠️ Idle mode exited without intent detection")
+                    logger.info("⏰ Idle mode exited without intent detection (timeout or stopped)")
+                    # No intent detected (timeout) - restart idle mode to return to wakeword listening
+                    logger.info("🔄 Restarting idle mode after timeout...")
+                    self._restart_idle_mode()
                     
             except Exception as e:
                 logger.error(f"Error running idle mode activity: {e}", exc_info=True)

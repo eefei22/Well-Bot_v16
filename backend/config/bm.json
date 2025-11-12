@@ -31,7 +31,8 @@
       "nudge": "Adakah anda masih di situ? Teruskan bercakap atau katakan 'henti jurnal' untuk selesai.",
       "saving": "Menyimpan entri jurnal anda sekarang.",
       "saved": "Entri jurnal disimpan dengan {word_count} perkataan.",
-      "timeout": "Menyimpan entri jurnal anda sekarang."
+      "timeout": "Menyimpan entri jurnal anda sekarang.",
+      "no_content": "Tiada kandungan direkodkan, menamatkan sesi jurnal sekarang."
     }
   },
   "quote": {
@@ -76,6 +77,7 @@
     "starting_activity_feedback": "Memulakan {activity} sekarang",
     "no_match_feedback": "Saya tidak begitu faham",
     "suggestions_unavailable": "Cadangan tidak tersedia sekarang",
+    "unknown_intent_prompt": "Saya tidak begitu faham, tetapi biar saya cadangkan sesuatu untuk anda",
     "prompts": {
       "nudge": "Adakah anda masih di situ? Aktiviti mana yang anda ingin cuba?",
       "timeout": "Nampaknya anda tiada di situ. Saya akan berehat sekarang. Panggil nama saya apabila anda sudah bersedia untuk bercakap lagi."

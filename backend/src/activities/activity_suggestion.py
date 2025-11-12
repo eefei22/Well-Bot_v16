@@ -73,6 +73,8 @@ class ActivitySuggestionActivity:
         self._timeout_detected = False  # Flag to track if timeout occurred
         self._listening_mic: Optional[MicStream] = None  # Reference to mic used in _listen_for_activity_choice
         self._timeout_handler_finished = threading.Event()  # Event to signal when timeout handler completes
+        self._nudge_occurred = False  # Flag to track if nudge occurred (to restart listening)
+        self._listening_result: Optional[str] = None  # Store result from _listen_for_activity_choice
         
         logger.info(f"ActivitySuggestionActivity initialized for user {self.user_id}")
     
@@ -558,6 +560,17 @@ class ActivitySuggestionActivity:
             self._speak(nudge_prompt, is_nudge=True)
             logger.info("✅ Nudge prompt spoken successfully")
             
+            # After nudge TTS finishes, restart listening for activity choice
+            # This replicates the same flow as after the initial greeting
+            logger.info("🔄 Restarting listening for activity choice after nudge...")
+            self._nudge_occurred = True
+            
+            # Stop the current listening mic if it's still active
+            if self._listening_mic and self._listening_mic.is_running():
+                logger.info("Stopping current listening mic to restart after nudge...")
+                self._listening_mic.stop()
+                self._listening_mic = None
+            
         except Exception as e:
             logger.error(f"❌ Error in _handle_nudge: {e}", exc_info=True)
     
@@ -815,6 +828,8 @@ class ActivitySuggestionActivity:
         self._timeout_detected = False
         self._listening_mic = None  # Clear mic reference
         self._timeout_handler_finished.clear()  # Reset timeout handler event
+        self._nudge_occurred = False  # Reset nudge flag
+        self._listening_result = None  # Reset listening result
         
         # Re-initialize components
         return self.initialize()
@@ -837,8 +852,27 @@ class ActivitySuggestionActivity:
                 logger.error("❌ ActivitySuggestionActivity.run() - Failed to start activity")
                 return False
             
-            # Listen for user's activity choice
-            matched_activity = self._listen_for_activity_choice()
+            # Listen for user's activity choice in a loop (to handle nudge restarts)
+            matched_activity = None
+            while self._active and not self._timeout_detected:
+                # Listen for activity choice
+                matched_activity = self._listen_for_activity_choice()
+                
+                # If we got a result, break out of the loop
+                if matched_activity:
+                    logger.info(f"✅ Activity matched: {matched_activity}")
+                    break
+                
+                # If nudge occurred, restart listening (loop will continue)
+                if self._nudge_occurred:
+                    logger.info("🔄 Nudge occurred - restarting listening for activity choice...")
+                    self._nudge_occurred = False  # Reset flag
+                    # Continue loop to call _listen_for_activity_choice() again
+                    continue
+                
+                # If no match and no nudge, break (shouldn't normally happen)
+                logger.info("No activity matched and no nudge - breaking listening loop")
+                break
             
             # Check if timeout occurred - if so, wait for timeout handler to finish, then return
             if self._timeout_detected:
