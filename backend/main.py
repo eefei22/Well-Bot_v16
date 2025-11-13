@@ -40,6 +40,10 @@ from src.supabase.auth import get_current_user_id
 from src.supabase.database import log_activity_start
 from src.utils.intervention_poller import InterventionPoller
 
+# GUI imports
+from src.components.ui_interface import UIInterface, NoOpUIInterface
+from src.gui import start_gui
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -94,6 +98,10 @@ class WellBotOrchestrator:
 
         # Intervention polling service
         self.intervention_poller: Optional[InterventionPoller] = None
+        
+        # UI interface (for GUI updates)
+        self.ui_interface = None
+        self._gui_window = None
 
         logger.info("WellBotOrchestrator initialized")
 
@@ -169,6 +177,9 @@ class WellBotOrchestrator:
                 raise RuntimeError("Failed to initialize Idle Mode activity")
             logger.info("✓ Idle Mode activity initialized")
 
+            # Initialize UI interface
+            self._initialize_ui()
+            
             # Activities are lazy-loaded - only initialize when needed
             # This reduces memory footprint when idle_mode is running
             
@@ -176,6 +187,44 @@ class WellBotOrchestrator:
         except Exception as e:
             logger.error(f"Component initialization failed: {e}", exc_info=True)
             return False
+
+    def _initialize_ui(self):
+        """Initialize UI interface based on configuration."""
+        try:
+            gui_config = self.global_config.get("gui", {})
+            gui_enabled = gui_config.get("enabled", False)
+            
+            if gui_enabled:
+                logger.info("Initializing UI interface for GUI...")
+                self.ui_interface = UIInterface()
+                logger.info("✓ UI interface initialized")
+            else:
+                logger.info("GUI disabled - using NoOp UI interface")
+                self.ui_interface = NoOpUIInterface()
+        except Exception as e:
+            logger.warning(f"Failed to initialize UI interface: {e}")
+            logger.warning("Falling back to NoOp UI interface")
+            self.ui_interface = NoOpUIInterface()
+
+    def _start_gui_if_enabled(self):
+        """Start GUI window if enabled in configuration."""
+        try:
+            gui_config = self.global_config.get("gui", {})
+            gui_enabled = gui_config.get("enabled", False)
+            update_interval_ms = gui_config.get("update_interval_ms", 100)
+            
+            if gui_enabled and self.ui_interface and not isinstance(self.ui_interface, NoOpUIInterface):
+                logger.info("Starting GUI window...")
+                self._gui_window = start_gui(self.ui_interface, update_interval_ms)
+                if self._gui_window:
+                    logger.info("✓ GUI window started")
+                else:
+                    logger.warning("GUI window failed to start, continuing without GUI")
+            else:
+                logger.debug("GUI not enabled or NoOp interface in use")
+        except Exception as e:
+            logger.warning(f"Failed to start GUI: {e}")
+            logger.warning("Continuing without GUI")
 
     def _handle_intent_detected(self, transcript: str, intent_result: Dict[str, Any]):
         """
@@ -286,7 +335,11 @@ class WellBotOrchestrator:
         if self.smalltalk_activity is None:
             from src.activities.smalltalk import SmallTalkActivity
             logger.info("Lazy loading SmallTalk activity...")
-            self.smalltalk_activity = SmallTalkActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+            self.smalltalk_activity = SmallTalkActivity(
+                backend_dir=self.backend_dir, 
+                user_id=self.user_id,
+                ui_interface=self.ui_interface
+            )
             if not self.smalltalk_activity.initialize():
                 logger.error("❌ Failed to initialize SmallTalk activity")
                 return
@@ -877,6 +930,10 @@ class WellBotOrchestrator:
             
             with self._lock:
                 self.state = SystemState.LISTENING
+            
+            # Start GUI if enabled
+            self._start_gui_if_enabled()
+            
             # Start poller when entering LISTENING state
             self._start_intervention_poller()
             logger.info("🎤 Idle mode started – system ready")
@@ -986,8 +1043,26 @@ def main():
         logger.info("  5. Activity ends → restart wake word detection")
         logger.info("Press Ctrl+C to stop")
 
+        # On Windows, update GUI periodically in main thread
+        import sys
+        gui_update_interval = 0.05  # 50ms for smooth GUI updates
+        last_gui_update = time.time()
+        
         while orchestrator.is_active():
-            time.sleep(1)
+            # Update GUI if on Windows and GUI exists
+            if sys.platform == "win32" and orchestrator._gui_window:
+                current_time = time.time()
+                if current_time - last_gui_update >= gui_update_interval:
+                    try:
+                        orchestrator._gui_window.update_non_blocking()
+                        last_gui_update = current_time
+                    except Exception as e:
+                        # GUI might be closed
+                        if "application has been destroyed" not in str(e).lower():
+                            logger.debug(f"GUI update error: {e}")
+                        orchestrator._gui_window = None
+            
+            time.sleep(0.1)  # Smaller sleep for more responsive GUI updates
             status = orchestrator.get_status()
             # optionally log debugging info
             # logger.debug(f"Status: {status}")

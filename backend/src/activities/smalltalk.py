@@ -55,10 +55,11 @@ class SmallTalkActivity:
     SmallTalk functionality without the intermediate manager layer.
     """
     
-    def __init__(self, backend_dir: Path, user_id: Optional[str] = None):
+    def __init__(self, backend_dir: Path, user_id: Optional[str] = None, ui_interface = None):
         """Initialize the SmallTalk activity"""
         self.backend_dir = backend_dir
         self.user_id = user_id or get_current_user_id()
+        self.ui_interface = ui_interface
         
         # Components (initialized in initialize())
         self.audio_manager: Optional[ConversationAudioManager] = None
@@ -122,7 +123,8 @@ class SmallTalkActivity:
             self.audio_manager = ConversationAudioManager(
                 stt_service=self.stt_service,
                 mic_factory=mic_factory,
-                audio_config=audio_config
+                audio_config=audio_config,
+                ui_interface=self.ui_interface
             )
             logger.info("✓ ConversationAudioManager initialized")
             
