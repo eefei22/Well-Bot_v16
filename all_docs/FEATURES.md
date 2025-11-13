@@ -1,10 +1,10 @@
 # Well-Bot Edge Application Features
 
-This document provides a comprehensive overview of all features available in the Well-Bot edge application, organized by activities and components.
+This document provides a comprehensive overview of all features available in the Well-Bot edge application, organized by individual activities and components.
 
 ## Table of Contents
 1. [Activities](#activities)
-2. [Core Components](#core-components)
+2. [Components](#components)
 3. [System Features](#system-features)
 4. [Database Integration](#database-integration)
 5. [Configuration & Localization](#configuration--localization)
@@ -25,6 +25,7 @@ This document provides a comprehensive overview of all features available in the
 - **Multi-language Support**: Conversations in user's preferred language (English, Chinese, Bahasa Malay)
 - **Audio Feedback**: Optional audio file playback for start/end/nudge prompts
 - **Database Logging**: All conversations and messages saved to database
+- **Context Seeding**: Supports system message injection for conversation context
 
 ### Journal Activity
 - **Voice Journaling**: Speech-to-text journal entry recording
@@ -82,18 +83,31 @@ This document provides a comprehensive overview of all features available in the
 - **Multi-language Support**: Localized activity names and descriptions
 - **Audio Feedback**: Optional audio file playback
 
+### Idle Mode Activity
+- **Wake Word Detection**: Continuous listening for wake word using Porcupine
+- **Intent Recognition**: Keyword-based intent matching after wake word detection
+- **STT Processing**: Speech-to-text transcription for intent recognition
+- **Silence Monitoring**:
+  - Nudge timeout after wake word
+  - Final silence timeout
+- **Audio Feedback**: Optional audio file playback for wake word detection and prompts
+- **TTS Responses**: Text-to-speech responses for prompts
+- **Intervention Triggering**: Checks intervention record for unknown intents
+- **Activity Routing**: Exits when intent detected to allow main orchestrator routing
+
 ---
 
-## Core Components
+## Components
 
-### Wake Word Detection (Porcupine)
+### Wake Word Detector (Porcupine)
 - **Custom Wake Word**: Well-Bot custom wake word model support
 - **Continuous Listening**: Background wake word detection
 - **Audio Stream Management**: PyAudio-based microphone streaming
 - **Callback System**: Triggers callbacks on wake word detection
 - **Resource Management**: Proper cleanup of Porcupine and audio resources
+- **Frame Processing**: Processes audio frames for wake word detection
 
-### Speech-to-Text (Google Cloud Speech)
+### Speech-to-Text Service (Google Cloud Speech)
 - **Streaming Recognition**: Real-time speech transcription
 - **Interim Results**: Provides partial transcription during speech
 - **Final Results**: Returns complete transcription
@@ -101,18 +115,24 @@ This document provides a comprehensive overview of all features available in the
 - **Timeout Handling**: Configurable STT timeout
 - **Single/Multi-utterance**: Configurable utterance modes
 
-### Text-to-Speech (Google Cloud TTS)
+### Text-to-Speech Client (Google Cloud TTS)
 - **Streaming Synthesis**: Real-time TTS audio generation
 - **Multi-language Voices**: Language-specific voice selection
 - **Audio Format Configuration**: Configurable sample rate, channels, encoding
 - **PCM Stream Playback**: Direct PCM audio stream playback
 
-### Intent Recognition
+### Intent Recognition (Rhino)
 - **Rhino Integration**: Audio-based intent recognition (bypasses STT)
 - **Context-based Intents**: Uses Rhino context files for intent classification
-- **Keyword Matching**: Text-based keyword intent matching
-- **Normalized Matching**: Robust text normalization for intent detection
+- **Frame Processing**: Processes audio frames directly
+- **Inference Management**: Handles inference results and resets
 - **Confidence Scores**: Intent confidence reporting
+
+### Keyword Intent Matcher
+- **Language-specific Intents**: Loads intents based on user language
+- **Normalized Matching**: Text normalization for robust keyword matching
+- **Multiple Matching Strategies**: Various matching approaches for reliability
+- **Confidence Reporting**: Returns intent with confidence scores
 
 ### Conversation Audio Manager
 - **Microphone Management**: Centralized microphone stream coordination
@@ -133,11 +153,18 @@ This document provides a comprehensive overview of all features available in the
 - **Emoji Stripping**: Removes emojis from assistant responses
 - **Language Support**: Language code tracking for messages
 
-### LLM Integration (DeepSeek)
-- **Streaming Chat**: Real-time token streaming from LLM
+### SmallTalk Session
+- **LLM Integration**: DeepSeek LLM streaming chat
 - **Message History**: Maintains conversation context
 - **System Prompts**: Configurable system prompts
-- **Context Injection**: Supports dynamic context injection
+- **Termination Detection**: Checks for termination phrases
+- **STT Integration**: Captures user speech via STT
+- **TTS Integration**: Streams LLM responses to TTS
+
+### LLM Client (DeepSeek)
+- **Streaming Chat**: Real-time token streaming from LLM
+- **Non-streaming Chat**: Standard chat completion
+- **Message History**: Maintains conversation context
 - **Error Handling**: Robust error handling and recovery
 
 ### User Context Injector
@@ -147,17 +174,19 @@ This document provides a comprehensive overview of all features available in the
 - **System Message Injection**: Injects persona and facts as system messages
 - **Graceful Degradation**: Continues without context if unavailable
 
-### Termination Phrase Detection
+### Termination Phrase Detector
 - **Normalized Matching**: Robust text normalization for phrase matching
 - **Multiple Matching Strategies**: Exact match, prefix match, substring match
 - **Active State Checking**: Optional active state requirement
 - **Exception-based**: Raises exceptions for termination detection
 
-### Keyword Intent Matcher
-- **Language-specific Intents**: Loads intents based on user language
-- **Normalized Matching**: Text normalization for robust keyword matching
-- **Multiple Matching Strategies**: Various matching approaches for reliability
-- **Confidence Reporting**: Returns intent with confidence scores
+### Microphone Stream
+- **Audio Capture**: Continuous microphone audio streaming
+- **Buffered Streaming**: Queue-based audio chunk buffering
+- **Mute/Unmute**: Microphone muting capability
+- **Threading**: Background thread for audio capture
+- **Resource Management**: Proper PyAudio cleanup
+- **Configurable Parameters**: Sample rate and chunk size configuration
 
 ### Activity Logger
 - **Time-of-day Context**: Derives time-of-day context (morning/afternoon/evening/night)
@@ -295,8 +324,8 @@ This document provides a comprehensive overview of all features available in the
 
 The Well-Bot edge application provides a comprehensive voice-based wellness assistant with:
 
-- **6 Core Activities**: SmallTalk, Journal, Gratitude, Meditation, Spiritual Quote, Activity Suggestion
-- **12+ Core Components**: Wake word, STT, TTS, Intent recognition, Audio management, Session management, LLM integration, Context injection, and more
+- **7 Core Activities**: SmallTalk, Journal, Gratitude, Meditation, Spiritual Quote, Activity Suggestion, Idle Mode
+- **14+ Core Components**: Wake word, STT, TTS, Intent recognition, Audio management, Session management, LLM integration, Context injection, Microphone stream, and more
 - **Multi-language Support**: English, Chinese, Bahasa Malay
 - **Database Integration**: Comprehensive Supabase integration for all data storage
 - **Cloud Integration**: Intervention polling and cloud service communication
@@ -305,4 +334,3 @@ The Well-Bot edge application provides a comprehensive voice-based wellness assi
 - **Context Awareness**: User persona and facts injection for personalized conversations
 
 All features are designed to work together seamlessly, with proper resource management, error handling, and graceful degradation when services are unavailable.
-
