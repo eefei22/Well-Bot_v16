@@ -24,8 +24,6 @@ backend_dir = Path(__file__).parent
 sys.path.append(str(backend_dir))
 
 # Import pipeline / components
-from src.components.stt import GoogleSTTService
-from src.components.tts import GoogleTTSClient
 from src.components.mic_stream import MicStream
 # Lazy import activities (only import when needed to reduce memory footprint)
 # from src.activities.smalltalk import SmallTalkActivity
@@ -89,8 +87,6 @@ class WellBotOrchestrator:
         self.meditation_activity = None
         self.gratitude_activity = None
         self.activity_suggestion_activity = None
-        self.stt_service: Optional[GoogleSTTService] = None
-        self.tts_service: Optional[GoogleTTSClient] = None
 
         self.current_activity: Optional[str] = None
         self._activity_thread: Optional[threading.Thread] = None
@@ -134,12 +130,6 @@ class WellBotOrchestrator:
         logger.info("⏱️ Adding guard delay for Windows audio device release...")
         time.sleep(0.15)
 
-    def _wait_for_stt_teardown(self, timeout_s: float = 3.0) -> bool:
-        """Wait briefly for the idle mode activity to fully stop (legacy method, kept for compatibility)."""
-        # This method is no longer needed since idle_mode.stop() handles cleanup
-        # But kept for backward compatibility
-        return True
-
     def _initialize_components(self) -> bool:
         """Initialize STT, voice pipeline, activities."""
         try:
@@ -149,23 +139,6 @@ class WellBotOrchestrator:
             
             self.global_config = get_global_config_for_user(self.user_id)
             logger.info(f"Loaded global config for user")
-            
-            logger.info("Initializing STT service…")
-            stt_language = self.global_config["language_codes"]["stt_language_code"]
-            self.stt_service = GoogleSTTService(language=stt_language, sample_rate=16000)
-            logger.info(f"✓ STT service initialized with language: {stt_language}")
-
-            logger.info("Initializing TTS service…")
-            from google.cloud import texttospeech
-            self.tts_service = GoogleTTSClient(
-                voice_name=self.global_config["language_codes"]["tts_voice_name"],
-                language_code=self.global_config["language_codes"]["tts_language_code"],
-                audio_encoding=texttospeech.AudioEncoding.LINEAR16,
-                sample_rate_hertz=24000,
-                num_channels=1,
-                sample_width_bytes=2
-            )
-            logger.info("✓ TTS service initialized")
 
             logger.info("Initializing Idle Mode activity (wakeword detection)…")
             self.idle_mode_activity = IdleModeActivity(
@@ -399,11 +372,6 @@ class WellBotOrchestrator:
         self._activity_thread = threading.Thread(target=run_activity, daemon=True)
         self._activity_thread.start()
 
-    def _fallback_to_smalltalk(self):
-        """Fallback to smalltalk in absence of specific activity."""
-        logger.info("🔄 Falling back to SmallTalk…")
-        self._start_smalltalk_activity()
-    
     def _handle_termination(self):
         """Handle termination intent by shutting down the system."""
         logger.info("👋 Termination intent received – shutting down system")
@@ -419,18 +387,6 @@ class WellBotOrchestrator:
         # Note: TTS and audio playback are now handled by idle_mode activity
         # We just need to restart idle_mode to listen again
         logger.info("Restarting idle mode to listen for command again")
-        self._restart_idle_mode()
-
-    def _handle_activity_unavailable(self, activity_name: str):
-        """Handle unavailable activity with audio feedback"""
-        logger.info(f"Handling unavailable activity: {activity_name}")
-        
-        # Note: TTS and audio playback are now handled by idle_mode activity
-        # We just need to restart idle_mode
-        with self._lock:
-            self.state = SystemState.LISTENING
-        
-        logger.info("Restarting idle mode after unavailable activity")
         self._restart_idle_mode()
 
     def _start_journal_activity(self):
@@ -980,11 +936,6 @@ class WellBotOrchestrator:
                 self.idle_mode_activity.cleanup()
             except Exception:
                 pass
-
-        # Cleanup TTS service
-        if self.tts_service:
-            logger.info("Cleaning up TTS service…")
-            self.tts_service = None
 
         logger.info("✅ Well-Bot Orchestrator stopped")
     
