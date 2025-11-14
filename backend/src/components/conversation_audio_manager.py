@@ -41,7 +41,8 @@ class ConversationAudioManager:
         audio_config: dict,
         sample_rate: int = 24000,
         sample_width_bytes: int = 2,
-        num_channels: int = 1
+        num_channels: int = 1,
+        ui_interface = None
     ):
         """
         Initialize the audio manager with services and configuration.
@@ -53,9 +54,11 @@ class ConversationAudioManager:
             sample_rate: Audio sample rate for playback
             sample_width_bytes: Sample width for audio playback
             num_channels: Number of audio channels
+            ui_interface: Optional UIInterface instance for GUI updates
         """
         self.stt = stt_service
         self.mic_factory = mic_factory
+        self.ui_interface = ui_interface
         
         # Load audio configuration
         self.silence_timeout = audio_config.get("silence_timeout_seconds", 30)
@@ -119,6 +122,11 @@ class ConversationAudioManager:
         
         try:
             mic.start()
+            
+            # Update UI: mic is now listening
+            if self.ui_interface:
+                self.ui_interface.update_mic_status("listening")
+            
             final_text: Optional[str] = None
             
             def on_transcript(text: str, is_final: bool):
@@ -186,6 +194,11 @@ class ConversationAudioManager:
             return None
         finally:
             mic.stop()
+            
+            # Update UI: mic is now idle
+            if self.ui_interface:
+                self.ui_interface.update_mic_status("idle")
+            
             with self._mic_lock:
                 self._current_mic = None
     
@@ -293,6 +306,10 @@ class ConversationAudioManager:
             logger.info(f"Playing audio: {audio_path}")
             self._set_playback_state(True)
             
+            # Update UI: speaker is now speaking
+            if self.ui_interface:
+                self.ui_interface.update_speaker_status("speaking")
+            
             # Method 1: Try pydub (most reliable)
             if PYDUB_AVAILABLE:
                 try:
@@ -327,6 +344,10 @@ class ConversationAudioManager:
         finally:
             self._set_playback_state(False)
             
+            # Update UI: speaker is now idle
+            if self.ui_interface:
+                self.ui_interface.update_speaker_status("idle")
+            
             # Unmute microphone if it was muted
             if mute_mic:
                 with self._mic_lock:
@@ -358,6 +379,10 @@ class ConversationAudioManager:
         try:
             self._set_playback_state(True)
             
+            # Update UI: speaker is now speaking
+            if self.ui_interface:
+                self.ui_interface.update_speaker_status("speaking")
+            
             for pcm_chunk in pcm_chunks:
                 try:
                     self._audio_stream.write(pcm_chunk)
@@ -367,6 +392,10 @@ class ConversationAudioManager:
                     
         finally:
             self._set_playback_state(False)
+            
+            # Update UI: speaker is now idle
+            if self.ui_interface:
+                self.ui_interface.update_speaker_status("idle")
             
             # Post-delay for nudge prompts (before unmuting)
             if use_nudge_delays and self.nudge_post_delay > 0:

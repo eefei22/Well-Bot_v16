@@ -1,7 +1,7 @@
 VOICES/GENDER:
-en-US-Chirp3-HD-Charon / en-US-Chirp3-HD-Achernar 
-cmn-CN-Chirp3-HD-Charon / cmn-CN-Chirp3-HD-Achernar
-id-ID-Chirp3-HD- Charon / id-ID-Chirp3-HD-Achernar
+en-US-Chirp3-HD-Charon 
+cmn-CN-Chirp3-HD-Charon 
+id-ID-Chirp3-HD- Charon 
 
 =====
 

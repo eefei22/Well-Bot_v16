@@ -63,7 +63,7 @@ class JournalActivity:
         self.state = "INIT"
         self._active = False
         self._initialized = False
-        self._activity_log_id: Optional[str] = None  # Track log ID for completion
+        self._activity_public_id: Optional[str] = None  # Track public_id for duration tracking (optional)
         
         # Paragraph buffering
         self.buffers: List[str] = []
@@ -167,9 +167,9 @@ class JournalActivity:
             traceback.print_exc()
             return False
     
-    def set_activity_log_id(self, log_id: Optional[str]):
-        """Set the activity log ID for completion tracking."""
-        self._activity_log_id = log_id
+    def set_activity_log_id(self, public_id: Optional[str]):
+        """Set the activity public_id for duration tracking (optional)."""
+        self._activity_public_id = public_id
     
     def start(self):
         """Start the journal session"""
@@ -209,6 +209,9 @@ class JournalActivity:
                     completed = True
             else:
                 logger.warning("No content to save (below word threshold or empty)")
+                # Speak message that nothing was recorded
+                no_content_msg = self.config.get("prompts", {}).get("no_content", "Nothing was recorded, ending journal session now.")
+                self._speak(no_content_msg)
                 completed = False
         except KeyboardInterrupt:
             logger.info("Journal session interrupted by user")
@@ -225,15 +228,21 @@ class JournalActivity:
             completed = False
         finally:
             # If terminated by timeout, save before cleanup (only if not already saved)
-            if self._termination_detected and not self._saved and self._has_content():
-                logger.info("Saving accumulated content after timeout termination")
-                self.state = "SAVING"
-                if self._save():
-                    completed = True
+            if self._termination_detected and not self._saved:
+                if self._has_content():
+                    logger.info("Saving accumulated content after timeout termination")
+                    self.state = "SAVING"
+                    if self._save():
+                        completed = True
+                else:
+                    logger.warning("No content to save after timeout (below word threshold or empty)")
+                    # Speak message that nothing was recorded
+                    no_content_msg = self.config.get("prompts", {}).get("no_content", "Nothing was recorded, ending journal session now.")
+                    self._speak(no_content_msg)
+                    completed = False
             
-            # Log completion status
-            if self._activity_log_id:
-                log_activity_completion(self._activity_log_id, completed)
+            # Note: Completion tracking removed in new schema
+            # Duration can be tracked via log_intervention_duration() if needed
             
             self._cleanup()
     
@@ -415,6 +424,9 @@ class JournalActivity:
         if not self.buffers:
             logger.warning("No content to save - buffers are empty")
             logger.warning(f"current_buffer was: '{self.current_buffer}'")
+            # Speak message that nothing was recorded
+            no_content_msg = self.config.get("prompts", {}).get("no_content", "Nothing was recorded, ending journal session now.")
+            self._speak(no_content_msg)
             return False
         
         body = "\n\n".join(self.buffers).strip()

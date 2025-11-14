@@ -23,7 +23,7 @@ def fetch_user_by_id(user_id: str, client: Optional[Client] = None) -> Optional[
     
     try:
         response = client.table("users")\
-            .select("id, email, language")\
+            .select("id, email, language, full_name, prefer_name")\
             .eq("id", user_id)\
             .limit(1)\
             .execute()
