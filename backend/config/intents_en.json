@@ -1,0 +1,67 @@
+{
+  "smalltalk": [
+    "talk",
+    "chat",
+    "conversation",
+    "bored",
+    "boring"
+
+  ],
+  "journaling": [
+    "journaling",
+    "journal",
+    "dairy",
+    "write",
+    "record",
+    "today",
+    "thoughts"
+  ],
+  "meditation": [
+    "meditation",
+    "meditating",
+    "meditate",
+    "guide",
+    "stressed"
+  ],
+  "quote": [
+    "quote",
+    "spiritual",
+    "inspire",
+    "inspirational",
+    "motivate",
+    "unmotivated",
+    "lost", 
+    "sad",
+    "motivation"
+  ],
+  "gratitude": [
+    "gratitude",
+    "appreciate",
+    "apprecation",
+    "thankful",
+    "grateful",
+    "gratification"
+  ],
+  "termination": [
+    "goodbye",
+    "bye",
+    "done",
+    "stop",
+    "finish",
+    "that's all",
+    "enough",
+    "stop talking"
+  ],
+  "activity_suggestion": [
+    "suggest",
+    "suggestion",
+    "what should i do",
+    "what can i do",
+    "don't know",
+    "what",
+    "help",
+    "options",
+    "recommend",
+    "recommendation"
+  ]
+}

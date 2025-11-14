@@ -31,7 +31,7 @@ from src.components import (
 )
 from src.utils.config_resolver import get_global_config_for_user, get_language_config
 from src.supabase.auth import get_current_user_id
-from src.supabase.database import save_gratitude_item, log_activity_completion
+from src.supabase.database import save_gratitude_item
 from src.activities.smalltalk import SmallTalkActivity
 
 logger = logging.getLogger(__name__)
@@ -55,7 +55,7 @@ class GratitudeActivity:
         self.gratitude_config = None
         self._initialized = False
         self._active = False
-        self._activity_log_id: Optional[str] = None  # Track log ID for completion
+        self._activity_public_id: Optional[str] = None  # Track public_id for duration tracking (optional)
         
         # Recording state
         self.gratitude_text = ""
@@ -273,9 +273,9 @@ class GratitudeActivity:
         if self.audio_manager:
             self.audio_manager.stop_silence_monitoring()
 
-    def set_activity_log_id(self, log_id: Optional[str]):
-        """Set the activity log ID for completion tracking."""
-        self._activity_log_id = log_id
+    def set_activity_log_id(self, public_id: Optional[str]):
+        """Set the activity public_id for duration tracking (optional)."""
+        self._activity_public_id = public_id
 
     def run(self) -> bool:
         if not self._initialized:
@@ -348,9 +348,8 @@ class GratitudeActivity:
             completed = False
             return False
         finally:
-            # Log completion status
-            if self._activity_log_id:
-                log_activity_completion(self._activity_log_id, completed)
+            # Note: Completion tracking removed in new schema
+            # Duration can be tracked via log_intervention_duration() if needed
             
             self._active = False
 

@@ -9,9 +9,9 @@
       "Exit"
     ],
     "prompts": {
-      "start": "What's on your mind?",
+      "start": "Let's talk! What's on your mind?",
       "nudge": "Hey are you still there? Feel free to continue our conversation.",
-      "timeout": "It seems like you're not there. I'll go take a break now. Just call me when you're ready to talk again.",
+      "timeout": "It seems like you're not there. I'll go take a break now. Just call my name when you're ready to talk again.",
       "end": "Okay talk later, bye for now!."
     }
   },
@@ -27,11 +27,12 @@
       "stop recording"
     ],
     "prompts": {
-      "start": "Ready to journal. Start speaking after the tone. You can pause anytime to think. Say 'stop journal' when you're finished.",
+      "start": "Let's journal. You can share anything you like and pause anytime to think. Say 'stop journal' when you're finished.",
       "nudge": "Are you still there? Continue speaking or say 'stop journal' to finish.",
       "saving": "Saving your journal entry now.",
       "saved": "Journal entry saved with {word_count} words.",
-      "timeout": "Saving your journal entry now."
+      "timeout": "Saving your journal entry now.",
+      "no_content": "Nothing was recorded, ending journal session now."
     }
   },
   "quote": {
@@ -44,39 +45,68 @@
       "stop meditation",
       "end meditation",
       "that's enough",
-      "finish meditation"
+      "finish meditation",
+      "stop",
+      "done",
+      "that's enough"
     ],
-    "start_prompt": "Starting your meditation session now.",
+    "start_prompt": "Let's meditate. Starting your meditation session now.",
     "seed_system_prompt_completed": "You just completed a guided meditation session with the user. Transition into a warm, brief small talk. Ask one inviting, open question about how the meditation felt or what they experienced.",
     "seed_system_prompt_stopped": "The user stopped a guided meditation session halfway. Transition into a warm, brief small talk. Ask one inviting, open question about how they're feeling or if everything is okay.",
-    "opener_completed": "How did that meditation feel?",
-    "opener_stopped": "I noticed you stopped the meditation. How are you feeling?"
+    "opener_completed": "How are you feeling after that meditation session?",
+    "opener_stopped": "I noticed you stopped the meditation. Everything alright?"
   },
   "gratitude": {
     "termination_phrases": [
       "done",
       "that's all",
       "that's it",
-      "finished"
+      "finished",
+      "save that",
+      "that's enough"
     ],
     "prompts": {
-      "start": "What are you grateful for today? Speak after the tone. When you're finished, say 'done' to save your entry.",
+      "start": "Let's try to practice gratitude. What are you grateful for today? You can share anything you like. When you're finished, say 'done' to save your entry.",
       "nudge": "Are you still there? Continue speaking or say 'done' when finished.",
-      "saved": "Thank you for sharing. I've saved your gratitude note.",
+      "saved": "Alright! I've saved your gratitude note.",
       "recording_error": "I'm sorry, I had trouble recording your gratitude note.",
-      "no_content": "I didn't catch that. Let's try again another time.",
+      "no_content": "I didn't catch any content. Let's try again another time.",
       "save_error": "I had trouble saving your gratitude note, but I heard what you said."
     },
     "seed_system_prompt": "The user just shared a gratitude note. Transition into a warm, brief small talk. Gratitude note: '{gratitude_note}'. Ask one inviting, open question related to gratitude or positivity.",
-    "opener": "That's beautiful. What else is on your mind?"
+    "opener": "Thank you for sharing! How are you feeling after sharing that?"
+  },
+  "activity_suggestion": {
+    "system_prompt": "Here are some suggested activities for you, they are ranked from highest to lowest based on our past interactions.",
+    "cold_start_intro": "Here are some wellness activities you can try:",
+    "starting_activity_feedback": "Starting {activity} now",
+    "no_match_feedback": "I didn't quite catch that.",
+    "suggestions_unavailable": "Suggestions are not available now",
+    "unknown_intent_prompt": "I didn't quite catch that, but let me suggest something for you",
+    "prompts": {
+      "nudge": "Are you still there? Which activity would you like to try?",
+      "timeout": "It seems like you're not there. I'll go take a break now. Just call my name when you're ready to talk again."
+    },
+    "activity_names": {
+      "journaling": "Journaling",
+      "gratitude": "Gratitude Practice",
+      "meditation": "Meditation",
+      "quote": "Inspirational Quote"
+    },
+    "activity_descriptions": {
+      "meditation": "a calming way to center your mind and find peace",
+      "journaling": "a chance to reflect and release your thoughts",
+      "quote": "a quick dose of motivation and perspective",
+      "gratitude": "focusing on the good to brighten your day"
+    }
   },
   "wakeword_responses": {
     "prompts": {
-      "wakeword_detected": "Hey, I heard you called me. What can I help you with?",
+      "wakeword_detected": "Hey, I heard you called me. What would you like to do today?",
       "nudge": "I'm listening. What would you like to do?",
       "timeout": "I'll be here when you need me. Just say my name.",
-      "unknown_intent": "I didn't quite catch that. Could you please repeat?",
-      "activity_unavailable": "That feature isn't available yet. What else can I help you with?"
+      "unknown_intent": "I didn't quite catch that. can you call my name again, and I'll be ready to help you.",
+      "activity_unavailable": "That activity isn't available right now. Can we try something else?"
     }
   },
   "audio_paths": {

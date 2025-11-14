@@ -12,12 +12,12 @@
   },
   "wakeword": {
     "silence_timeout_seconds": 10,
-    "nudge_timeout_seconds": 15,
+    "nudge_timeout_seconds": 10,
     "stt_timeout_s": 8.0,
     "use_audio_files": false
   },
   "smalltalk": {
-    "silence_timeout_seconds": 30,
+    "silence_timeout_seconds": 10,
     "nudge_timeout_seconds": 15,
     "max_turns": 200,
     "nudge_pre_delay_ms": 200,
@@ -45,6 +45,17 @@
   "meditation": {
     "meditation_start_delay_seconds": 3.0,
     "use_audio_files": false
+  },
+  "activity_suggestion": {
+    "silence_timeout_seconds": 20,
+    "nudge_timeout_seconds": 20,
+    "nudge_pre_delay_ms": 200,
+    "nudge_post_delay_ms": 300,
+    "use_audio_files": false
+  },
+  "gui": {
+    "enabled": true,
+    "update_interval_ms": 100
   },
   "context_service_url": "https://user-context-well-bot-520080168829.asia-south1.run.app",
   "enable_context_processing": true
