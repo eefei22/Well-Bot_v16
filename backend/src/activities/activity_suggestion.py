@@ -71,6 +71,7 @@ class ActivitySuggestionActivity:
         self._selected_activity: Optional[str] = None  # Store selected activity for routing
         self._conversation_context: List[Dict[str, str]] = []  # Store conversation for smalltalk seeding
         self._timeout_detected = False  # Flag to track if timeout occurred
+        self._termination_detected = False  # Flag to track if termination phrase was detected
         self._listening_mic: Optional[MicStream] = None  # Reference to mic used in _listen_for_activity_choice
         self._timeout_handler_finished = threading.Event()  # Event to signal when timeout handler completes
         self._nudge_occurred = False  # Flag to track if nudge occurred (to restart listening)
@@ -423,6 +424,14 @@ class ActivitySuggestionActivity:
                     if intent_result:
                         logger.info(f"Intent detected: {intent_result.get('intent')}")
                 
+                # Check for termination intent first
+                if intent_result:
+                    intent_name = intent_result.get("intent")
+                    if intent_name == "termination":
+                        logger.info("✅ Termination phrase detected - will return to idle mode")
+                        self._termination_detected = True
+                        return "__termination__"  # Special sentinel value for termination
+                
                 # Map intent to activity type
                 if intent_result:
                     intent_name = intent_result.get("intent")
@@ -520,6 +529,10 @@ class ActivitySuggestionActivity:
     def get_selected_activity(self) -> Optional[str]:
         """Get the selected activity for routing"""
         return self._selected_activity
+    
+    def is_termination_detected(self) -> bool:
+        """Check if termination phrase was detected"""
+        return self._termination_detected
     
     def get_conversation_context(self) -> List[Dict[str, str]]:
         """Get conversation context for seeding smalltalk"""
@@ -636,6 +649,7 @@ class ActivitySuggestionActivity:
         # Safety checks
         if not all([self.audio_manager, self.session_manager, self.llm_pipeline]):
             logger.error("❌ Components not properly initialized - cannot start activity")
+            logger.error(f"  audio_manager: {self.audio_manager is not None}, session_manager: {self.session_manager is not None}, llm_pipeline: {self.llm_pipeline is not None}")
             return False
         
         # Check if keyword matcher is initialized (required for activity suggestion)
@@ -658,6 +672,11 @@ class ActivitySuggestionActivity:
             
             # Start session
             conv_id = self.session_manager.start_session("Activity Suggestion")
+            # Double-check llm_pipeline is not None before using it
+            if self.llm_pipeline is None:
+                logger.error("❌ llm_pipeline is None - cannot set conversation_id")
+                self._active = False
+                return False
             self.llm_pipeline.conversation_id = conv_id
             
             # Check if audio files should be used
@@ -826,6 +845,7 @@ class ActivitySuggestionActivity:
         self._selected_activity = None
         self._conversation_context = []
         self._timeout_detected = False
+        self._termination_detected = False  # Reset termination flag
         self._listening_mic = None  # Clear mic reference
         self._timeout_handler_finished.clear()  # Reset timeout handler event
         self._nudge_occurred = False  # Reset nudge flag
@@ -885,6 +905,26 @@ class ActivitySuggestionActivity:
                 logger.info("Timeout detected - returning to wakeword without routing")
                 self._selected_activity = "__timeout__"  # Special sentinel value to indicate timeout
                 # Stop the activity (cleanup will be handled by orchestrator)
+                self.stop()
+                return True
+            
+            # Check for termination first
+            if matched_activity == "__termination__":
+                logger.info("✅ Termination phrase detected - returning to idle mode")
+                
+                # Speak termination prompt before returning to idle mode
+                try:
+                    prompts = self.activity_suggestion_config.get("prompts", {})
+                    termination_prompt = prompts.get(
+                        "termination",
+                        "Okay, I'll catch you later."
+                    )
+                    logger.info(f"Speaking termination prompt: {termination_prompt}")
+                    self._speak(termination_prompt)
+                except Exception as e:
+                    logger.warning(f"Failed to load or speak termination prompt: {e}")
+                
+                self._selected_activity = "__termination__"  # Special sentinel value
                 self.stop()
                 return True
             

@@ -57,6 +57,9 @@
     "enabled": true,
     "update_interval_ms": 100
   },
+  "intervention": {
+    "poll_interval_minutes": 0.5
+  },
   "context_service_url": "https://user-context-well-bot-520080168829.asia-south1.run.app",
   "enable_context_processing": true
 }

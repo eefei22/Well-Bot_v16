@@ -95,7 +95,7 @@ The system uses a **hybrid polling and event-driven approach**:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                         PRIMARY INTERVENTION FLOW                        │
+│                         PRIMARY INTERVENTION FLOW                       │
 └─────────────────────────────────────────────────────────────────────────┘
 
 [1] EMOTION DETECTION (External System)

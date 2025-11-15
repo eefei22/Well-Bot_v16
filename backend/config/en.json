@@ -83,9 +83,11 @@
     "no_match_feedback": "I didn't quite catch that.",
     "suggestions_unavailable": "Suggestions are not available now",
     "unknown_intent_prompt": "I didn't quite catch that, but let me suggest something for you",
+    "intervention_trigger_prompt": "Hey, I'm seeing that you're not having a good day would you like to do an activity with me?",
     "prompts": {
       "nudge": "Are you still there? Which activity would you like to try?",
-      "timeout": "It seems like you're not there. I'll go take a break now. Just call my name when you're ready to talk again."
+      "timeout": "It seems like you're not there. I'll go take a break now. Just call my name when you're ready to talk again.",
+      "termination": "Okay, I'll catch you later."
     },
     "activity_names": {
       "journaling": "Journaling",

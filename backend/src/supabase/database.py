@@ -5,9 +5,44 @@ import logging
 import random
 import json
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
+
+# Malaysian timezone (UTC+8) - for consistent timestamp handling
+def get_malaysia_timezone():
+    """
+    Get Malaysia timezone (UTC+8) object.
+    Tries zoneinfo first, falls back to pytz, then manual offset.
+    
+    Returns:
+        Timezone object for Asia/Kuala_Lumpur (UTC+8)
+    """
+    try:
+        from zoneinfo import ZoneInfo
+        return ZoneInfo("Asia/Kuala_Lumpur")
+    except (ImportError, Exception):
+        # ZoneInfoNotFoundError, ImportError, or other issues - fall back to pytz
+        try:
+            import pytz
+            return pytz.timezone("Asia/Kuala_Lumpur")
+        except ImportError:
+            # Final fallback: manual UTC+8 offset
+            return timezone(timedelta(hours=8))
+
+
+def get_current_time_utc8_naive() -> datetime:
+    """
+    Get current time in UTC+8 (Malaysia timezone) as timezone-naive.
+    This is used for database timestamps which are stored as timezone-naive in UTC+8.
+    
+    Returns:
+        Datetime object without timezone info (but represents UTC+8 time)
+    """
+    malaysia_tz = get_malaysia_timezone()
+    now_utc8 = datetime.now(malaysia_tz)
+    # Convert to naive datetime (removes timezone but keeps the UTC+8 time)
+    return now_utc8.replace(tzinfo=None)
 
 # If you're running everything locally now, hardcode your dev user_id here:
 # NOTE: This constant is deprecated. Use get_current_user_id() instead.
@@ -374,7 +409,7 @@ def save_user_context_to_local(user_id: str, persona_summary: Optional[str] = No
             "user_id": user_id,
             "persona_summary": persona_summary,
             "facts": facts,
-            "last_updated": datetime.utcnow().isoformat()
+            "last_updated": get_current_time_utc8_naive().isoformat()
         }
         
         with open(file_path, 'w', encoding='utf-8') as f:
@@ -440,7 +475,7 @@ def log_activity_start(
     
     Args:
         user_id: User ID
-        activity_type: Type of intervention ('journal', 'gratitude', 'todo', 'meditation', 'quote')
+        activity_type: Type of intervention ('journal', 'gratitude', 'todo', 'meditation', 'quote', 'activity_suggestion')
         emotional_log_id: Optional emotional_log ID if intervention was triggered by emotion detection.
                          None for command-triggered interventions.
     
@@ -450,14 +485,14 @@ def log_activity_start(
     """
     try:
         # Validate enum values match schema constraints
-        valid_activity_types = ['journal', 'gratitude', 'todo', 'meditation', 'quote']
+        valid_activity_types = ['journal', 'gratitude', 'todo', 'meditation', 'quote', 'activity_suggestion']
         
         if activity_type not in valid_activity_types:
             logger.error(f"Invalid activity_type: {activity_type}. Must be one of {valid_activity_types}")
             return None
         
-        # Get current timestamp (timezone-naive for intervention_log)
-        current_timestamp = datetime.now().replace(tzinfo=None)
+        # Get current timestamp in UTC+8 (timezone-naive for intervention_log)
+        current_timestamp = get_current_time_utc8_naive()
         
         payload = {
             "user_id": user_id,
@@ -506,7 +541,8 @@ def log_intervention_duration(public_id: str, duration_seconds: Optional[float] 
                 log_timestamp = datetime.fromisoformat(res.data[0]["timestamp"].replace('Z', '+00:00'))
                 if log_timestamp.tzinfo:
                     log_timestamp = log_timestamp.replace(tzinfo=None)
-                now = datetime.now()
+                # Use UTC+8 current time for consistent calculation
+                now = get_current_time_utc8_naive()
                 duration_seconds = (now - log_timestamp).total_seconds()
                 update_data["duration"] = f"{duration_seconds} seconds"
             else:
@@ -549,8 +585,8 @@ def query_recent_activity_logs(
         Returns empty list if query fails.
     """
     try:
-        # Calculate cutoff timestamp (timezone-naive)
-        cutoff_time = datetime.now().replace(tzinfo=None) - timedelta(days=days_back)
+        # Calculate cutoff timestamp in UTC+8 (timezone-naive)
+        cutoff_time = get_current_time_utc8_naive() - timedelta(days=days_back)
         
         # Build query
         query = (

@@ -78,9 +78,11 @@
     "no_match_feedback": "Saya tidak begitu faham",
     "suggestions_unavailable": "Cadangan tidak tersedia sekarang",
     "unknown_intent_prompt": "Saya tidak begitu faham, tetapi biar saya cadangkan sesuatu untuk anda",
+    "intervention_trigger_prompt": "Hei, Saya nampak anda tidak berada dalam keadaan baik, adakah anda ingin melakukan aktiviti bersama saya?",
     "prompts": {
       "nudge": "Adakah anda masih di situ? Aktiviti mana yang anda ingin cuba?",
-      "timeout": "Nampaknya anda tiada di situ. Saya akan berehat sekarang. Panggil nama saya apabila anda sudah bersedia untuk bercakap lagi."
+      "timeout": "Nampaknya anda tiada di situ. Saya akan berehat sekarang. Panggil nama saya apabila anda sudah bersedia untuk bercakap lagi.",
+      "termination": "Baiklah, jumpa lagi nanti."
     },
     "activity_names": {
       "journaling": "Menulis Jurnal",
