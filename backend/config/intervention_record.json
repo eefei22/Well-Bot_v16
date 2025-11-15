@@ -3,33 +3,33 @@
   "latest_decision": {
     "trigger_intervention": false,
     "confidence_score": 0.0,
-    "reasoning": "Recent activity 1.9 minutes ago"
+    "reasoning": "Recent activity 14.2 minutes ago"
   },
   "latest_suggestion": {
     "ranked_activities": [
       {
-        "activity_type": "meditation",
+        "activity_type": "gratitude",
         "rank": 1,
         "score": 1.0
       },
       {
-        "activity_type": "journal",
+        "activity_type": "meditation",
         "rank": 2,
-        "score": 0.984
-      },
-      {
-        "activity_type": "gratitude",
-        "rank": 3,
-        "score": 0.875
+        "score": 0.914
       },
       {
         "activity_type": "quote",
+        "rank": 3,
+        "score": 0.771
+      },
+      {
+        "activity_type": "journal",
         "rank": 4,
-        "score": 0.844
+        "score": 0.576
       }
     ],
-    "reasoning": "Emotion: Sad; Time of day: afternoon; Top suggestion: meditation (score: 1.000)"
+    "reasoning": "Emotion: Sad; Time of day: afternoon; Top suggestion: gratitude (score: 1.000)"
   },
-  "last_request_time": "2025-11-15T17:45:02.850922+08:00",
-  "last_response_time": "2025-11-15T17:45:05.037937+08:00"
+  "last_request_time": "2025-11-15T21:46:49.462520+08:00",
+  "last_response_time": "2025-11-15T21:46:50.948948+08:00"
 }

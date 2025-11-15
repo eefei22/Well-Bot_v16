@@ -89,6 +89,8 @@ class WellBotOrchestrator:
 
         self.current_activity: Optional[str] = None
         self._activity_thread: Optional[threading.Thread] = None
+        self._idle_mode_thread: Optional[threading.Thread] = None  # Track idle mode thread
+        self._transitioning_to_activity = False  # Flag to prevent idle mode restart during activity transition
         self._current_activity_log_id: Optional[str] = None  # Track log ID for completion
         
         # UI interface (for GUI updates)
@@ -113,14 +115,36 @@ class WellBotOrchestrator:
 
     def _stop_idle_mode_for_activity(self):
         """Stop idle mode activity before starting another activity"""
+        logger.info("🔇 Stopping idle mode activity before starting new activity…")
+        
+        # Set flag to prevent idle mode from restarting during transition
+        self._transitioning_to_activity = True
+        
+        # Stop the activity object
         if self.idle_mode_activity:
-            logger.info("🔇 Stopping idle mode activity before starting new activity…")
             try:
                 self.idle_mode_activity.stop()
                 logger.info("✅ Idle mode activity stopped successfully")
             except Exception as e:
                 logger.warning(f"Ignoring error while stopping idle mode: {e}")
                 logger.info("⚠️ Continuing despite stop error...")
+        
+        # Wait for the idle mode thread to finish (if it's running)
+        # Don't try to join if we're in the idle mode thread itself (would cause "cannot join current thread" error)
+        if self._idle_mode_thread and self._idle_mode_thread.is_alive():
+            current_thread = threading.current_thread()
+            if self._idle_mode_thread is not current_thread:
+                logger.info("Waiting for idle mode thread to finish...")
+                # Set a timeout to avoid blocking indefinitely
+                self._idle_mode_thread.join(timeout=2.0)
+                # Check again after join (thread might have been cleared by another thread)
+                if self._idle_mode_thread and self._idle_mode_thread.is_alive():
+                    logger.warning("Idle mode thread did not finish within timeout, continuing anyway")
+                else:
+                    logger.info("✅ Idle mode thread finished")
+            else:
+                logger.debug("Idle mode thread is current thread - skipping join to avoid deadlock")
+            self._idle_mode_thread = None
         
         # Add a tiny guard delay (Windows USB audio sometimes needs this)
         logger.info("⏱️ Adding guard delay for Windows audio device release...")
@@ -346,6 +370,8 @@ class WellBotOrchestrator:
 
         self._activity_thread = threading.Thread(target=run_activity, daemon=True)
         self._activity_thread.start()
+        # Clear transition flag now that activity thread has started
+        self._transitioning_to_activity = False
 
     def _handle_termination(self):
         """Handle termination intent by shutting down the system."""
@@ -431,6 +457,8 @@ class WellBotOrchestrator:
 
         self._activity_thread = threading.Thread(target=run_activity, daemon=True)
         self._activity_thread.start()
+        # Clear transition flag now that activity thread has started
+        self._transitioning_to_activity = False
 
     def _start_spiritual_quote_activity(self):
         """Start the spiritual quote activity thread."""
@@ -484,6 +512,8 @@ class WellBotOrchestrator:
 
         self._activity_thread = threading.Thread(target=run_activity, daemon=True)
         self._activity_thread.start()
+        # Clear transition flag now that activity thread has started
+        self._transitioning_to_activity = False
 
     def _start_gratitude_activity(self):
         """Start the gratitude activity thread."""
@@ -537,6 +567,8 @@ class WellBotOrchestrator:
 
         self._activity_thread = threading.Thread(target=run_activity, daemon=True)
         self._activity_thread.start()
+        # Clear transition flag now that activity thread has started
+        self._transitioning_to_activity = False
 
     def _start_meditation_activity(self):
         """Start the meditation activity thread."""
@@ -590,6 +622,8 @@ class WellBotOrchestrator:
 
         self._activity_thread = threading.Thread(target=run_activity, daemon=True)
         self._activity_thread.start()
+        # Clear transition flag now that activity thread has started
+        self._transitioning_to_activity = False
 
     def _start_activity_suggestion_activity(self):
         """Start the activity suggestion activity thread."""
@@ -732,10 +766,26 @@ class WellBotOrchestrator:
 
         self._activity_thread = threading.Thread(target=run_activity, daemon=True)
         self._activity_thread.start()
+        # Clear transition flag now that activity thread has started
+        self._transitioning_to_activity = False
 
     def _start_idle_mode_activity(self):
         """Start the idle mode activity in a thread with error handling"""
         logger.info("🎬 Starting idle mode activity...")
+        
+        # Check if there's already a running idle mode thread
+        if self._idle_mode_thread and self._idle_mode_thread.is_alive():
+            logger.warning("⚠️ Idle mode thread is already running - stopping it first")
+            try:
+                if self.idle_mode_activity:
+                    self.idle_mode_activity.stop()
+                self._idle_mode_thread.join(timeout=1.0)
+                # Check again after join (thread might have been cleared)
+                if self._idle_mode_thread and self._idle_mode_thread.is_alive():
+                    logger.warning("Previous idle mode thread did not finish within timeout")
+            except Exception as e:
+                logger.warning(f"Error stopping previous idle mode thread: {e}")
+            self._idle_mode_thread = None
         
         def run_idle_mode():
             try:
@@ -777,6 +827,19 @@ class WellBotOrchestrator:
                         logger.info("Intent routing handled by callback")
                 else:
                     logger.info("⏰ Idle mode exited without intent detection (timeout or stopped)")
+                    # Check if we're transitioning to an activity - if so, don't restart idle mode
+                    if self._transitioning_to_activity:
+                        logger.info("System is transitioning to activity - skipping idle mode restart")
+                        return
+                    
+                    # Check state as well (backup check)
+                    with self._lock:
+                        current_state = self.state
+                    
+                    if current_state in [SystemState.PROCESSING, SystemState.ACTIVITY_ACTIVE]:
+                        logger.info("System state indicates activity transition - skipping idle mode restart")
+                        return
+                    
                     # No intent detected (timeout) - restart idle mode to return to wakeword listening
                     logger.info("🔄 Restarting idle mode after timeout...")
                     self._restart_idle_mode()
@@ -794,17 +857,37 @@ class WellBotOrchestrator:
                             logger.error("Failed to reinitialize idle mode after error")
                 except Exception as retry_error:
                     logger.error(f"Failed to restart idle mode: {retry_error}")
+            finally:
+                # Clear thread reference when thread exits
+                with self._lock:
+                    if self._idle_mode_thread == threading.current_thread():
+                        self._idle_mode_thread = None
         
-        # Start idle mode in a daemon thread
-        idle_thread = threading.Thread(target=run_idle_mode, daemon=True)
-        idle_thread.start()
+        # Start idle mode in a daemon thread and track it
+        self._idle_mode_thread = threading.Thread(target=run_idle_mode, daemon=True)
+        self._idle_mode_thread.start()
         logger.info("✅ Idle mode activity thread started")
 
     def _restart_idle_mode(self):
         """Restart idle mode activity after an activity ends."""
         logger.info("🔄 Restarting idle mode activity…")
         
-        # 1) Ensure complete cleanup of previous idle mode
+        # 1) Wait for any existing idle mode thread to finish first
+        if self._idle_mode_thread and self._idle_mode_thread.is_alive():
+            logger.info("Waiting for existing idle mode thread to finish...")
+            try:
+                if self.idle_mode_activity:
+                    self.idle_mode_activity.stop()
+                self._idle_mode_thread.join(timeout=2.0)
+                if self._idle_mode_thread and self._idle_mode_thread.is_alive():
+                    logger.warning("Idle mode thread did not finish within timeout during restart")
+                else:
+                    logger.info("✅ Existing idle mode thread finished")
+            except Exception as e:
+                logger.warning(f"Error waiting for idle mode thread: {e}")
+            self._idle_mode_thread = None
+        
+        # 2) Ensure complete cleanup of previous idle mode
         if self.idle_mode_activity:
             logger.info("🧹 Performing complete idle mode cleanup...")
             try:
@@ -844,12 +927,13 @@ class WellBotOrchestrator:
                         self.state = SystemState.SHUTTING_DOWN
                     return
         
-        # 2) Reset state
+        # 3) Reset state and clear transition flag
         with self._lock:
             self.state = SystemState.LISTENING
             self.current_activity = None
+        self._transitioning_to_activity = False  # Clear flag when restarting idle mode
         
-        # 3) Start the idle mode activity
+        # 4) Start the idle mode activity (will check for existing thread)
         try:
             self._start_idle_mode_activity()
             logger.info("🎤 Idle mode restarted – LISTENING for wake word")
