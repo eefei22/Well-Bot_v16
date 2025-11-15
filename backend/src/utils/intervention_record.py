@@ -38,8 +38,7 @@ class InterventionRecordManager:
                 "latest_decision": None,
                 "latest_suggestion": None,
                 "last_request_time": None,
-                "last_response_time": None,
-                "last_database_query_time": None
+                "last_response_time": None
             }
             self._write_record(initial_record)
             logger.info(f"Created initial intervention_record.json at {self.record_file_path}")
@@ -56,8 +55,7 @@ class InterventionRecordManager:
                 "latest_decision": None,
                 "latest_suggestion": None,
                 "last_request_time": None,
-                "last_response_time": None,
-                "last_database_query_time": None
+                "last_response_time": None
             }
     
     def _write_record(self, record: Dict[str, Any]) -> bool:
@@ -123,35 +121,34 @@ class InterventionRecordManager:
     
     def update_record(
         self,
-        emotion_entry: Dict[str, Any],
         decision: Dict[str, Any],
         suggestion: Dict[str, Any],
         request_time: datetime,
-        response_time: datetime
+        response_time: datetime,
+        emotion_entry: Optional[Dict[str, Any]] = None
     ) -> bool:
         """
         Update the record with new data.
         
         Args:
-            emotion_entry: Dictionary with emotion log entry data
             decision: Dictionary with decision result from cloud service
             suggestion: Dictionary with suggestion result from cloud service
             request_time: Timestamp when request was made
             response_time: Timestamp when response was received
+            emotion_entry: Optional dictionary with emotion log entry data
         
         Returns:
             True if successful, False otherwise
         """
-        # Load existing record to preserve last_database_query_time
         record = self._read_record()
         
         # Update all fields
-        record["latest_emotion_entry"] = emotion_entry
+        if emotion_entry is not None:
+            record["latest_emotion_entry"] = emotion_entry
         record["latest_decision"] = decision
         record["latest_suggestion"] = suggestion
         record["last_request_time"] = request_time.isoformat()
         record["last_response_time"] = response_time.isoformat()
-        # Note: last_database_query_time is preserved from previous update
         
         success = self.save_record(record)
         if success:
@@ -161,34 +158,4 @@ class InterventionRecordManager:
         
         return success
     
-    def update_emotion_entry_only(
-        self,
-        emotion_entry: Optional[Dict[str, Any]],
-        query_time: datetime
-    ) -> bool:
-        """
-        Update only the latest_emotion_entry and last_database_query_time.
-        Preserves existing decision and suggestion data.
-        
-        Args:
-            emotion_entry: Dictionary with emotion log entry data, or None if no entries found
-            query_time: Timestamp when database query was performed
-        
-        Returns:
-            True if successful, False otherwise
-        """
-        # Load existing record to preserve decision and suggestion
-        record = self._read_record()
-        
-        # Update only emotion entry and query time
-        record["latest_emotion_entry"] = emotion_entry
-        record["last_database_query_time"] = query_time.isoformat()
-        
-        success = self.save_record(record)
-        if success:
-            logger.debug("Updated latest_emotion_entry and last_database_query_time in intervention_record.json")
-        else:
-            logger.error("Failed to update intervention_record.json")
-        
-        return success
 

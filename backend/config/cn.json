@@ -88,9 +88,11 @@
     "no_match_feedback": "我没有听清楚。",
     "suggestions_unavailable": "目前无法提供建议。",
     "unknown_intent_prompt": "我没有听清楚，但让我为你推荐一些活动吧",
+    "intervention_trigger_prompt": "嘿，我看到你今天心情不是很好，想和我一起做个活动吗？",
     "prompts": {
       "nudge": "你还在吗？你想尝试哪个活动？我们可以一起冥想，或者你想写日记？ 我也可以送你一句励志名言，或者来一次感恩练习。你随便选一个吧",
-      "timeout": "看起来你不在，我先休息一下。等你准备好了，随时叫我。"
+      "timeout": "看起来你不在，我先休息一下。等你准备好了，随时叫我。",
+      "termination": "好的，我们稍后再见。"
     },
     "activity_names": {
       "journaling": "写日记",

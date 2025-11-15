@@ -36,7 +36,6 @@ from src.activities.idle_mode import IdleModeActivity
 from src.utils.config_resolver import get_global_config_for_user, resolve_language
 from src.supabase.auth import get_current_user_id
 from src.supabase.database import log_activity_start
-from src.utils.intervention_poller import InterventionPoller
 
 # GUI imports
 from src.components.ui_interface import UIInterface, NoOpUIInterface
@@ -91,9 +90,6 @@ class WellBotOrchestrator:
         self.current_activity: Optional[str] = None
         self._activity_thread: Optional[threading.Thread] = None
         self._current_activity_log_id: Optional[str] = None  # Track log ID for completion
-
-        # Intervention polling service
-        self.intervention_poller: Optional[InterventionPoller] = None
         
         # UI interface (for GUI updates)
         self.ui_interface = None
@@ -233,28 +229,6 @@ class WellBotOrchestrator:
     def _route_to_activity(self, intent: str, transcript: str):
         """Route the user to proper activity based on intent."""
         logger.info(f"🔄 Routing to activity: {intent}")
-        
-        # Only check trigger_intervention if user didn't explicitly request an activity
-        # If intent is "unknown", we can use intervention suggestions
-        if intent == "unknown":
-            try:
-                from src.utils.intervention_record import InterventionRecordManager
-                record_path = self.backend_dir / "config" / "intervention_record.json"
-                record_manager = InterventionRecordManager(record_path)
-                record = record_manager.load_record()
-                
-                decision = record.get("latest_decision", {})
-                trigger_intervention = decision.get("trigger_intervention", False)
-                
-                if trigger_intervention:
-                    logger.info("🎯 trigger_intervention=true detected - launching activity suggestion")
-                    self._start_activity_suggestion_activity()
-                    return
-            except Exception as e:
-                logger.warning(f"Failed to check trigger_intervention: {e}")
-        
-        # Stop intervention poller when starting an activity
-        self._stop_intervention_poller()
 
         # Map intent to activity type for logging
         intent_to_activity_type = {
@@ -263,6 +237,7 @@ class WellBotOrchestrator:
             "meditation": "meditation",
             "quote": "quote",
             "gratitude": "gratitude",
+            "activity_suggestion": "activity_suggestion",
             "termination": None,
         }
         
@@ -654,6 +629,25 @@ class WellBotOrchestrator:
                 if success:
                     logger.info("✅ Activity Suggestion activity completed successfully")
                     
+                    # Check for termination first
+                    if self.activity_suggestion_activity and self.activity_suggestion_activity.is_termination_detected():
+                        logger.info("👋 Termination phrase detected in activity suggestion - returning to idle mode")
+                        # Cleanup and restart idle mode
+                        if self.activity_suggestion_activity:
+                            try:
+                                self.activity_suggestion_activity.cleanup()
+                                self.activity_suggestion_activity.reinitialize()
+                            except Exception as e:
+                                logger.warning(f"Error during cleanup: {e}")
+                        
+                        # Reset state and restart wakeword detection
+                        with self._lock:
+                            self.state = SystemState.LISTENING
+                        
+                        logger.info("🔄 Restarting idle mode after termination")
+                        self._restart_idle_mode()
+                        return  # Exit early - don't route to any activity
+                    
                     # Check if timeout occurred (special sentinel value)
                     if selected_activity == "__timeout__":
                         logger.info("Timeout occurred - skipping routing, will return to wakeword")
@@ -754,7 +748,33 @@ class WellBotOrchestrator:
                 
                 if success:
                     logger.info("✅ Idle mode completed successfully (intent detected)")
-                    # Intent was detected - routing will be handled by _handle_intent_detected callback
+                    # Check if intent was detected (either from wakeword or intervention trigger)
+                    detected_intent = self.idle_mode_activity.get_detected_intent()
+                    detected_transcript = self.idle_mode_activity.get_detected_transcript()
+                    
+                    if detected_intent:
+                        # Update state before routing
+                        with self._lock:
+                            if self.state == SystemState.LISTENING:
+                                self.state = SystemState.PROCESSING
+                                logger.info("🎯 Transitioning to PROCESSING state")
+                            self.state = SystemState.ACTIVITY_ACTIVE
+                        
+                        # Route to activity based on detected intent
+                        intent = detected_intent.get('intent', 'unknown')
+                        transcript = detected_transcript or ""
+                        logger.info(f"🎯 Routing to activity based on detected intent: {intent}")
+                        
+                        # Clear detected intent to prevent duplicate routing
+                        # This is safe because we're about to route, and reinitialize() will clear it anyway
+                        if hasattr(self.idle_mode_activity, '_detected_intent'):
+                            self.idle_mode_activity._detected_intent = None
+                            self.idle_mode_activity._detected_transcript = None
+                        
+                        self._route_to_activity(intent, transcript)
+                    else:
+                        # Intent was detected via callback, routing already handled
+                        logger.info("Intent routing handled by callback")
                 else:
                     logger.info("⏰ Idle mode exited without intent detection (timeout or stopped)")
                     # No intent detected (timeout) - restart idle mode to return to wakeword listening
@@ -829,10 +849,7 @@ class WellBotOrchestrator:
             self.state = SystemState.LISTENING
             self.current_activity = None
         
-        # 3) Start intervention poller when returning to LISTENING state
-        self._start_intervention_poller()
-        
-        # 4) Start the idle mode activity
+        # 3) Start the idle mode activity
         try:
             self._start_idle_mode_activity()
             logger.info("🎤 Idle mode restarted – LISTENING for wake word")
@@ -856,27 +873,6 @@ class WellBotOrchestrator:
             return False
 
         try:
-            # Initialize intervention polling service (but don't start yet - will start when entering LISTENING state)
-            if self.global_config:
-                try:
-                    record_file_path = self.backend_dir / "config" / "intervention_record.json"
-                    # Get cloud service URL from environment (CLOUD_SERVICE_URL) or config
-                    import os
-                    from dotenv import load_dotenv
-                    load_dotenv()
-                    service_url = os.getenv("CLOUD_SERVICE_URL")
-                    
-                    self.intervention_poller = InterventionPoller(
-                        user_id=self.user_id,
-                        record_file_path=record_file_path,
-                        poll_interval_minutes=5,
-                        service_url=service_url
-                    )
-                    logger.info("✓ Intervention polling service initialized (will start when listening)")
-                except Exception as e:
-                    logger.warning(f"Failed to initialize intervention polling service: {e}")
-                    logger.warning("Continuing without intervention polling...")
-            
             # Start idle mode activity
             if self.idle_mode_activity:
                 self._start_idle_mode_activity()
@@ -890,8 +886,6 @@ class WellBotOrchestrator:
             # Start GUI if enabled
             self._start_gui_if_enabled()
             
-            # Start poller when entering LISTENING state
-            self._start_intervention_poller()
             logger.info("🎤 Idle mode started – system ready")
             logger.info("Say the wake word to activate the system")
             return True
@@ -905,9 +899,6 @@ class WellBotOrchestrator:
 
         with self._lock:
             self.state = SystemState.SHUTTING_DOWN
-
-        # Stop intervention polling service
-        self._stop_intervention_poller()
 
         # Stop activity if active
         if self.current_activity == "smalltalk" and self.smalltalk_activity:
@@ -938,27 +929,6 @@ class WellBotOrchestrator:
                 pass
 
         logger.info("✅ Well-Bot Orchestrator stopped")
-    
-    def _start_intervention_poller(self):
-        """Start the intervention polling service if not already running."""
-        if self.intervention_poller:
-            try:
-                # Check if already running by checking internal state
-                # We'll use a simple approach: try to start (start() checks if already running)
-                self.intervention_poller.start()
-                logger.debug("Intervention poller started/resumed")
-            except Exception as e:
-                logger.warning(f"Failed to start intervention poller: {e}")
-    
-    def _stop_intervention_poller(self):
-        """Stop the intervention polling service."""
-        if self.intervention_poller:
-            logger.info("Stopping intervention polling service…")
-            try:
-                self.intervention_poller.stop()
-                logger.info("✓ Intervention polling service stopped")
-            except Exception as e:
-                logger.warning(f"Error stopping intervention polling service: {e}")
 
     def is_active(self) -> bool:
         """Check if the orchestrator is still active (not shutting down)."""
