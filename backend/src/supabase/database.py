@@ -382,15 +382,18 @@ def get_user_persona_summary(user_id: str) -> Optional[str]:
     return None
 
 
-def save_user_context_to_local(user_id: str, persona_summary: Optional[str] = None, facts: Optional[str] = None, backend_dir: Optional[Path] = None) -> bool:
+def save_user_context_to_local(user_id: str, persona_summary: Optional[str] = None, facts: Optional[str] = None, backend_dir: Optional[Path] = None, prefer_name: Optional[str] = None, full_name: Optional[str] = None) -> bool:
     """
     Save user context (persona_summary and facts) to local JSON file as fallback.
+    Preserves existing prefer_name and full_name if not provided.
     
     Args:
         user_id: User UUID
         persona_summary: Persona summary text (optional)
         facts: Facts text (optional)
         backend_dir: Backend directory path (optional, will be inferred if not provided)
+        prefer_name: User's preferred name (optional, will preserve existing if not provided)
+        full_name: User's full name (optional, will preserve existing if not provided)
         
     Returns:
         True if successful, False otherwise
@@ -405,10 +408,22 @@ def save_user_context_to_local(user_id: str, persona_summary: Optional[str] = No
         
         file_path = config_dir / "user_persona.json"
         
+        # Load existing data to preserve prefer_name and full_name if not provided
+        existing_data = {}
+        if file_path.exists():
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    existing_data = json.load(f)
+            except Exception as e:
+                logger.debug(f"Could not load existing user_persona.json: {e}")
+        
+        # Build data dict, preserving existing prefer_name/full_name if not provided
         data = {
             "user_id": user_id,
             "persona_summary": persona_summary,
             "facts": facts,
+            "prefer_name": prefer_name if prefer_name is not None else existing_data.get("prefer_name"),
+            "full_name": full_name if full_name is not None else existing_data.get("full_name"),
             "last_updated": get_current_time_utc8_naive().isoformat()
         }
         

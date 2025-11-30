@@ -275,6 +275,7 @@ CREATE TABLE public.wb_gratitude_item (
   user_id uuid NOT NULL,
   text text NOT NULL,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone,
   CONSTRAINT wb_gratitude_item_pkey PRIMARY KEY (id),
   CONSTRAINT wb_gratitude_item_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
 );

@@ -34,12 +34,13 @@ from src.components.mic_stream import MicStream
 # from src.activities.activity_suggestion import ActivitySuggestionActivity
 from src.activities.idle_mode import IdleModeActivity
 from src.utils.config_resolver import get_global_config_for_user, resolve_language
-from src.supabase.auth import get_current_user_id
-from src.supabase.database import log_activity_start
+from src.supabase.auth import get_current_user_id, resolve_user_from_device_id
+from src.supabase.database import log_activity_start, save_user_context_to_local
 
 # GUI imports
 from src.components.ui_interface import UIInterface, NoOpUIInterface
 from src.gui import start_gui
+from src.utils.config_loader import DEVICE_ID
 
 # Configure logging
 logging.basicConfig(
@@ -70,9 +71,34 @@ class WellBotOrchestrator:
         self.backend_dir = backend_dir
         self.wakeword_model_path  = self.backend_dir / "config" / "WakeWord" / "WellBot_WakeWordModel.ppn"
         
-        # Get current user at startup
-        self.user_id = get_current_user_id()
-        logger.info(f"Orchestrator initialized for user: {self.user_id}")
+        # Resolve user from device_id at startup
+        if not DEVICE_ID:
+            raise ValueError(
+                "DEVICE_ID environment variable is not set. "
+                "Please set DEVICE_ID in your .env file to identify this device."
+            )
+        
+        logger.info(f"Resolving user for device_id: {DEVICE_ID}")
+        try:
+            user_info = resolve_user_from_device_id(DEVICE_ID)
+            self.user_id = user_info['user_id']
+            self.prefer_name = user_info.get('prefer_name')
+            self.full_name = user_info.get('full_name')
+            
+            # Save user info to user_persona.json
+            save_user_context_to_local(
+                user_id=self.user_id,
+                prefer_name=self.prefer_name,
+                full_name=self.full_name,
+                backend_dir=self.backend_dir
+            )
+            logger.info(f"✓ User resolved and saved: user_id={self.user_id}, prefer_name={self.prefer_name}, full_name={self.full_name}")
+        except ValueError as e:
+            logger.error(f"Failed to resolve user from device_id {DEVICE_ID}: {e}")
+            raise RuntimeError(
+                f"Cannot start Well-Bot: {e}. "
+                "Please ensure the device is registered in the database."
+            ) from e
         
         # Load user-specific config (will be loaded in _initialize_components)
         self.global_config = None
