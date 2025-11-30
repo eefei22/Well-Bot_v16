@@ -33,14 +33,17 @@ from src.components.mic_stream import MicStream
 # from src.activities.gratitude import GratitudeActivity
 # from src.activities.activity_suggestion import ActivitySuggestionActivity
 from src.activities.idle_mode import IdleModeActivity
-from src.utils.config_resolver import get_global_config_for_user, resolve_language
+from src.utils.config_resolver import get_global_config_for_user, resolve_language, get_language_config
 from src.supabase.auth import get_current_user_id, resolve_user_from_device_id
 from src.supabase.database import log_activity_start, save_user_context_to_local
 
 # GUI imports
 from src.components.ui_interface import UIInterface, NoOpUIInterface
 from src.gui import start_gui
-from src.utils.config_loader import DEVICE_ID
+from src.utils.config_loader import DEVICE_ID, load_language_config
+from src.components.tts import GoogleTTSClient
+from google.cloud import texttospeech
+import pyaudio
 
 # Configure logging
 logging.basicConfig(
@@ -73,6 +76,19 @@ class WellBotOrchestrator:
         
         # Resolve user from device_id at startup
         if not DEVICE_ID:
+            # Load English config for error message (default)
+            try:
+                en_config = load_language_config('en')
+                error_message = en_config.get('startup', {}).get('device_not_associated', 
+                    "This device is not associated to any user. Please contact Well-Bot customer service for assistance.")
+                
+                # Speak error message via TTS
+                logger.error("DEVICE_ID environment variable is not set")
+                self._speak_startup_message(error_message, language='en')
+                logger.error(error_message)
+            except Exception as tts_error:
+                logger.warning(f"Failed to speak error message: {tts_error}")
+            
             raise ValueError(
                 "DEVICE_ID environment variable is not set. "
                 "Please set DEVICE_ID in your .env file to identify this device."
@@ -94,7 +110,19 @@ class WellBotOrchestrator:
             )
             logger.info(f"✓ User resolved and saved: user_id={self.user_id}, prefer_name={self.prefer_name}, full_name={self.full_name}")
         except ValueError as e:
-            logger.error(f"Failed to resolve user from device_id {DEVICE_ID}: {e}")
+            # Load English config for error message (default)
+            try:
+                en_config = load_language_config('en')
+                error_message = en_config.get('startup', {}).get('device_not_associated',
+                    "This device is not associated to any user. Please contact Well-Bot customer service for assistance.")
+                
+                # Speak error message via TTS
+                logger.error(f"Failed to resolve user from device_id {DEVICE_ID}: {e}")
+                self._speak_startup_message(error_message, language='en')
+                logger.error(error_message)
+            except Exception as tts_error:
+                logger.warning(f"Failed to speak error message: {tts_error}")
+            
             raise RuntimeError(
                 f"Cannot start Well-Bot: {e}. "
                 "Please ensure the device is registered in the database."
@@ -124,6 +152,61 @@ class WellBotOrchestrator:
         self._gui_window = None
 
         logger.info("WellBotOrchestrator initialized")
+
+    def _speak_startup_message(self, text: str, language: str = 'en') -> bool:
+        """
+        Speak a startup message using TTS.
+        
+        Args:
+            text: Text to speak
+            language: Language code ('en', 'cn', 'bm') - defaults to 'en'
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Get language codes for TTS
+            from src.utils.config_resolver import LANGUAGE_CODES
+            lang_config = LANGUAGE_CODES.get(language, LANGUAGE_CODES['en'])
+            
+            # Initialize TTS service
+            tts_service = GoogleTTSClient(
+                voice_name=lang_config['tts_voice_name'],
+                language_code=lang_config['tts_language_code'],
+                audio_encoding=texttospeech.AudioEncoding.LINEAR16,
+                sample_rate_hertz=24000,
+                num_channels=1,
+                sample_width_bytes=2
+            )
+            
+            # Generate PCM chunks
+            def text_gen():
+                yield text
+            
+            pcm_chunks = tts_service.stream_synthesize(text_gen())
+            
+            # Play PCM chunks using PyAudio
+            pa = pyaudio.PyAudio()
+            stream = pa.open(
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=24000,
+                output=True
+            )
+            
+            for chunk in pcm_chunks:
+                stream.write(chunk)
+            
+            stream.stop_stream()
+            stream.close()
+            pa.terminate()
+            
+            logger.info(f"TTS startup message played: {text[:50]}...")
+            return True
+            
+        except Exception as e:
+            logger.warning(f"Failed to speak startup message: {e}", exc_info=True)
+            return False
 
     def _validate_config_files(self) -> bool:
         """Validate that all required config files exist."""
@@ -981,6 +1064,30 @@ class WellBotOrchestrator:
         if not self._initialize_components():
             logger.error("Component initialization failed")
             return False
+
+        # Speak startup success message before starting idle mode
+        try:
+            # Get user's language preference
+            user_language = resolve_language(self.user_id)
+            
+            # Load language config for user's language
+            language_config = get_language_config(self.user_id)
+            
+            # Get success message template
+            success_template = language_config.get('startup', {}).get('startup_completed',
+                "Startup completed. Hi {name}, call me Well-Bot to wake me up!")
+            
+            # Format message with user's name (prefer prefer_name, fallback to full_name, then "there")
+            user_name = self.prefer_name or self.full_name or "there"
+            success_message = success_template.format(name=user_name)
+            
+            # Speak success message via TTS
+            logger.info("Speaking startup completion message...")
+            self._speak_startup_message(success_message, language=user_language)
+            logger.info(f"✓ Startup success message: {success_message}")
+        except Exception as e:
+            logger.warning(f"Failed to speak startup success message: {e}", exc_info=True)
+            # Continue startup even if TTS fails
 
         try:
             # Start idle mode activity

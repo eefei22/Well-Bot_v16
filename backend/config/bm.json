@@ -98,6 +98,10 @@
     },
     "smalltalk_suggestion_message": "Jika anda tidak mahu melakukan mana-mana cadangan ini, mungkin kita boleh berbual?"
   },
+  "startup": {
+    "device_not_associated": "Peranti ini tidak dikaitkan dengan mana-mana pengguna. Sila hubungi perkhidmatan pelanggan Well-Bot untuk bantuan.",
+    "startup_completed": "Permulaan selesai. Hai {name}, panggil saya Well-Bot untuk membangunkan saya!"
+  },
   "wakeword_responses": {
     "prompts": {
       "wakeword_detected": "Hey, saya dengar anda memanggil saya. Apa yang boleh saya bantu?",
