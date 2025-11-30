@@ -100,7 +100,8 @@
       "journaling": "a chance to reflect and release your thoughts",
       "quote": "a quick dose of motivation and perspective",
       "gratitude": "focusing on the good to brighten your day"
-    }
+    },
+    "smalltalk_suggestion_message": "If you're not feeling like doing any of these suggestions, maybe we can just have a chat?"
   },
   "wakeword_responses": {
     "prompts": {

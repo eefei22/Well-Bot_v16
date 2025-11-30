@@ -311,6 +311,13 @@ class ActivitySuggestionActivity:
                     "Here are some wellness activities you can try:"
                 )
                 
+                # Get smalltalk suggestion message and append it
+                smalltalk_message = self.activity_suggestion_config.get(
+                    "smalltalk_suggestion_message",
+                    "If you're not feeling like doing any of these suggestions, maybe we can just have a chat?"
+                )
+                cold_start_intro = f"{cold_start_intro}\n\n{smalltalk_message}"
+                
                 # Speak the complete cold start intro message via TTS
                 self._speak(cold_start_intro)
                 logger.info(f"Spoke cold start activity suggestions (full text):\n{cold_start_intro}")
@@ -331,8 +338,14 @@ class ActivitySuggestionActivity:
             activities_text = self._format_activities_for_tts(ranked_activities)
             logger.debug(f"Formatted activities for TTS:\n{activities_text}")
             
-            # Combine intro message and activities
-            full_message = f"{intro_message}\n\n{activities_text}"
+            # Get smalltalk suggestion message
+            smalltalk_message = self.activity_suggestion_config.get(
+                "smalltalk_suggestion_message",
+                "If you're not feeling like doing any of these suggestions, maybe we can just have a chat?"
+            )
+            
+            # Combine intro message, activities, and smalltalk suggestion
+            full_message = f"{intro_message}\n\n{activities_text}\n\n{smalltalk_message}"
             
             # Speak full message via TTS
             self._speak(full_message)

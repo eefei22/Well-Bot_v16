@@ -35,6 +35,7 @@ from src.components import (
 from src.supabase.database import upsert_journal
 from src.utils.config_resolver import get_global_config_for_user, get_language_config
 from src.supabase.auth import get_current_user_id
+from src.utils.journal_title_client import JournalTitleClient
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,7 @@ class JournalActivity:
         self.tts_service: Optional[GoogleTTSClient] = None
         self.config: Optional[dict] = None  # journal config from language_config
         self.global_config: Optional[dict] = None  # global numerical config
+        self.title_client: Optional[JournalTitleClient] = None  # Title generation client
         
         # Activity state
         self.state = "INIT"
@@ -156,6 +158,11 @@ class JournalActivity:
             phrases = self.config.get("termination_phrases", [])
             self.termination_detector = TerminationPhraseDetector(phrases, require_active=True)
             logger.info(f"✓ Loaded {len(phrases)} termination phrases")
+            
+            # Initialize title generation client
+            logger.info("Initializing journal title client...")
+            self.title_client = JournalTitleClient()
+            logger.info("✓ Journal title client initialized")
             
             self._initialized = True
             logger.info("✓ Journal activity fully initialized")
@@ -442,8 +449,8 @@ class JournalActivity:
             word_count = len(body.split())
             logger.info(f"Prepared journal body: {len(body)} chars, {word_count} words (first 100 chars: {body[:100]})")
         
-        # Generate title
-        title = self._generate_title()
+        # Generate title (try cloud service first, fallback to timestamp)
+        title = self._generate_title(body)
         
         # Get mood
         mood = self.global_journal_config.get("default_mood", 3)
@@ -484,10 +491,35 @@ class JournalActivity:
             traceback.print_exc()
             return False
     
-    def _generate_title(self) -> str:
-        """Generate default title from timestamp"""
+    def _generate_title(self, body: Optional[str] = None) -> str:
+        """
+        Generate title for journal entry.
+        
+        First attempts to generate a meaningful title from content using cloud service.
+        Falls back to timestamp-based title if cloud service fails.
+        
+        Args:
+            body: Optional journal body text for title generation
+        
+        Returns:
+            Generated title string
+        """
+        # Try to generate title from content if body is provided and client is available
+        if body and self.title_client:
+            logger.info("Attempting to generate title from journal content...")
+            generated_title = self.title_client.generate_title(body, retry=True)
+            
+            if generated_title:
+                logger.info(f"Successfully generated title from content: '{generated_title}'")
+                return generated_title
+            else:
+                logger.warning("Title generation failed, falling back to timestamp title")
+        
+        # Fallback to timestamp-based title
         now = datetime.now()
-        return f"Journal {now.strftime('%Y-%m-%d %H:%M')}"
+        timestamp_title = f"Journal {now.strftime('%Y-%m-%d %H:%M')}"
+        logger.info(f"Using timestamp-based title: '{timestamp_title}'")
+        return timestamp_title
     
     def _extract_topics(self, text: str) -> List[str]:
         """Extract topics from text (placeholder for future implementation)"""

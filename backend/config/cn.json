@@ -105,7 +105,8 @@
       "journaling": "一个反思与释放思绪的机会。",
       "quote": "一剂短暂的动力与启发。",
       "gratitude": "专注于美好，点亮你的一天。"
-    }
+    },
+    "smalltalk_suggestion_message": "如果你不想做这些建议的活动，也许我们可以聊聊天？"
   },
   "wakeword_responses": {
     "prompts": {
