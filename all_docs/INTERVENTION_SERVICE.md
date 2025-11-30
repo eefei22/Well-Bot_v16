@@ -68,13 +68,11 @@ Request intervention suggestion based on emotion data.
 **Request Body:**
 ```json
 {
-  "user_id": "uuid-string",
-  "emotion_label": "Sad" | "Angry" | "Happy" | "Fear",
-  "confidence_score": 0.0-1.0,
-  "timestamp": "ISO 8601 datetime string",
-  "context_time_of_day": "morning" | "afternoon" | "evening" | "night" (optional)
+  "user_id": "uuid-string"
 }
 ```
+
+**Note:** The endpoint automatically fetches the latest emotion data from the database for the specified user.
 
 **Response:**
 ```json
@@ -177,9 +175,11 @@ client = InterventionServiceClient(service_url=None)  # Uses CLOUD_SERVICE_URL f
 ```
 
 **Methods:**
-- `get_suggestion(user_id, emotion_label, confidence_score, timestamp, context_time_of_day=None) -> Dict | None`
+- `get_suggestion(user_id, context_time_of_day=None) -> Dict | None`
   - Requests intervention suggestion from cloud service
+  - Fetches latest emotion data from database automatically
   - Returns response dict or None on failure
+  - Note: context_time_of_day parameter is deprecated and no longer used
 - `check_health() -> bool`
   - Checks if cloud service is healthy
   - Returns True if healthy, False otherwise
