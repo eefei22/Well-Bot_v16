@@ -17,8 +17,8 @@
   },
   "journal": {
     "termination_phrases": [
-      "henti jurnal",
-      "simpan jurnal",
+      "henti",
+      "simpan",
       "tamat entri",
       "itu sahaja",
       "selesai jurnal",
@@ -72,8 +72,8 @@
     "opener": "Itu cantik sekali. Apa lagi yang ada dalam fikiran anda?"
   },
   "activity_suggestion": {
-    "system_prompt": "Anda adalah Well-Bot, penolong kesejahteraan yang mesra dan menggalakkan. Anda sedang mempersembahkan cadangan aktiviti kepada pengguna. Ucapkan salam dengan mesra dan senaraikan aktiviti yang dicadangkan secara eksplisit dari ranking tertinggi hingga ranking terendah. Kekalkan respons anda ringkas, mesra, dan menggalakkan. Selepas menyenaraikan aktiviti, tanyakan yang mana satu mereka ingin cuba.",
-    "cold_start_intro": "Berikut adalah beberapa aktiviti kesejahteraan yang boleh anda cuba:",
+    "system_prompt": "Berikut adalah beberapa aktiviti yang boleh anda cuba: ",
+    "cold_start_intro": "Berikut adalah beberapa aktiviti yang boleh anda cuba: ",
     "starting_activity_feedback": "Memulakan {activity} sekarang",
     "no_match_feedback": "Saya tidak begitu faham",
     "suggestions_unavailable": "Cadangan tidak tersedia sekarang",
@@ -95,7 +95,8 @@
       "journaling": "peluang untuk merenung dan melepaskan fikiran anda",
       "quote": "dosis motivasi dan perspektif yang cepat",
       "gratitude": "fokus pada kebaikan untuk mencerahkan hari anda"
-    }
+    },
+    "smalltalk_suggestion_message": "Jika anda tidak mahu melakukan mana-mana cadangan ini, mungkin kita boleh berbual?"
   },
   "wakeword_responses": {
     "prompts": {

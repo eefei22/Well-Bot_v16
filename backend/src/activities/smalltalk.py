@@ -248,7 +248,7 @@ class SmallTalkActivity:
             logger.info(f"Making POST request to context processor...")
             response = requests.post(
                 endpoint,
-                json={"user_id": user_id},
+                json={"user_id": user_id, "conversation_id": conversation_id},
                 headers={"Content-Type": "application/json"},
                 timeout=300  # 5 minutes - processing can take 1-3 minutes
             )

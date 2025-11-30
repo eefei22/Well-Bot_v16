@@ -122,26 +122,20 @@ The system uses a **hybrid polling and event-driven approach**:
     ↓
     POST /api/intervention/suggest
     Payload: {
-        user_id: str,
-        emotion_label: str,
-        confidence_score: float,
-        timestamp: ISO datetime,
-        context_time_of_day: Optional[str]
+        user_id: str
     }
     ↓
 [5] CLOUD SERVICE PROCESSING (Cloud)
     ↓
     intervention.process_suggestion_request(request)
     ├─ [5a] Fetch user data from database
+    │   ├─ get_latest_emotion_log(user_id)
     │   ├─ fetch_recent_emotion_logs(user_id, hours=48)
-    │   ├─ fetch_recent_activity_logs(user_id, hours=24)
     │   ├─ fetch_user_preferences(user_id)
-    │   └─ get_time_since_last_activity(user_id)
+    │   ├─ get_time_since_last_activity(user_id)
+    │   └─ get_activity_counts(user_id, days=30)
     │
-    ├─ [5b] Determine time of day context
-    │   └─ get_time_of_day_context(timestamp) → 'morning'|'afternoon'|'evening'|'night'
-    │
-    ├─ [5c] Decision Engine
+    ├─ [5b] Decision Engine
     │   └─ decide_trigger_intervention(emotion_label, confidence_score, time_since_last_activity)
     │       Decision Logic:
     │       ├─ is_negative_emotion? (Sad, Angry, Fear)
@@ -149,13 +143,12 @@ The system uses a **hybrid polling and event-driven approach**:
     │       ├─ time_since_last_activity > 60 minutes?
     │       └─ trigger_intervention = all conditions met
     │
-    └─ [5d] Suggestion Engine
-        └─ suggest_activities(emotion_label, user_preferences, recent_activity_logs, time_of_day)
+    └─ [5c] Suggestion Engine
+        └─ suggest_activities(emotion_label, user_preferences, activity_counts)
             Scoring Factors:
             ├─ Base emotion-to-activity weights
-            ├─ User preference adjustments (±20% boost/reduction)
-            ├─ Time-of-day adjustments (multipliers)
-            └─ Recent activity penalty (-20% if used recently)
+            ├─ User preference adjustments (×1.2 if preferred, ×0.7 if not)
+            └─ Frequency-based multipliers (×1.3 for most frequent, down to ×1.05 for least)
     ↓
 [6] CLOUD SERVICE RESPONSE (Cloud → Edge)
     ↓
@@ -477,8 +470,8 @@ LISTENING (Activity ends, InterventionPoller resumed)
 **Suggestion Engine Constants** (`suggestion_engine.py`):
 - `ACTIVITY_TYPES = ['journal', 'gratitude', 'meditation', 'quote']`
 - Emotion-to-activity weight mappings
-- Time-of-day adjustment multipliers
-- User preference boost/reduction factors
+- Frequency-based multipliers (loaded from config.json)
+- User preference boost/reduction factors (loaded from config.json)
 
 ---
 
