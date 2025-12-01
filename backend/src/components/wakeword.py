@@ -19,9 +19,22 @@ except ImportError:
 import pyaudio
 import struct
 import threading
-from typing import Optional, List, Callable
+from typing import Optional, List, Callable, Union
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+# Try importing OpenWakeWord
+try:
+    import openwakeword
+    from openwakeword.model import Model
+    import numpy as np
+    OPENWAKEWORD_AVAILABLE = True
+except ImportError:
+    OPENWAKEWORD_AVAILABLE = False
+    Model = None
+    np = None
+    logger.warning("openwakeword not available - fallback will not work")
 
 if not PORCUPINE_AVAILABLE:
     logger.warning("pvporcupine not available - wake word detection will not work")
@@ -248,24 +261,292 @@ class WakeWordDetector:
                 self.is_initialized = False
 
 
-def create_wake_word_detector(access_key_file: str, custom_keyword_file: Optional[str] = None) -> WakeWordDetector:
+class OpenWakeWordDetector:
+    """
+    Continuous wake word detection service using OpenWakeWord engine.
+    Runs in the background and triggers callbacks when wake words are detected.
+    This is used as a fallback when Porcupine fails to initialize.
+    """
+    
+    def __init__(self, backend_dir: Optional[Path] = None):
+        """
+        Initialize the OpenWakeWord detector.
+        
+        Args:
+            backend_dir: Path to backend directory (for finding model files)
+        """
+        self.backend_dir = backend_dir
+        self.model = None
+        self._pa = None
+        self._stream = None
+        self.running = False
+        self._thread = None
+        self.is_initialized = False
+        
+        # Model paths
+        if backend_dir:
+            self.model_dir = backend_dir / "config" / "WakeWord"
+            self.model_onnx = self.model_dir / "well_bot.onnx"
+            self.model_tflite = self.model_dir / "well_bot.tflite"
+        else:
+            # Fallback: try to determine backend_dir from current file location
+            current_file = Path(__file__)
+            self.model_dir = current_file.parent.parent.parent / "config" / "WakeWord"
+            self.model_onnx = self.model_dir / "well_bot.onnx"
+            self.model_tflite = self.model_dir / "well_bot.tflite"
+        
+        # Detection threshold
+        self.detection_threshold = 0.5
+        
+        # Audio configuration
+        self.sample_rate = 16000
+        self.chunk_size = 1280  # 80ms at 16kHz
+        
+    def initialize(self, built_in_keywords: Optional[List[str]] = None) -> bool:
+        """
+        Initialize the OpenWakeWord model and PyAudio.
+        
+        Args:
+            built_in_keywords: Not used for OpenWakeWord (kept for interface compatibility)
+            
+        Returns:
+            True if initialization successful, False otherwise
+        """
+        if not OPENWAKEWORD_AVAILABLE:
+            logger.error("openwakeword is not available - cannot initialize OpenWakeWord detector")
+            return False
+        
+        try:
+            # Determine which model file to use (prefer ONNX, fallback to TFLite)
+            model_path = None
+            inference_framework = None
+            
+            if self.model_onnx.exists():
+                model_path = self.model_onnx
+                inference_framework = 'onnx'
+                logger.info(f"Found ONNX model: {model_path}")
+            elif self.model_tflite.exists():
+                model_path = self.model_tflite
+                inference_framework = 'tflite'
+                logger.info(f"Found TFLite model: {model_path}")
+            else:
+                logger.error(f"Custom wake word model not found!")
+                logger.error(f"Expected ONNX model at: {self.model_onnx}")
+                logger.error(f"Or TFLite model at: {self.model_tflite}")
+                return False
+            
+            # Initialize OpenWakeWord model
+            self.model = Model(
+                wakeword_models=[str(model_path)],
+                inference_framework=inference_framework
+            )
+            
+            # Initialize PyAudio
+            self._pa = pyaudio.PyAudio()
+            
+            self.is_initialized = True
+            logger.info(f"OpenWakeWord detector ready | Chunk: {self.chunk_size} | Rate: {self.sample_rate}Hz | Threshold: {self.detection_threshold}")
+            logger.info(f"Using model: {model_path.name} ({inference_framework})")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize OpenWakeWord detector: {e}", exc_info=True)
+            return False
+    
+    def start(self, on_detected: Callable[[], None]):
+        """
+        Start listening for wake words in the background.
+        
+        Args:
+            on_detected: Callback function to call when wake word is detected
+        """
+        if not self.is_initialized:
+            logger.error("OpenWakeWord detector not initialized. Call initialize() first.")
+            return
+            
+        if self.running:
+            logger.warning("OpenWakeWord detector is already running")
+            return
+            
+        self.running = True
+        
+        def _run_loop():
+            """Background thread loop for continuous wake word detection."""
+            try:
+                # Open audio stream
+                self._stream = self._pa.open(
+                    rate=self.sample_rate,
+                    channels=1,
+                    format=pyaudio.paInt16,
+                    input=True,
+                    frames_per_buffer=self.chunk_size
+                )
+                
+                logger.info("OpenWakeWord detection active")
+                
+                while self.running:
+                    try:
+                        # Read audio frame
+                        audio_bytes = self._stream.read(
+                            self.chunk_size,
+                            exception_on_overflow=False
+                        )
+                        
+                        # Convert bytes to numpy array (int16)
+                        audio_data = np.frombuffer(audio_bytes, dtype=np.int16)
+                        
+                        # Get predictions for all models
+                        prediction = self.model.predict(audio_data)
+                        
+                        # Check each model's prediction
+                        for model_name, score in prediction.items():
+                            if score > self.detection_threshold:
+                                logger.info(f"Wake word detected: '{model_name}' (score: {score:.3f})")
+                                try:
+                                    on_detected()
+                                    # Break after first detection to avoid multiple triggers
+                                    break
+                                except Exception as e:
+                                    logger.error(f"Exception in wake word callback: {e}")
+                                
+                    except Exception as e:
+                        if self.running:  # Only log if we're still supposed to be running
+                            logger.error(f"Error in OpenWakeWord detection loop: {e}")
+                            
+            except Exception as e:
+                logger.error(f"Failed to start audio stream: {e}")
+            finally:
+                # Cleanup audio stream
+                if self._stream is not None:
+                    try:
+                        self._stream.stop_stream()
+                        self._stream.close()
+                        self._stream = None
+                    except Exception as e:
+                        logger.error(f"Error closing audio stream: {e}")
+                        
+                logger.info("OpenWakeWord detection loop ended")
+        
+        # Start background thread
+        self._thread = threading.Thread(target=_run_loop, daemon=True)
+        self._thread.start()
+    
+    def stop(self):
+        """Stop the continuous wake word detection."""
+        if not self.running:
+            logger.warning("OpenWakeWord detector is not running")
+            return
+            
+        logger.info("Stopping OpenWakeWord detection...")
+        self.running = False
+        
+        # Wait for thread to finish
+        if self._thread and self._thread.is_alive():
+            self._thread.join(timeout=2.0)
+            
+        logger.info("OpenWakeWord detection stopped")
+    
+    def get_frame_length(self) -> Optional[int]:
+        """Get the required frame length for audio processing."""
+        return self.chunk_size
+    
+    def get_sample_rate(self) -> Optional[int]:
+        """Get the required sample rate for audio processing."""
+        return self.sample_rate
+    
+    def cleanup(self):
+        """Clean up resources."""
+        # Stop detection if running
+        if self.running:
+            self.stop()
+            
+        # Cleanup audio stream
+        if self._stream is not None:
+            try:
+                self._stream.stop_stream()
+                self._stream.close()
+                self._stream = None
+            except Exception as e:
+                logger.error(f"Error closing audio stream during cleanup: {e}")
+        
+        # Cleanup PyAudio
+        if self._pa is not None:
+            try:
+                self._pa.terminate()
+                self._pa = None
+            except Exception as e:
+                logger.error(f"Error terminating PyAudio during cleanup: {e}")
+        
+        # Cleanup OpenWakeWord model
+        if self.model:
+            try:
+                self.model.__del__()
+                logger.info("OpenWakeWord detector cleaned up")
+            except Exception as e:
+                logger.error(f"Error during OpenWakeWord cleanup: {e}")
+            finally:
+                self.model = None
+                self.is_initialized = False
+
+
+def create_wake_word_detector(access_key_file: str, custom_keyword_file: Optional[str] = None, backend_dir: Optional[Path] = None) -> Union[WakeWordDetector, 'OpenWakeWordDetector']:
     """
     Factory function to create a wake word detector.
+    Tries Porcupine first, falls back to OpenWakeWord if Porcupine initialization fails.
     
     Args:
         access_key_file: Path to file containing Picovoice access key (deprecated, now uses env var)
         custom_keyword_file: Path to custom wake word model file
+        backend_dir: Path to backend directory (for OpenWakeWord fallback)
         
     Returns:
-        WakeWordDetector instance
+        WakeWordDetector or OpenWakeWordDetector instance
     """
+    # Try Porcupine first
     try:
-        # Use access key from environment variables
-        return WakeWordDetector(PORCUPINE_ACCESS_KEY, custom_keyword_file)
+        detector = WakeWordDetector(PORCUPINE_ACCESS_KEY, custom_keyword_file)
         
+        # Try to initialize Porcupine
+        if detector.initialize():
+            logger.info("✓ Using Porcupine for wake word detection")
+            return detector
+        else:
+            logger.warning("Porcupine initialization failed, falling back to OpenWakeWord")
+            # Cleanup failed Porcupine detector
+            try:
+                detector.cleanup()
+            except:
+                pass
+    
     except Exception as e:
-        logger.error(f"Failed to create wake word detector: {e}")
-        raise
+        logger.warning(f"Porcupine initialization failed: {e}")
+        logger.info("Falling back to OpenWakeWord")
+    
+    # Fallback to OpenWakeWord
+    if not OPENWAKEWORD_AVAILABLE:
+        logger.error("OpenWakeWord not available - cannot create fallback detector")
+        raise RuntimeError("Both Porcupine and OpenWakeWord are unavailable")
+    
+    # Determine backend_dir if not provided
+    if backend_dir is None:
+        # Try to infer from custom_keyword_file path
+        if custom_keyword_file:
+            backend_dir = Path(custom_keyword_file).parent.parent.parent
+        else:
+            # Fallback: use current file location
+            current_file = Path(__file__)
+            backend_dir = current_file.parent.parent.parent
+    
+    logger.info("Initializing OpenWakeWord as fallback detector...")
+    detector = OpenWakeWordDetector(backend_dir=backend_dir)
+    
+    if detector.initialize():
+        logger.info("✓ Using OpenWakeWord for wake word detection (fallback mode)")
+        return detector
+    else:
+        logger.error("OpenWakeWord initialization also failed")
+        raise RuntimeError("Both Porcupine and OpenWakeWord failed to initialize")
 
 
 # Example usage and testing

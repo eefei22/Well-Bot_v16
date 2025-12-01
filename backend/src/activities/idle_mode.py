@@ -153,10 +153,14 @@ class IdleModeActivity:
                 self.intent_matcher = None
                 return False
             
-            # Initialize wakeword detector
+            # Initialize wakeword detector (with automatic fallback to OpenWakeWord)
             try:
                 wakeword_model_path = self.backend_dir / "config" / "WakeWord" / "WellBot_WakeWordModel.ppn"
-                self.wakeword_detector = create_wake_word_detector(PORCUPINE_ACCESS_KEY, str(wakeword_model_path))
+                self.wakeword_detector = create_wake_word_detector(
+                    PORCUPINE_ACCESS_KEY, 
+                    str(wakeword_model_path),
+                    backend_dir=self.backend_dir
+                )
                 logger.info("✓ Wakeword detector created")
             except Exception as e:
                 logger.error(f"Failed to create wakeword detector: {e}", exc_info=True)
@@ -204,7 +208,10 @@ class IdleModeActivity:
         
         try:
             logger.info("Starting wakeword detector...")
+            # Note: Detector should already be initialized by create_wake_word_detector()
+            # But check anyway for safety
             if not self.wakeword_detector.is_initialized:
+                logger.warning("Wakeword detector not initialized, attempting to initialize now...")
                 if not self.wakeword_detector.initialize():
                     raise RuntimeError("Failed to initialize wakeword detector")
             
