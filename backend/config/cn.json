@@ -121,6 +121,11 @@
       "activity_unavailable": "这个活动现在不能进行。我们试试别的好吗？"
     }
   },
+  "mood_rating": {
+    "prompt_before": "如果你愿意的话——从1到10分——你现在感受到的任何负面情绪有多强烈（1 = 没有，10 = 非常强烈）？",
+    "prompt_after": "如果你愿意的话——从1到10分——你现在感受到的任何负面情绪有多强烈（1 = 没有，10 = 非常强烈）？",
+    "skip_phrases": ["跳过", "不", "现在不要", "稍后", "算了"]
+  },
   "audio_paths": {
     "wokeword_audio_path": "assets/ENGLISH/wokeword_EN_male.wav",
     "start_smalltalk_audio_path": "assets/ENGLISH/start_smalltalk_EN_male.wav",

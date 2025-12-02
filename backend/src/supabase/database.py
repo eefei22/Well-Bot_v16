@@ -208,6 +208,36 @@ def upsert_journal(user_id: str, title: str, body: str, mood: int,
     return res.data[0]
 
 
+def update_journal_title(journal_id: str, title: str) -> bool:
+    """
+    Update the title of an existing journal entry.
+    
+    Args:
+        journal_id: UUID of the journal entry
+        title: New title to set
+    
+    Returns:
+        True if update successful, False otherwise
+    """
+    try:
+        update_data = {
+            "title": title,
+            "updated_at": "now()"
+        }
+        res = sb.table("wb_journal").update(update_data).eq("id", journal_id).execute()
+        
+        if res.data:
+            logger.info(f"Successfully updated journal title for entry {journal_id}")
+            return True
+        else:
+            logger.warning(f"No journal entry found with id {journal_id} to update")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Failed to update journal title for entry {journal_id}: {e}")
+        return False
+
+
 # ---------- Gratitude helpers ----------
 
 def save_gratitude_item(user_id: str, text: str) -> Dict[str, Any]:
@@ -575,6 +605,76 @@ def log_intervention_duration(public_id: str, duration_seconds: Optional[float] 
             
     except Exception as e:
         logger.error(f"Failed to log intervention duration: {e}", exc_info=True)
+        return False
+
+
+def update_mood_rating(public_id: str, pre_rating: Optional[int] = None, post_rating: Optional[int] = None) -> bool:
+    """
+    Update intervention log with mood ratings.
+    
+    Args:
+        public_id: Public ID (UUID string) from log_activity_start()
+        pre_rating: Optional pre-activity mood rating (1-10)
+        post_rating: Optional post-activity mood rating (1-10)
+    
+    Returns:
+        True if successful, False if failed.
+        Non-blocking: errors are logged but don't raise exceptions.
+    
+    Note:
+        Stores ratings as array [pre_rating, post_rating].
+        If only pre_rating exists, stores [pre_rating, None].
+        If both exist, stores [pre_rating, post_rating].
+        If neither exists, stores None.
+    """
+    try:
+        if not public_id:
+            logger.warning("update_mood_rating called with empty public_id")
+            return False
+        
+        # Build mood_rating array
+        mood_rating = None
+        if pre_rating is not None or post_rating is not None:
+            # Validate ratings are in range 1-10
+            if pre_rating is not None and (pre_rating < 1 or pre_rating > 10):
+                logger.warning(f"Invalid pre_rating: {pre_rating}. Must be 1-10.")
+                return False
+            if post_rating is not None and (post_rating < 1 or post_rating > 10):
+                logger.warning(f"Invalid post_rating: {post_rating}. Must be 1-10.")
+                return False
+            
+            # Create array [pre, post] - use None for missing values
+            mood_rating = [pre_rating, post_rating]
+        
+        # Check if record exists and get current mood_rating
+        res = sb.table("intervention_log").select("mood_rating").eq("public_id", public_id).limit(1).execute()
+        if not res.data:
+            logger.warning(f"No intervention log found to update: {public_id}")
+            return False
+        
+        # Handle partial updates: merge with existing data if present
+        existing_rating = res.data[0].get("mood_rating")
+        if existing_rating and isinstance(existing_rating, list) and len(existing_rating) == 2:
+            # Merge: keep existing values if new ones are None
+            if pre_rating is None:
+                pre_rating = existing_rating[0]
+            if post_rating is None:
+                post_rating = existing_rating[1]
+            mood_rating = [pre_rating, post_rating]
+        
+        # Update the record
+        update_data = {"mood_rating": mood_rating}
+        res = sb.table("intervention_log").update(update_data).eq("public_id", public_id).execute()
+        
+        if res.data:
+            logger.info(f"Intervention log updated: {public_id}, mood_rating={mood_rating}")
+            return True
+        else:
+            logger.warning(f"No log record found to update: {public_id}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Failed to update mood rating: {e}", exc_info=True)
         return False
 
 

@@ -19,6 +19,7 @@ except ImportError:
 import pyaudio
 import struct
 import threading
+import time
 from typing import Optional, List, Callable, Union
 from pathlib import Path
 
@@ -302,6 +303,10 @@ class OpenWakeWordDetector:
         self.sample_rate = 16000
         self.chunk_size = 1280  # 80ms at 16kHz
         
+        # Internal debouncing (handled by idle_mode's _on_wake, but add extra safety)
+        self._last_detection_time = 0.0
+        self._detection_debounce_seconds = 0.5  # 500ms debounce within detector
+        
     def initialize(self, built_in_keywords: Optional[List[str]] = None) -> bool:
         """
         Initialize the OpenWakeWord model and PyAudio.
@@ -402,6 +407,12 @@ class OpenWakeWordDetector:
                         # Check each model's prediction
                         for model_name, score in prediction.items():
                             if score > self.detection_threshold:
+                                # Internal debouncing to prevent rapid multiple triggers
+                                current_time = time.time()
+                                if current_time - self._last_detection_time < self._detection_debounce_seconds:
+                                    continue  # Skip this detection, too soon after last one
+                                
+                                self._last_detection_time = current_time
                                 logger.info(f"Wake word detected: '{model_name}' (score: {score:.3f})")
                                 try:
                                     on_detected()
@@ -481,10 +492,12 @@ class OpenWakeWordDetector:
         # Cleanup OpenWakeWord model
         if self.model:
             try:
-                self.model.__del__()
+                # OpenWakeWord Model doesn't have __del__, just set to None
+                # The model will be garbage collected by Python
+                self.model = None
                 logger.info("OpenWakeWord detector cleaned up")
             except Exception as e:
-                logger.error(f"Error during OpenWakeWord cleanup: {e}")
+                logger.warning(f"Error during OpenWakeWord cleanup: {e}")
             finally:
                 self.model = None
                 self.is_initialized = False

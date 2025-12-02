@@ -111,6 +111,11 @@
       "activity_unavailable": "Fungsi itu belum tersedia lagi. Apa lagi yang boleh saya bantu?"
     }
   },
+  "mood_rating": {
+    "prompt_before": "Jika anda mahu — pada skala 1 hingga 10 — betapa kuatnya sebarang emosi negatif yang anda rasa sekarang (1 = tiada, 10 = sangat kuat)?",
+    "prompt_after": "Jika anda mahu — pada skala 1 hingga 10 — betapa kuatnya sebarang emosi negatif yang anda rasa sekarang (1 = tiada, 10 = sangat kuat)?",
+    "skip_phrases": ["langkau", "tidak", "bukan sekarang", "kemudian", "lepaskan"]
+  },
   "audio_paths": {
     "wokeword_audio_path": "assets/BAHASA/wokeword_MY_male.wav",
     "start_smalltalk_audio_path": "assets/BAHASA/start_smalltalk_MY_male.wav",

@@ -11,8 +11,8 @@
     "tts_sample_width_bytes": 2
   },
   "wakeword": {
-    "silence_timeout_seconds": 30,
-    "nudge_timeout_seconds": 20,
+    "silence_timeout_seconds": 10,
+    "nudge_timeout_seconds": 10,
     "stt_timeout_s": 8.0,
     "use_audio_files": false
   },
@@ -60,6 +60,10 @@
   "intervention": {
     "poll_interval_minutes": 15
   },
-  "context_service_url": "https://localhost:8000",
+  "mood_rating": {
+    "enabled": false,
+    "timeout_seconds": 10
+  },
+  "context_service_url": "https://user-context-well-bot-520080168829.asia-south1.run.app",
   "enable_context_processing": true
 }

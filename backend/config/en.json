@@ -113,8 +113,13 @@
       "nudge": "I'm listening. What would you like to do?",
       "timeout": "I'll be here when you need me. Just say my name.",
       "unknown_intent": "I didn't quite catch that. can you call my name again, and I'll be ready to help you.",
-      "activity_unavailable": "That activity isn't available right now. Can we try something else?"
+      "activity_unavailable": "That activity isn't available right now. Can we try something else? Just call my name, Well-Bot, and I'll be ready for you."
     }
+  },
+  "mood_rating": {
+    "prompt_before": "If you'd like — on a scale from 1 to 10 — how strong are any negative emotions you feel right now (1 = none, 10 = very strong)?",
+    "prompt_after": "If you'd like — on a scale from 1 to 10 — how strong are any negative emotions you feel right now (1 = none, 10 = very strong)?",
+    "skip_phrases": ["skip", "no", "not now", "later", "pass"]
   },
   "audio_paths": {
     "wokeword_audio_path": "assets/ENGLISH/wokeword_EN_male.wav",
