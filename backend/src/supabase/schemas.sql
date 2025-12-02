@@ -75,6 +75,7 @@ CREATE TABLE public.intervention_log (
   intervention_type character varying NOT NULL,
   timestamp timestamp without time zone NOT NULL,
   duration interval,
+  mood_rating integer[],
   CONSTRAINT intervention_log_pkey PRIMARY KEY (id),
   CONSTRAINT intervention_log_emotional_log_id_fkey FOREIGN KEY (emotional_log_id) REFERENCES public.emotional_log(id),
   CONSTRAINT intervention_log_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
@@ -275,6 +276,7 @@ CREATE TABLE public.wb_gratitude_item (
   user_id uuid NOT NULL,
   text text NOT NULL,
   created_at timestamp with time zone NOT NULL DEFAULT now(),
+  updated_at timestamp with time zone,
   CONSTRAINT wb_gratitude_item_pkey PRIMARY KEY (id),
   CONSTRAINT wb_gratitude_item_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id)
 );

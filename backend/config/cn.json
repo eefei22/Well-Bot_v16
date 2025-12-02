@@ -108,6 +108,10 @@
     },
     "smalltalk_suggestion_message": "如果你不想做这些建议的活动，也许我们可以聊聊天？"
   },
+  "startup": {
+    "device_not_associated": "此设备未关联任何用户。请联系 Well-Bot 客户服务寻求帮助。",
+    "startup_completed": "启动完成。你好 {name}，叫我 Well-Bot 来唤醒我！"
+  },
   "wakeword_responses": {
     "prompts": {
       "wakeword_detected": "嘿，我听到你叫我了。今天想做什么？",
@@ -116,6 +120,11 @@
       "unknown_intent": "我没听清楚。你可以再叫我一次，我就能帮你啦。",
       "activity_unavailable": "这个活动现在不能进行。我们试试别的好吗？"
     }
+  },
+  "mood_rating": {
+    "prompt_before": "如果你愿意的话——从1到10分——你现在感受到的任何负面情绪有多强烈（1 = 没有，10 = 非常强烈）？",
+    "prompt_after": "如果你愿意的话——从1到10分——你现在感受到的任何负面情绪有多强烈（1 = 没有，10 = 非常强烈）？",
+    "skip_phrases": ["跳过", "不", "现在不要", "稍后", "算了"]
   },
   "audio_paths": {
     "wokeword_audio_path": "assets/ENGLISH/wokeword_EN_male.wav",

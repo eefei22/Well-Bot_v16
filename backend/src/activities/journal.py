@@ -32,7 +32,7 @@ from src.components import (
     TerminationPhraseDetector,
     TerminationPhraseDetected
 )
-from src.supabase.database import upsert_journal
+from src.supabase.database import upsert_journal, update_journal_title
 from src.utils.config_resolver import get_global_config_for_user, get_language_config
 from src.supabase.auth import get_current_user_id
 from src.utils.journal_title_client import JournalTitleClient
@@ -449,8 +449,8 @@ class JournalActivity:
             word_count = len(body.split())
             logger.info(f"Prepared journal body: {len(body)} chars, {word_count} words (first 100 chars: {body[:100]})")
         
-        # Generate title (try cloud service first, fallback to timestamp)
-        title = self._generate_title(body)
+        # Generate timestamp title immediately (no waiting for cloud service)
+        title = self._generate_title()
         
         # Get mood
         mood = self.global_journal_config.get("default_mood", 3)
@@ -458,7 +458,7 @@ class JournalActivity:
         # Extract topics (placeholder for future)
         topics = self._extract_topics(body)
         
-        # Save to database
+        # Save to database immediately with timestamp title
         try:
             result = upsert_journal(
                 user_id=self.user_id,
@@ -468,10 +468,24 @@ class JournalActivity:
                 topics=topics,
                 is_draft=False
             )
-            logger.info(f"Journal entry saved successfully: {result.get('id')}")
+            journal_id = result.get('id')
+            logger.info(f"Journal entry saved successfully: {journal_id}")
             
             # Mark as saved
             self._saved = True
+            
+            # Start background thread to generate and update title asynchronously
+            if journal_id and self.title_client:
+                logger.info("Starting background thread for title generation...")
+                title_thread = threading.Thread(
+                    target=self._generate_title_async,
+                    args=(journal_id, body),
+                    daemon=True  # Daemon thread won't block shutdown
+                )
+                title_thread.start()
+                logger.info("Background title generation thread started")
+            else:
+                logger.debug("Skipping title generation (no journal_id or title_client)")
             
             # Confirmation TTS from config
             try:
@@ -493,33 +507,62 @@ class JournalActivity:
     
     def _generate_title(self, body: Optional[str] = None) -> str:
         """
-        Generate title for journal entry.
+        Generate timestamp-based title for journal entry.
         
-        First attempts to generate a meaningful title from content using cloud service.
-        Falls back to timestamp-based title if cloud service fails.
+        This is used for immediate save. Title generation from content
+        happens asynchronously in the background via _generate_title_async().
         
         Args:
-            body: Optional journal body text for title generation
+            body: Optional journal body text (not used, kept for compatibility)
         
         Returns:
-            Generated title string
+            Timestamp-based title string
         """
-        # Try to generate title from content if body is provided and client is available
-        if body and self.title_client:
-            logger.info("Attempting to generate title from journal content...")
+        now = datetime.now()
+        timestamp_title = f"Journal {now.strftime('%Y-%m-%d %H:%M')}"
+        logger.debug(f"Generated timestamp-based title: '{timestamp_title}'")
+        return timestamp_title
+    
+    def _generate_title_async(self, journal_id: str, body: str):
+        """
+        Generate title asynchronously in background thread and update journal entry.
+        
+        This method runs in a background thread after the journal entry is saved.
+        It generates a meaningful title from content and updates the database.
+        
+        Args:
+            journal_id: UUID of the journal entry to update
+            body: Journal entry body text for title generation
+        """
+        if not journal_id:
+            logger.warning("Cannot generate title asynchronously: journal_id is missing")
+            return
+        
+        if not self.title_client:
+            logger.warning("Cannot generate title asynchronously: title_client is not available")
+            return
+        
+        try:
+            logger.info(f"Background: Generating title for journal entry {journal_id}...")
+            
+            # Generate title from content
             generated_title = self.title_client.generate_title(body, retry=True)
             
             if generated_title:
-                logger.info(f"Successfully generated title from content: '{generated_title}'")
-                return generated_title
+                logger.info(f"Background: Successfully generated title: '{generated_title}'")
+                
+                # Update journal entry with new title
+                success = update_journal_title(journal_id, generated_title)
+                if success:
+                    logger.info(f"Background: Successfully updated journal entry {journal_id} with new title")
+                else:
+                    logger.warning(f"Background: Failed to update journal entry {journal_id} with new title")
             else:
-                logger.warning("Title generation failed, falling back to timestamp title")
-        
-        # Fallback to timestamp-based title
-        now = datetime.now()
-        timestamp_title = f"Journal {now.strftime('%Y-%m-%d %H:%M')}"
-        logger.info(f"Using timestamp-based title: '{timestamp_title}'")
-        return timestamp_title
+                logger.warning(f"Background: Title generation failed for journal entry {journal_id}, keeping timestamp title")
+                
+        except Exception as e:
+            logger.error(f"Background: Error generating/updating title for journal entry {journal_id}: {e}", exc_info=True)
+            # Don't propagate error - user already has saved entry with timestamp title
     
     def _extract_topics(self, text: str) -> List[str]:
         """Extract topics from text (placeholder for future implementation)"""
@@ -746,6 +789,9 @@ class JournalActivity:
             
         except Exception as e:
             logger.error(f"Error running Journal activity: {e}", exc_info=True)
+            # Notify user that activity encountered an error
+            from src.components.activity_error_handler import handle_activity_error
+            handle_activity_error(self.backend_dir, self.user_id, activity_name="journaling", error_context=str(e))
             return False
     
     def is_active(self) -> bool:

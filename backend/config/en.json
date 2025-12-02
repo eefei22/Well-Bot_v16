@@ -103,14 +103,23 @@
     },
     "smalltalk_suggestion_message": "If you're not feeling like doing any of these suggestions, maybe we can just have a chat?"
   },
+  "startup": {
+    "device_not_associated": "This device is not associated to any user. Please contact Well-Bot customer service for assistance.",
+    "startup_completed": "Startup completed. Hi {name}, call me Well-Bot to wake me up!"
+  },
   "wakeword_responses": {
     "prompts": {
       "wakeword_detected": "Hey, I heard you called me. What would you like to do today?",
       "nudge": "I'm listening. What would you like to do?",
       "timeout": "I'll be here when you need me. Just say my name.",
       "unknown_intent": "I didn't quite catch that. can you call my name again, and I'll be ready to help you.",
-      "activity_unavailable": "That activity isn't available right now. Can we try something else?"
+      "activity_unavailable": "That activity isn't available right now. Can we try something else? Just call my name, Well-Bot, and I'll be ready for you."
     }
+  },
+  "mood_rating": {
+    "prompt_before": "If you'd like — on a scale from 1 to 10 — how strong are any negative emotions you feel right now (1 = none, 10 = very strong)?",
+    "prompt_after": "If you'd like — on a scale from 1 to 10 — how strong are any negative emotions you feel right now (1 = none, 10 = very strong)?",
+    "skip_phrases": ["skip", "no", "not now", "later", "pass"]
   },
   "audio_paths": {
     "wokeword_audio_path": "assets/ENGLISH/wokeword_EN_male.wav",

@@ -2,11 +2,11 @@
 """
 OpenWakeWord Feasibility Test
 
-This script tests OpenWakeWord as a potential replacement for Porcupine.
-It uses built-in pre-trained models to verify:
+This script tests OpenWakeWord with the custom 'well-bot' wake word model.
+It verifies:
 - Audio capture works correctly
 - OpenWakeWord runs in real-time on the hardware
-- Detection accuracy and performance
+- Detection accuracy and performance with the custom model
 
 Usage:
     python test_openwakeword.py
@@ -52,6 +52,11 @@ except ImportError:
 
 import numpy as np
 
+# Custom model configuration
+WAKEWORD_MODEL_DIR = backend_dir / 'config' / 'WakeWord'
+WAKEWORD_MODEL_ONNX = WAKEWORD_MODEL_DIR / 'well_bot.onnx'
+WAKEWORD_MODEL_TFLITE = WAKEWORD_MODEL_DIR / 'well_bot.tflite'
+
 
 def download_models_if_needed():
     """Download OpenWakeWord models if not already present."""
@@ -65,7 +70,7 @@ def download_models_if_needed():
 
 
 def test_openwakeword():
-    """Test OpenWakeWord with built-in models."""
+    """Test OpenWakeWord with custom 'well-bot' wake word model."""
     
     if not PYAUDIO_AVAILABLE:
         logger.error("Cannot run test: pyaudio not available")
@@ -75,17 +80,37 @@ def test_openwakeword():
         logger.error("Cannot run test: openwakeword not available")
         return False
     
-    # Download models
-    download_models_if_needed()
+    # Determine which model file to use (prefer ONNX, fallback to TFLite)
+    model_path = None
+    inference_framework = None
     
-    # Initialize OpenWakeWord model
-    logger.info("Initializing OpenWakeWord model...")
+    if WAKEWORD_MODEL_ONNX.exists():
+        model_path = WAKEWORD_MODEL_ONNX
+        inference_framework = 'onnx'
+        logger.info(f"Found ONNX model: {model_path}")
+    elif WAKEWORD_MODEL_TFLITE.exists():
+        model_path = WAKEWORD_MODEL_TFLITE
+        inference_framework = 'tflite'
+        logger.info(f"Found TFLite model: {model_path}")
+    else:
+        logger.error(f"Custom wake word model not found!")
+        logger.error(f"Expected ONNX model at: {WAKEWORD_MODEL_ONNX}")
+        logger.error(f"Or TFLite model at: {WAKEWORD_MODEL_TFLITE}")
+        return False
+    
+    # Initialize OpenWakeWord model with custom model
+    logger.info("Initializing OpenWakeWord model with custom 'well-bot' model...")
     try:
-        model = Model()
-        logger.info(f"✓ Model initialized with {len(model.models)} built-in models")
-        logger.info(f"Available models: {list(model.models.keys())}")
+        model = Model(
+            wakeword_models=[str(model_path)],
+            inference_framework=inference_framework
+        )
+        logger.info(f"✓ Custom model initialized successfully")
+        logger.info(f"Model file: {model_path.name}")
+        logger.info(f"Inference framework: {inference_framework}")
+        logger.info(f"Available wake words: {list(model.models.keys())}")
     except Exception as e:
-        logger.error(f"Failed to initialize model: {e}", exc_info=True)
+        logger.error(f"Failed to initialize custom model: {e}", exc_info=True)
         return False
     
     # Audio configuration (matching your existing setup)
@@ -120,9 +145,9 @@ def test_openwakeword():
         
         logger.info("✓ Audio stream opened")
         logger.info("\n" + "="*60)
-        logger.info("Listening for wake words...")
+        logger.info("Listening for wake word...")
         logger.info(f"Detection threshold: {DETECTION_THRESHOLD}")
-        logger.info("Say wake words like 'hey jarvis', 'alexa', etc.")
+        logger.info("Say 'well-bot' to test the custom wake word detection")
         logger.info("Press Ctrl+C to stop")
         logger.info("="*60 + "\n")
         
@@ -194,7 +219,7 @@ def test_openwakeword():
 
 if __name__ == "__main__":
     logger.info("="*60)
-    logger.info("OpenWakeWord Feasibility Test")
+    logger.info("OpenWakeWord Test - Custom 'well-bot' Wake Word Model")
     logger.info("="*60)
     
     success = test_openwakeword()
@@ -202,9 +227,9 @@ if __name__ == "__main__":
     if success:
         logger.info("\n✓ Test completed successfully")
         logger.info("\nNext steps:")
-        logger.info("  1. Verify detections work correctly")
+        logger.info("  1. Verify 'well-bot' detections work correctly")
         logger.info("  2. Check CPU/memory usage")
-        logger.info("  3. Test with custom wake word model (if needed)")
+        logger.info("  3. Adjust detection threshold if needed")
     else:
         logger.error("\n✗ Test failed - check errors above")
         sys.exit(1)

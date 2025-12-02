@@ -98,6 +98,10 @@
     },
     "smalltalk_suggestion_message": "Jika anda tidak mahu melakukan mana-mana cadangan ini, mungkin kita boleh berbual?"
   },
+  "startup": {
+    "device_not_associated": "Peranti ini tidak dikaitkan dengan mana-mana pengguna. Sila hubungi perkhidmatan pelanggan Well-Bot untuk bantuan.",
+    "startup_completed": "Permulaan selesai. Hai {name}, panggil saya Well-Bot untuk membangunkan saya!"
+  },
   "wakeword_responses": {
     "prompts": {
       "wakeword_detected": "Hey, saya dengar anda memanggil saya. Apa yang boleh saya bantu?",
@@ -106,6 +110,11 @@
       "unknown_intent": "Saya tidak begitu faham. Bolehkah anda mengulanginya?",
       "activity_unavailable": "Fungsi itu belum tersedia lagi. Apa lagi yang boleh saya bantu?"
     }
+  },
+  "mood_rating": {
+    "prompt_before": "Jika anda mahu — pada skala 1 hingga 10 — betapa kuatnya sebarang emosi negatif yang anda rasa sekarang (1 = tiada, 10 = sangat kuat)?",
+    "prompt_after": "Jika anda mahu — pada skala 1 hingga 10 — betapa kuatnya sebarang emosi negatif yang anda rasa sekarang (1 = tiada, 10 = sangat kuat)?",
+    "skip_phrases": ["langkau", "tidak", "bukan sekarang", "kemudian", "lepaskan"]
   },
   "audio_paths": {
     "wokeword_audio_path": "assets/BAHASA/wokeword_MY_male.wav",
