@@ -5,9 +5,44 @@ import logging
 import random
 import json
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 logger = logging.getLogger(__name__)
+
+# Malaysian timezone (UTC+8) - for consistent timestamp handling
+def get_malaysia_timezone():
+    """
+    Get Malaysia timezone (UTC+8) object.
+    Tries zoneinfo first, falls back to pytz, then manual offset.
+    
+    Returns:
+        Timezone object for Asia/Kuala_Lumpur (UTC+8)
+    """
+    try:
+        from zoneinfo import ZoneInfo
+        return ZoneInfo("Asia/Kuala_Lumpur")
+    except (ImportError, Exception):
+        # ZoneInfoNotFoundError, ImportError, or other issues - fall back to pytz
+        try:
+            import pytz
+            return pytz.timezone("Asia/Kuala_Lumpur")
+        except ImportError:
+            # Final fallback: manual UTC+8 offset
+            return timezone(timedelta(hours=8))
+
+
+def get_current_time_utc8_naive() -> datetime:
+    """
+    Get current time in UTC+8 (Malaysia timezone) as timezone-naive.
+    This is used for database timestamps which are stored as timezone-naive in UTC+8.
+    
+    Returns:
+        Datetime object without timezone info (but represents UTC+8 time)
+    """
+    malaysia_tz = get_malaysia_timezone()
+    now_utc8 = datetime.now(malaysia_tz)
+    # Convert to naive datetime (removes timezone but keeps the UTC+8 time)
+    return now_utc8.replace(tzinfo=None)
 
 # If you're running everything locally now, hardcode your dev user_id here:
 # NOTE: This constant is deprecated. Use get_current_user_id() instead.
@@ -171,6 +206,36 @@ def upsert_journal(user_id: str, title: str, body: str, mood: int,
     }
     res = sb.table("wb_journal").insert(payload).execute()
     return res.data[0]
+
+
+def update_journal_title(journal_id: str, title: str) -> bool:
+    """
+    Update the title of an existing journal entry.
+    
+    Args:
+        journal_id: UUID of the journal entry
+        title: New title to set
+    
+    Returns:
+        True if update successful, False otherwise
+    """
+    try:
+        update_data = {
+            "title": title,
+            "updated_at": "now()"
+        }
+        res = sb.table("wb_journal").update(update_data).eq("id", journal_id).execute()
+        
+        if res.data:
+            logger.info(f"Successfully updated journal title for entry {journal_id}")
+            return True
+        else:
+            logger.warning(f"No journal entry found with id {journal_id} to update")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Failed to update journal title for entry {journal_id}: {e}")
+        return False
 
 
 # ---------- Gratitude helpers ----------
@@ -347,15 +412,18 @@ def get_user_persona_summary(user_id: str) -> Optional[str]:
     return None
 
 
-def save_user_context_to_local(user_id: str, persona_summary: Optional[str] = None, facts: Optional[str] = None, backend_dir: Optional[Path] = None) -> bool:
+def save_user_context_to_local(user_id: str, persona_summary: Optional[str] = None, facts: Optional[str] = None, backend_dir: Optional[Path] = None, prefer_name: Optional[str] = None, full_name: Optional[str] = None) -> bool:
     """
     Save user context (persona_summary and facts) to local JSON file as fallback.
+    Preserves existing prefer_name and full_name if not provided.
     
     Args:
         user_id: User UUID
         persona_summary: Persona summary text (optional)
         facts: Facts text (optional)
         backend_dir: Backend directory path (optional, will be inferred if not provided)
+        prefer_name: User's preferred name (optional, will preserve existing if not provided)
+        full_name: User's full name (optional, will preserve existing if not provided)
         
     Returns:
         True if successful, False otherwise
@@ -370,11 +438,23 @@ def save_user_context_to_local(user_id: str, persona_summary: Optional[str] = No
         
         file_path = config_dir / "user_persona.json"
         
+        # Load existing data to preserve prefer_name and full_name if not provided
+        existing_data = {}
+        if file_path.exists():
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    existing_data = json.load(f)
+            except Exception as e:
+                logger.debug(f"Could not load existing user_persona.json: {e}")
+        
+        # Build data dict, preserving existing prefer_name/full_name if not provided
         data = {
             "user_id": user_id,
             "persona_summary": persona_summary,
             "facts": facts,
-            "last_updated": datetime.utcnow().isoformat()
+            "prefer_name": prefer_name if prefer_name is not None else existing_data.get("prefer_name"),
+            "full_name": full_name if full_name is not None else existing_data.get("full_name"),
+            "last_updated": get_current_time_utc8_naive().isoformat()
         }
         
         with open(file_path, 'w', encoding='utf-8') as f:
@@ -440,7 +520,7 @@ def log_activity_start(
     
     Args:
         user_id: User ID
-        activity_type: Type of intervention ('journal', 'gratitude', 'todo', 'meditation', 'quote')
+        activity_type: Type of intervention ('journal', 'gratitude', 'todo', 'meditation', 'quote', 'activity_suggestion')
         emotional_log_id: Optional emotional_log ID if intervention was triggered by emotion detection.
                          None for command-triggered interventions.
     
@@ -450,14 +530,14 @@ def log_activity_start(
     """
     try:
         # Validate enum values match schema constraints
-        valid_activity_types = ['journal', 'gratitude', 'todo', 'meditation', 'quote']
+        valid_activity_types = ['journal', 'gratitude', 'todo', 'meditation', 'quote', 'activity_suggestion']
         
         if activity_type not in valid_activity_types:
             logger.error(f"Invalid activity_type: {activity_type}. Must be one of {valid_activity_types}")
             return None
         
-        # Get current timestamp (timezone-naive for intervention_log)
-        current_timestamp = datetime.now().replace(tzinfo=None)
+        # Get current timestamp in UTC+8 (timezone-naive for intervention_log)
+        current_timestamp = get_current_time_utc8_naive()
         
         payload = {
             "user_id": user_id,
@@ -506,7 +586,8 @@ def log_intervention_duration(public_id: str, duration_seconds: Optional[float] 
                 log_timestamp = datetime.fromisoformat(res.data[0]["timestamp"].replace('Z', '+00:00'))
                 if log_timestamp.tzinfo:
                     log_timestamp = log_timestamp.replace(tzinfo=None)
-                now = datetime.now()
+                # Use UTC+8 current time for consistent calculation
+                now = get_current_time_utc8_naive()
                 duration_seconds = (now - log_timestamp).total_seconds()
                 update_data["duration"] = f"{duration_seconds} seconds"
             else:
@@ -524,6 +605,76 @@ def log_intervention_duration(public_id: str, duration_seconds: Optional[float] 
             
     except Exception as e:
         logger.error(f"Failed to log intervention duration: {e}", exc_info=True)
+        return False
+
+
+def update_mood_rating(public_id: str, pre_rating: Optional[int] = None, post_rating: Optional[int] = None) -> bool:
+    """
+    Update intervention log with mood ratings.
+    
+    Args:
+        public_id: Public ID (UUID string) from log_activity_start()
+        pre_rating: Optional pre-activity mood rating (1-10)
+        post_rating: Optional post-activity mood rating (1-10)
+    
+    Returns:
+        True if successful, False if failed.
+        Non-blocking: errors are logged but don't raise exceptions.
+    
+    Note:
+        Stores ratings as array [pre_rating, post_rating].
+        If only pre_rating exists, stores [pre_rating, None].
+        If both exist, stores [pre_rating, post_rating].
+        If neither exists, stores None.
+    """
+    try:
+        if not public_id:
+            logger.warning("update_mood_rating called with empty public_id")
+            return False
+        
+        # Build mood_rating array
+        mood_rating = None
+        if pre_rating is not None or post_rating is not None:
+            # Validate ratings are in range 1-10
+            if pre_rating is not None and (pre_rating < 1 or pre_rating > 10):
+                logger.warning(f"Invalid pre_rating: {pre_rating}. Must be 1-10.")
+                return False
+            if post_rating is not None and (post_rating < 1 or post_rating > 10):
+                logger.warning(f"Invalid post_rating: {post_rating}. Must be 1-10.")
+                return False
+            
+            # Create array [pre, post] - use None for missing values
+            mood_rating = [pre_rating, post_rating]
+        
+        # Check if record exists and get current mood_rating
+        res = sb.table("intervention_log").select("mood_rating").eq("public_id", public_id).limit(1).execute()
+        if not res.data:
+            logger.warning(f"No intervention log found to update: {public_id}")
+            return False
+        
+        # Handle partial updates: merge with existing data if present
+        existing_rating = res.data[0].get("mood_rating")
+        if existing_rating and isinstance(existing_rating, list) and len(existing_rating) == 2:
+            # Merge: keep existing values if new ones are None
+            if pre_rating is None:
+                pre_rating = existing_rating[0]
+            if post_rating is None:
+                post_rating = existing_rating[1]
+            mood_rating = [pre_rating, post_rating]
+        
+        # Update the record
+        update_data = {"mood_rating": mood_rating}
+        res = sb.table("intervention_log").update(update_data).eq("public_id", public_id).execute()
+        
+        if res.data:
+            logger.info(f"Intervention log updated: {public_id}, mood_rating={mood_rating}")
+            return True
+        else:
+            logger.warning(f"No log record found to update: {public_id}")
+            return False
+            
+    except Exception as e:
+        logger.error(f"Failed to update mood rating: {e}", exc_info=True)
         return False
 
 
@@ -549,8 +700,8 @@ def query_recent_activity_logs(
         Returns empty list if query fails.
     """
     try:
-        # Calculate cutoff timestamp (timezone-naive)
-        cutoff_time = datetime.now().replace(tzinfo=None) - timedelta(days=days_back)
+        # Calculate cutoff timestamp in UTC+8 (timezone-naive)
+        cutoff_time = get_current_time_utc8_naive() - timedelta(days=days_back)
         
         # Build query
         query = (

@@ -17,8 +17,8 @@
   },
   "journal": {
     "termination_phrases": [
-      "henti jurnal",
-      "simpan jurnal",
+      "henti",
+      "simpan",
       "tamat entri",
       "itu sahaja",
       "selesai jurnal",
@@ -72,15 +72,17 @@
     "opener": "Itu cantik sekali. Apa lagi yang ada dalam fikiran anda?"
   },
   "activity_suggestion": {
-    "system_prompt": "Anda adalah Well-Bot, penolong kesejahteraan yang mesra dan menggalakkan. Anda sedang mempersembahkan cadangan aktiviti kepada pengguna. Ucapkan salam dengan mesra dan senaraikan aktiviti yang dicadangkan secara eksplisit dari ranking tertinggi hingga ranking terendah. Kekalkan respons anda ringkas, mesra, dan menggalakkan. Selepas menyenaraikan aktiviti, tanyakan yang mana satu mereka ingin cuba.",
-    "cold_start_intro": "Berikut adalah beberapa aktiviti kesejahteraan yang boleh anda cuba:",
+    "system_prompt": "Berikut adalah beberapa aktiviti yang boleh anda cuba: ",
+    "cold_start_intro": "Berikut adalah beberapa aktiviti yang boleh anda cuba: ",
     "starting_activity_feedback": "Memulakan {activity} sekarang",
     "no_match_feedback": "Saya tidak begitu faham",
     "suggestions_unavailable": "Cadangan tidak tersedia sekarang",
     "unknown_intent_prompt": "Saya tidak begitu faham, tetapi biar saya cadangkan sesuatu untuk anda",
+    "intervention_trigger_prompt": "Hei, Saya nampak anda tidak berada dalam keadaan baik, adakah anda ingin melakukan aktiviti bersama saya?",
     "prompts": {
       "nudge": "Adakah anda masih di situ? Aktiviti mana yang anda ingin cuba?",
-      "timeout": "Nampaknya anda tiada di situ. Saya akan berehat sekarang. Panggil nama saya apabila anda sudah bersedia untuk bercakap lagi."
+      "timeout": "Nampaknya anda tiada di situ. Saya akan berehat sekarang. Panggil nama saya apabila anda sudah bersedia untuk bercakap lagi.",
+      "termination": "Baiklah, jumpa lagi nanti."
     },
     "activity_names": {
       "journaling": "Menulis Jurnal",
@@ -93,7 +95,12 @@
       "journaling": "peluang untuk merenung dan melepaskan fikiran anda",
       "quote": "dosis motivasi dan perspektif yang cepat",
       "gratitude": "fokus pada kebaikan untuk mencerahkan hari anda"
-    }
+    },
+    "smalltalk_suggestion_message": "Jika anda tidak mahu melakukan mana-mana cadangan ini, mungkin kita boleh berbual?"
+  },
+  "startup": {
+    "device_not_associated": "Peranti ini tidak dikaitkan dengan mana-mana pengguna. Sila hubungi perkhidmatan pelanggan Well-Bot untuk bantuan.",
+    "startup_completed": "Permulaan selesai. Hai {name}, panggil saya Well-Bot untuk membangunkan saya!"
   },
   "wakeword_responses": {
     "prompts": {
@@ -103,6 +110,11 @@
       "unknown_intent": "Saya tidak begitu faham. Bolehkah anda mengulanginya?",
       "activity_unavailable": "Fungsi itu belum tersedia lagi. Apa lagi yang boleh saya bantu?"
     }
+  },
+  "mood_rating": {
+    "prompt_before": "Jika anda mahu — pada skala 1 hingga 10 — betapa kuatnya sebarang emosi negatif yang anda rasa sekarang (1 = tiada, 10 = sangat kuat)?",
+    "prompt_after": "Jika anda mahu — pada skala 1 hingga 10 — betapa kuatnya sebarang emosi negatif yang anda rasa sekarang (1 = tiada, 10 = sangat kuat)?",
+    "skip_phrases": ["langkau", "tidak", "bukan sekarang", "kemudian", "lepaskan"]
   },
   "audio_paths": {
     "wokeword_audio_path": "assets/BAHASA/wokeword_MY_male.wav",

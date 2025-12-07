@@ -441,6 +441,9 @@ class MeditationActivity:
             
         except Exception as e:
             logger.error(f"Meditation activity error: {e}", exc_info=True)
+            # Notify user that activity encountered an error
+            from src.components.activity_error_handler import handle_activity_error
+            handle_activity_error(self.backend_dir, self.user_id, activity_name="meditation", error_context=str(e))
             completed = False
             return False
         finally:

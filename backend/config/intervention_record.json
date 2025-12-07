@@ -9,8 +9,8 @@
   },
   "latest_decision": {
     "trigger_intervention": false,
-    "confidence_score": 0.1155,
-    "reasoning": "Confidence 0.23 < 0.7"
+    "confidence_score": 0.0,
+    "reasoning": "Recent activity 14.4 minutes ago"
   },
   "latest_suggestion": {
     "ranked_activities": [
@@ -22,22 +22,21 @@
       {
         "activity_type": "journal",
         "rank": 2,
-        "score": 0.778
+        "score": 0.808
       },
       {
         "activity_type": "quote",
         "rank": 3,
-        "score": 0.667
+        "score": 0.707
       },
       {
         "activity_type": "gratitude",
         "rank": 4,
-        "score": 0.556
+        "score": 0.635
       }
     ],
-    "reasoning": "Emotion: Angry; Top suggestion: meditation (score: 1.000)"
+    "reasoning": "Emotion: Fear; Top suggestion: meditation (score: 1.000)"
   },
-  "last_request_time": "2025-12-07T14:55:26.146504",
-  "last_response_time": "2025-12-07T14:55:28.320633",
-  "last_database_query_time": "2025-12-07T14:55:24.751627"
+  "last_request_time": "2025-12-01T12:18:26.455133+08:00",
+  "last_response_time": "2025-12-01T12:18:35.584834+08:00"
 }

@@ -248,7 +248,7 @@ class SmallTalkActivity:
             logger.info(f"Making POST request to context processor...")
             response = requests.post(
                 endpoint,
-                json={"user_id": user_id},
+                json={"user_id": user_id, "conversation_id": conversation_id},
                 headers={"Content-Type": "application/json"},
                 timeout=300  # 5 minutes - processing can take 1-3 minutes
             )
@@ -617,6 +617,9 @@ class SmallTalkActivity:
             
         except Exception as e:
             logger.error(f"Error running SmallTalk activity: {e}", exc_info=True)
+            # Notify user that activity encountered an error
+            from src.components.activity_error_handler import handle_activity_error
+            handle_activity_error(self.backend_dir, self.user_id, activity_name="smalltalk", error_context=str(e))
             self.stop()
             self.cleanup()  # Ensure cleanup is called to trigger context processor
             return False

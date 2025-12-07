@@ -42,9 +42,6 @@ class InterventionServiceClient:
     def get_suggestion(
         self,
         user_id: str,
-        emotion_label: str,
-        confidence_score: float,
-        timestamp: datetime,
         context_time_of_day: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
@@ -52,9 +49,6 @@ class InterventionServiceClient:
         
         Args:
             user_id: User UUID
-            emotion_label: Emotion label ('Angry', 'Sad', 'Happy', 'Fear')
-            confidence_score: Confidence score (0.0 to 1.0)
-            timestamp: Timestamp of the emotion detection
             context_time_of_day: Optional time of day context ('morning', 'afternoon', 'evening', 'night')
         
         Returns:
@@ -83,17 +77,14 @@ class InterventionServiceClient:
         try:
             # Prepare request payload
             payload = {
-                "user_id": user_id,
-                "emotion_label": emotion_label,
-                "confidence_score": confidence_score,
-                "timestamp": timestamp.isoformat(),
+                "user_id": user_id
             }
             
             if context_time_of_day:
                 payload["context_time_of_day"] = context_time_of_day
             
             logger.info(f"Requesting suggestion from {self.suggest_endpoint}")
-            logger.debug(f"Payload: user_id={user_id}, emotion={emotion_label}, confidence={confidence_score}")
+            logger.debug(f"Payload: user_id={user_id}")
             
             # Make HTTP request
             response = requests.post(

@@ -12,7 +12,7 @@ import time
 import logging
 import subprocess
 from pathlib import Path
-from typing import Optional, Callable, Dict, Any
+from typing import Optional, Callable, Dict, Any, Union
 
 # For playing wakeword audio - use pydub as primary, PowerShell as fallback
 try:
@@ -28,7 +28,7 @@ backend_dir = Path(__file__).parent.parent.parent
 sys.path.append(str(backend_dir))
 
 # Import components (use absolute imports like other activities)
-from src.components.wakeword import WakeWordDetector, create_wake_word_detector
+from src.components.wakeword import WakeWordDetector, OpenWakeWordDetector, create_wake_word_detector
 from src.components.mic_stream import MicStream
 from src.components.tts import GoogleTTSClient
 from src.components.stt import GoogleSTTService
@@ -36,6 +36,7 @@ from src.components.keyword_intent_matcher import KeywordIntentMatcher
 from src.utils.config_loader import PORCUPINE_ACCESS_KEY
 from src.utils.config_resolver import get_global_config_for_user, get_language_config
 from src.utils.intervention_record import InterventionRecordManager
+from src.utils.intervention_poller import InterventionPoller
 from src.supabase.auth import get_current_user_id
 
 logger = logging.getLogger(__name__)
@@ -74,10 +75,12 @@ class IdleModeActivity:
         self.ui_interface = ui_interface
         
         # Components (initialized in initialize())
-        self.wakeword_detector: Optional[WakeWordDetector] = None
+        # Can be either WakeWordDetector (Porcupine) or OpenWakeWordDetector (fallback)
+        self.wakeword_detector: Optional[Union[WakeWordDetector, OpenWakeWordDetector]] = None
         self.stt_service: Optional[GoogleSTTService] = None
         self.tts_service: Optional[GoogleTTSClient] = None
         self.intent_matcher: Optional[KeywordIntentMatcher] = None
+        self.intervention_poller: Optional[InterventionPoller] = None
         
         # Configs (loaded in initialize())
         self.global_config: Optional[dict] = None
@@ -94,6 +97,10 @@ class IdleModeActivity:
         self._stt_thread: Optional[threading.Thread] = None
         self._current_mic: Optional[MicStream] = None
         
+        # Wake word debouncing to prevent rapid multiple triggers
+        self._last_wake_time = 0.0
+        self._wake_debounce_seconds = 2.0  # Ignore wake words within 2 seconds of last detection
+        
         # Silence monitoring
         self._silence_timer: Optional[threading.Timer] = None
         self._silence_lock = threading.Lock()
@@ -101,6 +108,7 @@ class IdleModeActivity:
         # Intent detection flag (to exit run() after intent detected)
         self._intent_detected = threading.Event()
         self._timeout_occurred = threading.Event()  # Flag for timeout (no intent)
+        self._intervention_triggered = threading.Event()  # Flag for intervention trigger
         self._detected_transcript: Optional[str] = None
         self._detected_intent: Optional[Dict[str, Any]] = None
         
@@ -153,14 +161,40 @@ class IdleModeActivity:
                 self.intent_matcher = None
                 return False
             
-            # Initialize wakeword detector
+            # Initialize wakeword detector (with automatic fallback to OpenWakeWord)
             try:
-                wakeword_model_path = self.backend_dir / "config" / "WakeWord" / "WellBot_WakeWordModel_ARM.ppn"
-                self.wakeword_detector = create_wake_word_detector(PORCUPINE_ACCESS_KEY, str(wakeword_model_path))
+                wakeword_model_path = self.backend_dir / "config" / "WakeWord" / "WellBot_WakeWordModel.ppn"
+                self.wakeword_detector = create_wake_word_detector(
+                    PORCUPINE_ACCESS_KEY, 
+                    str(wakeword_model_path),
+                    backend_dir=self.backend_dir
+                )
                 logger.info("✓ Wakeword detector created")
             except Exception as e:
                 logger.error(f"Failed to create wakeword detector: {e}", exc_info=True)
                 return False
+            
+            # Initialize intervention poller
+            try:
+                import os
+                from dotenv import load_dotenv
+                load_dotenv()
+                service_url = os.getenv("CLOUD_SERVICE_URL")
+                
+                record_file_path = self.backend_dir / "config" / "intervention_record.json"
+                poll_interval_minutes = self.global_config.get("intervention", {}).get("poll_interval_minutes", 15)
+                
+                self.intervention_poller = InterventionPoller(
+                    user_id=self.user_id,
+                    record_file_path=record_file_path,
+                    poll_interval_minutes=poll_interval_minutes,
+                    service_url=service_url,
+                    on_intervention_triggered=self._on_intervention_triggered
+                )
+                logger.info(f"✓ Intervention poller initialized (interval: {poll_interval_minutes} minutes)")
+            except Exception as e:
+                logger.warning(f"Failed to initialize intervention poller: {e}", exc_info=True)
+                self.intervention_poller = None
             
             self._initialized = True
             logger.info("✅ Idle Mode activity initialized successfully")
@@ -182,11 +216,22 @@ class IdleModeActivity:
         
         try:
             logger.info("Starting wakeword detector...")
+            # Detector should already be initialized by create_wake_word_detector()
+            # Verify initialization status
             if not self.wakeword_detector.is_initialized:
-                if not self.wakeword_detector.initialize():
-                    raise RuntimeError("Failed to initialize wakeword detector")
+                logger.error("Wakeword detector was not initialized during creation - this should not happen")
+                raise RuntimeError("Wakeword detector not initialized")
             
             self.wakeword_detector.start(self._on_wake)
+            
+            # Start intervention poller
+            if self.intervention_poller:
+                try:
+                    self.intervention_poller.start()
+                    logger.info("✓ Intervention poller started")
+                except Exception as e:
+                    logger.warning(f"Failed to start intervention poller: {e}")
+            
             self._active = True
             logger.info("✅ Idle mode active: listening for wake word")
             return True
@@ -203,6 +248,17 @@ class IdleModeActivity:
         
         logger.info("Stopping idle mode activity...")
         
+        # Stop intervention poller
+        if self.intervention_poller:
+            try:
+                self.intervention_poller.stop()
+                logger.info("✓ Intervention poller stopped")
+            except Exception as e:
+                logger.warning(f"Error stopping intervention poller: {e}")
+        
+        # Mark as inactive FIRST to prevent callbacks from stale STT sessions
+        self._active = False
+        
         # Stop silence monitoring
         self._stop_silence_monitoring()
         
@@ -213,21 +269,28 @@ class IdleModeActivity:
             except Exception as e:
                 logger.warning(f"Error stopping wakeword detector: {e}")
         
-        # Stop mic immediately
+        # Stop STT session immediately and forcefully
         with self._lock:
             if self._current_mic and self._current_mic.is_running():
-                logger.debug("Stopping mic during idle mode stop")
+                logger.info("Stopping mic during idle mode stop")
                 self._current_mic.stop()
                 self._current_mic = None
+            # Mark STT as inactive to prevent new wake word processing
+            self.stt_active = False
         
         # Wait for STT thread to complete if it's running
+        # Don't try to join if we're in the STT thread itself (would cause "cannot join current thread" error)
         if self._stt_thread and self._stt_thread.is_alive():
-            logger.info("Waiting for intent recognition session to complete...")
-            self._stt_thread.join(timeout=2.0)
-            if self._stt_thread.is_alive():
-                logger.warning("STT thread did not complete within timeout, continuing anyway")
+            current_thread = threading.current_thread()
+            if self._stt_thread is not current_thread:
+                logger.info("Waiting for intent recognition session to complete...")
+                self._stt_thread.join(timeout=1.0)  # Reduced timeout for faster cleanup
+                if self._stt_thread.is_alive():
+                    logger.warning("STT thread did not complete within timeout, continuing anyway")
+            else:
+                logger.debug("STT thread is current thread - skipping join to avoid deadlock")
         
-        # Ensure mic is cleared
+        # Ensure mic is cleared and stopped
         with self._lock:
             if self._current_mic:
                 try:
@@ -236,35 +299,107 @@ class IdleModeActivity:
                 except:
                     pass
                 self._current_mic = None
+            # Reset STT active flag
+            self.stt_active = False
         
-        self._active = False
+        # Clear any intent flags to prevent stale intents from being detected on restart
+        self._intent_detected.clear()
+        self._detected_intent = None
+        self._detected_transcript = None
+        
         logger.info("✅ Idle mode stopped")
+    
+    def _on_intervention_triggered(self):
+        """Callback when intervention trigger is detected from poller"""
+        logger.info("🎯 Intervention trigger detected - preparing to launch activity suggestion")
+        logger.info(f"Current state: _active={self._active}, _intervention_triggered.is_set()={self._intervention_triggered.is_set()}")
+        
+        # Stop wakeword detection
+        if self.wakeword_detector:
+            try:
+                self.wakeword_detector.stop()
+            except Exception as e:
+                logger.warning(f"Error stopping wakeword detector: {e}")
+        
+        # Load intervention prompt from language config
+        try:
+            activity_suggestion_config = self.language_config.get("activity_suggestion", {})
+            intervention_prompt = activity_suggestion_config.get(
+                "intervention_trigger_prompt",
+                "I'm seeing that you're having a good day would you like to do an activity with me?"
+            )
+        except Exception as e:
+            logger.warning(f"Failed to load intervention prompt from config: {e}")
+            intervention_prompt = "I'm seeing that you're having a good day would you like to do an activity with me?"
+        
+        logger.info(f"Speaking intervention prompt: {intervention_prompt}")
+        self._speak(intervention_prompt)
+        
+        # Set flag to exit idle_mode and route to activity suggestion
+        self._intervention_triggered.set()
+        logger.info("✅ Intervention trigger flag set - will route to activity suggestion")
+        logger.info(f"After setting flag: _active={self._active}, _intervention_triggered.is_set()={self._intervention_triggered.is_set()}")
     
     def run(self) -> bool:
         """
         Run the idle mode activity
         
         Returns:
-            True if intent was detected (activity should exit to allow routing)
+            True if intent was detected or intervention triggered (activity should exit to allow routing)
             False on error or if activity was stopped
         """
         logger.info("🎬 IdleModeActivity.run() - Starting idle mode execution")
         
         try:
+            # Clear any stale state before starting (in case of restart)
+            # This ensures we start with a clean slate
+            self._intent_detected.clear()
+            self._timeout_occurred.clear()
+            self._detected_intent = None
+            self._detected_transcript = None
+            # Note: We don't clear _intervention_triggered here because it might be set
+            # by the poller callback before we enter the wait loop
+            
             # Start the activity
             if not self.start():
                 logger.error("❌ Failed to start idle mode")
                 return False
             
-            # Wait for intent to be detected or activity to be stopped
-            logger.info("Waiting for wake word detection and intent recognition...")
+            # Check if intervention was already triggered before we entered the wait loop
+            # This handles the case where the poller callback fired between reinitialize() and run()
+            if self._intervention_triggered.is_set():
+                logger.info("✅ Intervention already triggered (detected before wait loop) - exiting idle mode to route to activity suggestion")
+                # Clear the intervention trigger flag to prevent duplicate handling
+                self._intervention_triggered.clear()
+                # Stop the activity (poller will be stopped)
+                self.stop()
+                # Set intent to "activity_suggestion" so orchestrator routes correctly
+                self._detected_intent = {"intent": "activity_suggestion", "confidence": 1.0}
+                self._detected_transcript = ""
+                self._intent_detected.set()
+                return True
             
-            # Wait for intent detection event or timeout (with timeout check for activity state)
-            while self._active and not self._intent_detected.is_set() and not self._timeout_occurred.is_set():
+            # Wait for intent to be detected, intervention trigger, or activity to be stopped
+            logger.info("Waiting for wake word detection, intent recognition, or intervention trigger...")
+            
+            # Wait for intent detection event, intervention trigger, or timeout
+            while self._active and not self._intent_detected.is_set() and not self._intervention_triggered.is_set() and not self._timeout_occurred.is_set():
                 time.sleep(0.1)  # Small sleep to avoid busy waiting
             
+            # Check if intervention was triggered
+            if self._intervention_triggered.is_set():
+                logger.info("✅ Intervention triggered - exiting idle mode to route to activity suggestion")
+                # Clear the intervention trigger flag to prevent duplicate handling
+                self._intervention_triggered.clear()
+                # Stop the activity (poller will be stopped)
+                self.stop()
+                # Set intent to "activity_suggestion" so orchestrator routes correctly
+                self._detected_intent = {"intent": "activity_suggestion", "confidence": 1.0}
+                self._detected_transcript = ""
+                self._intent_detected.set()
+                return True
             # Check if intent was detected
-            if self._intent_detected.is_set():
+            elif self._intent_detected.is_set():
                 logger.info("✅ Intent detected - exiting idle mode to allow routing")
                 # Stop the activity
                 self.stop()
@@ -284,6 +419,24 @@ class IdleModeActivity:
             logger.error(f"Error running idle mode activity: {e}", exc_info=True)
             self.stop()
             return False
+    
+    def get_detected_intent(self) -> Optional[Dict[str, Any]]:
+        """
+        Get the detected intent and transcript.
+        
+        Returns:
+            Dictionary with 'intent' and 'confidence' keys, or None if no intent detected
+        """
+        return self._detected_intent
+    
+    def get_detected_transcript(self) -> Optional[str]:
+        """
+        Get the detected transcript.
+        
+        Returns:
+            Transcript string, or None if no transcript available
+        """
+        return self._detected_transcript
     
     def cleanup(self):
         """Clean up all resources"""
@@ -306,13 +459,26 @@ class IdleModeActivity:
         """Re-initialize the activity for subsequent runs"""
         logger.info("🔄 Re-initializing Idle Mode activity...")
         
+        # Cleanup existing wakeword detector before resetting state
+        if self.wakeword_detector:
+            try:
+                logger.debug("Cleaning up existing wakeword detector before reinitialize")
+                self.wakeword_detector.cleanup()
+            except Exception as e:
+                logger.warning(f"Error cleaning up wakeword detector during reinitialize: {e}")
+            finally:
+                self.wakeword_detector = None
+        
         # Reset state
         self._active = False
         self._initialized = False
         self._intent_detected.clear()
         self._timeout_occurred.clear()
+        self._intervention_triggered.clear()
         self._detected_transcript = None
         self._detected_intent = None
+        self._last_wake_time = 0.0  # Reset wake word debounce timer
+        self.stt_active = False  # Reset STT active flag
         
         # Re-initialize components
         return self.initialize()
@@ -419,12 +585,25 @@ class IdleModeActivity:
 
     def _on_wake(self):
         """Callback when wake word is detected"""
-        logger.info("Wake word detected")
+        current_time = time.time()
+        
+        # Atomic debounce check and state update to prevent race conditions
         with self._lock:
+            # Debounce: ignore wake words detected too quickly after the last one
+            if current_time - self._last_wake_time < self._wake_debounce_seconds:
+                logger.debug(f"Ignoring wake word detected too soon (debounce: {self._wake_debounce_seconds}s)")
+                return
+            
+            # Check if STT is already active
             if self.stt_active:
                 logger.warning("Intent recognition already active after wakeword – ignoring this wake event")
                 return
+            
+            # Update state atomically: mark STT as active and update last wake time
             self.stt_active = True
+            self._last_wake_time = current_time
+        
+        logger.info("Wake word detected")
 
         # Load wakeword response config
         wakeword_config = self.language_config.get("wakeword_responses", {})
@@ -492,6 +671,13 @@ class IdleModeActivity:
         
         logger.info("Keyword intent recognition session started")
         
+        # Check if activity is still active before starting (prevent stale sessions)
+        if not self._active:
+            logger.debug("Idle mode no longer active, aborting STT session")
+            with self._lock:
+                self.stt_active = False
+            return
+        
         # Use standard STT parameters (16kHz)
         mic = MicStream(rate=16000, chunk_size=1600)  # 100ms chunks at 16kHz
         
@@ -540,7 +726,8 @@ class IdleModeActivity:
                 mic.stop()
             
             # Only proceed with intent recognition if transcript has at least one word
-            if transcript and transcript.strip():
+            # AND activity is still active (prevent processing stale transcripts)
+            if transcript and transcript.strip() and self._active:
                 # Check if transcript has at least one word (not just whitespace)
                 words = transcript.strip().split()
                 if len(words) > 0:
@@ -553,6 +740,11 @@ class IdleModeActivity:
                         # If no intent matched, set unknown
                         intent_result = {"intent": "unknown", "confidence": 0.0}
                         logger.info("[IdleMode] No intent understood, defaulting to unknown")
+                    
+                    # Double-check activity is still active before proceeding
+                    if not self._active:
+                        logger.debug("Idle mode stopped during intent processing, aborting callback")
+                        return
                     
                     # Store results and signal intent detection
                     self._detected_transcript = transcript
@@ -580,17 +772,28 @@ class IdleModeActivity:
                         except Exception as e:
                             logger.warning(f"Failed to check trigger_intervention or speak prompt: {e}")
                     
-                    # Invoke callback if provided
-                    if self.on_intent_detected:
+                    # Final check: ensure activity is still active before signaling intent
+                    if not self._active:
+                        logger.debug("Idle mode stopped before signaling intent, aborting")
+                        return
+                    
+                    # Signal that intent was detected (this will cause run() to exit)
+                    # Do this BEFORE invoking callback to prevent race conditions
+                    self._intent_detected.set()
+                    
+                    # Invoke callback if provided (only if activity is still active)
+                    # Check if activity is active to prevent stale callbacks from completing STT sessions
+                    if self.on_intent_detected and self._active:
                         try:
                             self.on_intent_detected(self._detected_transcript, self._detected_intent)
                         except Exception as e:
                             logger.error(f"Error invoking intent detected callback: {e}")
-                    
-                    # Signal that intent was detected (this will cause run() to exit)
-                    self._intent_detected.set()
+                    elif self.on_intent_detected and not self._active:
+                        logger.debug("Skipping callback invocation - idle mode is no longer active (likely stopped)")
                 else:
                     logger.info("[IdleMode] Transcript is empty or whitespace only - skipping intent recognition")
+            elif transcript and transcript.strip() and not self._active:
+                logger.debug("Transcript received but idle mode is no longer active, ignoring")
             else:
                 logger.info("[IdleMode] No transcript received - skipping intent recognition")
             
@@ -659,11 +862,16 @@ class IdleModeActivity:
         
         # Check if STT thread is still running (it should have been stopped by _stop_stt_session)
         # If it's still running, wait for it to finish
+        # Don't try to join if we're in the STT thread itself (would cause "cannot join current thread" error)
         if self._stt_thread and self._stt_thread.is_alive():
-            logger.info("Waiting for previous STT thread to finish...")
-            self._stt_thread.join(timeout=1.0)
-            if self._stt_thread.is_alive():
-                logger.warning("Previous STT thread did not finish within timeout")
+            current_thread = threading.current_thread()
+            if self._stt_thread is not current_thread:
+                logger.info("Waiting for previous STT thread to finish...")
+                self._stt_thread.join(timeout=1.0)
+                if self._stt_thread.is_alive():
+                    logger.warning("Previous STT thread did not finish within timeout")
+            else:
+                logger.debug("STT thread is current thread - skipping join to avoid deadlock")
         
         # Reset stt_active flag
         with self._lock:

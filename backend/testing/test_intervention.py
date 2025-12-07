@@ -129,23 +129,16 @@ def test_cloud_service(emotion_entry: dict):
             timestamp = datetime.now()
         
         # Prepare request
-        emotion_label = emotion_entry.get("emotion_label", "Sad")
-        confidence_score = emotion_entry.get("confidence_score", 0.85)
         user_id = emotion_entry.get("user_id")
         
         print(f"\nRequesting suggestion from cloud service...")
         print(f"  User ID: {user_id}")
-        print(f"  Emotion: {emotion_label}")
-        print(f"  Confidence: {confidence_score}")
-        print(f"  Timestamp: {timestamp}")
+        print(f"  Note: Cloud service will fetch latest emotion from database")
         
         # Make request
         request_time = datetime.now()
         response = client.get_suggestion(
-            user_id=user_id,
-            emotion_label=emotion_label,
-            confidence_score=confidence_score,
-            timestamp=timestamp
+            user_id=user_id
         )
         response_time = datetime.now()
         
@@ -224,7 +217,6 @@ def test_record_saving(emotion_entry: dict, cloud_response: dict):
         suggestion = response_data.get("suggestion", {})
         
         success = manager.update_record(
-            emotion_entry=emotion_entry,
             decision=decision,
             suggestion=suggestion,
             request_time=cloud_response.get("request_time"),

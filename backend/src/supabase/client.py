@@ -36,3 +36,34 @@ def fetch_user_by_id(user_id: str, client: Optional[Client] = None) -> Optional[
     except Exception as e:
         logger.error(f"Failed to fetch user {user_id}: {e}")
         return None
+
+def fetch_user_by_device_id(device_id: str, client: Optional[Client] = None) -> Optional[Dict]:
+    """
+    Fetch user record by device_id.
+    Returns user dict with id, prefer_name, full_name fields or None if not found.
+    
+    Args:
+        device_id: Device UUID to look up
+        client: Optional Supabase client (will create one if not provided)
+    
+    Returns:
+        Dictionary with user fields (id, prefer_name, full_name) or None if not found
+    """
+    if client is None:
+        client = get_supabase(service=True)
+    
+    try:
+        response = client.table("users")\
+            .select("id, prefer_name, full_name")\
+            .eq("device_id", device_id)\
+            .limit(1)\
+            .execute()
+        
+        if response.data and len(response.data) > 0:
+            logger.info(f"Successfully fetched user for device_id {device_id}")
+            return response.data[0]
+        logger.warning(f"No user found for device_id {device_id}")
+        return None
+    except Exception as e:
+        logger.error(f"Failed to fetch user by device_id {device_id}: {e}")
+        return None

@@ -45,8 +45,13 @@ SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 
+# Device Identity Configuration
+# Device ID is hardcoded per device and used to resolve user information from database
+DEVICE_ID = os.getenv("DEVICE_ID")
+
 # User Identity Configuration (for development/testing)
-# In production, this will be replaced with JWT token authentication
+# DEPRECATED: Use DEVICE_ID instead. This is kept for backward compatibility during transition.
+# In production, user_id will be resolved from DEVICE_ID via database lookup.
 DEV_USER_ID = os.getenv("DEV_USER_ID")
 
 # Porcupine Wake Word Configuration

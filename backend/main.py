@@ -33,14 +33,18 @@ from src.components.mic_stream import MicStream
 # from src.activities.gratitude import GratitudeActivity
 # from src.activities.activity_suggestion import ActivitySuggestionActivity
 from src.activities.idle_mode import IdleModeActivity
-from src.utils.config_resolver import get_global_config_for_user, resolve_language
-from src.supabase.auth import get_current_user_id
-from src.supabase.database import log_activity_start
-from src.utils.intervention_poller import InterventionPoller
+from src.utils.config_resolver import get_global_config_for_user, resolve_language, get_language_config
+from src.supabase.auth import get_current_user_id, resolve_user_from_device_id
+from src.supabase.database import log_activity_start, save_user_context_to_local, update_mood_rating
+from src.components.activity_logger import prompt_mood_rating_before_activity, prompt_mood_rating_after_activity
 
 # GUI imports
 from src.components.ui_interface import UIInterface, NoOpUIInterface
 from src.gui import start_gui
+from src.utils.config_loader import DEVICE_ID, load_language_config
+from src.components.tts import GoogleTTSClient
+from google.cloud import texttospeech
+import pyaudio
 
 # Configure logging
 logging.basicConfig(
@@ -71,9 +75,59 @@ class WellBotOrchestrator:
         self.backend_dir = backend_dir
         self.wakeword_model_path  = self.backend_dir / "config" / "WakeWord" / "WellBot_WakeWordModel.ppn"
         
-        # Get current user at startup
-        self.user_id = get_current_user_id()
-        logger.info(f"Orchestrator initialized for user: {self.user_id}")
+        # Resolve user from device_id at startup
+        if not DEVICE_ID:
+            # Load English config for error message (default)
+            try:
+                en_config = load_language_config('en')
+                error_message = en_config.get('startup', {}).get('device_not_associated', 
+                    "This device is not associated to any user. Please contact Well-Bot customer service for assistance.")
+                
+                # Speak error message via TTS
+                logger.error("DEVICE_ID environment variable is not set")
+                self._speak_startup_message(error_message, language='en')
+                logger.error(error_message)
+            except Exception as tts_error:
+                logger.warning(f"Failed to speak error message: {tts_error}")
+            
+            raise ValueError(
+                "DEVICE_ID environment variable is not set. "
+                "Please set DEVICE_ID in your .env file to identify this device."
+            )
+        
+        logger.info(f"Resolving user for device_id: {DEVICE_ID}")
+        try:
+            user_info = resolve_user_from_device_id(DEVICE_ID)
+            self.user_id = user_info['user_id']
+            self.prefer_name = user_info.get('prefer_name')
+            self.full_name = user_info.get('full_name')
+            
+            # Save user info to user_persona.json
+            save_user_context_to_local(
+                user_id=self.user_id,
+                prefer_name=self.prefer_name,
+                full_name=self.full_name,
+                backend_dir=self.backend_dir
+            )
+            logger.info(f"✓ User resolved and saved: user_id={self.user_id}, prefer_name={self.prefer_name}, full_name={self.full_name}")
+        except ValueError as e:
+            # Load English config for error message (default)
+            try:
+                en_config = load_language_config('en')
+                error_message = en_config.get('startup', {}).get('device_not_associated',
+                    "This device is not associated to any user. Please contact Well-Bot customer service for assistance.")
+                
+                # Speak error message via TTS
+                logger.error(f"Failed to resolve user from device_id {DEVICE_ID}: {e}")
+                self._speak_startup_message(error_message, language='en')
+                logger.error(error_message)
+            except Exception as tts_error:
+                logger.warning(f"Failed to speak error message: {tts_error}")
+            
+            raise RuntimeError(
+                f"Cannot start Well-Bot: {e}. "
+                "Please ensure the device is registered in the database."
+            ) from e
         
         # Load user-specific config (will be loaded in _initialize_components)
         self.global_config = None
@@ -90,16 +144,72 @@ class WellBotOrchestrator:
 
         self.current_activity: Optional[str] = None
         self._activity_thread: Optional[threading.Thread] = None
+        self._idle_mode_thread: Optional[threading.Thread] = None  # Track idle mode thread
+        self._transitioning_to_activity = False  # Flag to prevent idle mode restart during activity transition
+        self._restarting_idle_mode = False  # Flag to prevent multiple concurrent idle mode restarts
         self._current_activity_log_id: Optional[str] = None  # Track log ID for completion
-
-        # Intervention polling service
-        self.intervention_poller: Optional[InterventionPoller] = None
+        self._pre_activity_mood_rating: Optional[int] = None  # Store pre-activity mood rating
         
         # UI interface (for GUI updates)
         self.ui_interface = None
         self._gui_window = None
 
         logger.info("WellBotOrchestrator initialized")
+
+    def _speak_startup_message(self, text: str, language: str = 'en') -> bool:
+        """
+        Speak a startup message using TTS.
+        
+        Args:
+            text: Text to speak
+            language: Language code ('en', 'cn', 'bm') - defaults to 'en'
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Get language codes for TTS
+            from src.utils.config_resolver import LANGUAGE_CODES
+            lang_config = LANGUAGE_CODES.get(language, LANGUAGE_CODES['en'])
+            
+            # Initialize TTS service
+            tts_service = GoogleTTSClient(
+                voice_name=lang_config['tts_voice_name'],
+                language_code=lang_config['tts_language_code'],
+                audio_encoding=texttospeech.AudioEncoding.LINEAR16,
+                sample_rate_hertz=24000,
+                num_channels=1,
+                sample_width_bytes=2
+            )
+            
+            # Generate PCM chunks
+            def text_gen():
+                yield text
+            
+            pcm_chunks = tts_service.stream_synthesize(text_gen())
+            
+            # Play PCM chunks using PyAudio
+            pa = pyaudio.PyAudio()
+            stream = pa.open(
+                format=pyaudio.paInt16,
+                channels=1,
+                rate=24000,
+                output=True
+            )
+            
+            for chunk in pcm_chunks:
+                stream.write(chunk)
+            
+            stream.stop_stream()
+            stream.close()
+            pa.terminate()
+            
+            logger.info(f"TTS startup message played: {text[:50]}...")
+            return True
+            
+        except Exception as e:
+            logger.warning(f"Failed to speak startup message: {e}", exc_info=True)
+            return False
 
     def _validate_config_files(self) -> bool:
         """Validate that all required config files exist."""
@@ -115,16 +225,53 @@ class WellBotOrchestrator:
             return False
         return True
 
+    def _is_activity_running(self) -> bool:
+        """
+        Atomically check if any activity is currently running.
+        
+        Returns:
+            True if an activity is active (state is ACTIVITY_ACTIVE and thread is alive), False otherwise
+        """
+        with self._lock:
+            is_active = (
+                self.state == SystemState.ACTIVITY_ACTIVE and
+                self._activity_thread is not None and
+                self._activity_thread.is_alive()
+            )
+            return is_active
+
     def _stop_idle_mode_for_activity(self):
         """Stop idle mode activity before starting another activity"""
+        logger.info("🔇 Stopping idle mode activity before starting new activity…")
+        
+        # Set flag to prevent idle mode from restarting during transition
+        self._transitioning_to_activity = True
+        
+        # Stop the activity object
         if self.idle_mode_activity:
-            logger.info("🔇 Stopping idle mode activity before starting new activity…")
             try:
                 self.idle_mode_activity.stop()
                 logger.info("✅ Idle mode activity stopped successfully")
             except Exception as e:
                 logger.warning(f"Ignoring error while stopping idle mode: {e}")
                 logger.info("⚠️ Continuing despite stop error...")
+        
+        # Wait for the idle mode thread to finish (if it's running)
+        # Don't try to join if we're in the idle mode thread itself (would cause "cannot join current thread" error)
+        if self._idle_mode_thread and self._idle_mode_thread.is_alive():
+            current_thread = threading.current_thread()
+            if self._idle_mode_thread is not current_thread:
+                logger.info("Waiting for idle mode thread to finish...")
+                # Set a timeout to avoid blocking indefinitely
+                self._idle_mode_thread.join(timeout=2.0)
+                # Check again after join (thread might have been cleared by another thread)
+                if self._idle_mode_thread and self._idle_mode_thread.is_alive():
+                    logger.warning("Idle mode thread did not finish within timeout, continuing anyway")
+                else:
+                    logger.info("✅ Idle mode thread finished")
+            else:
+                logger.debug("Idle mode thread is current thread - skipping join to avoid deadlock")
+            self._idle_mode_thread = None
         
         # Add a tiny guard delay (Windows USB audio sometimes needs this)
         logger.info("⏱️ Adding guard delay for Windows audio device release...")
@@ -230,6 +377,14 @@ class WellBotOrchestrator:
         with self._lock:
             if self.state != SystemState.LISTENING:
                 logger.warning(f"Intent detected but system in state {self.state.value}, ignoring")
+                # Clear intent flags if we're ignoring this intent
+                if self.idle_mode_activity:
+                    try:
+                        self.idle_mode_activity._intent_detected.clear()
+                        self.idle_mode_activity._detected_intent = None
+                        self.idle_mode_activity._detected_transcript = None
+                    except:
+                        pass
                 return
             
             # Transition to processing state
@@ -248,39 +403,201 @@ class WellBotOrchestrator:
         # Release lock before calling _route_to_activity to avoid deadlock
         self._route_to_activity(intent, transcript)
 
-    def _route_to_activity(self, intent: str, transcript: str):
-        """Route the user to proper activity based on intent."""
+    def _prompt_pre_activity_mood_rating(self, intent: str) -> Optional[int]:
+        """
+        Prompt user for pre-activity mood rating.
+        
+        Args:
+            intent: Activity intent name
+            
+        Returns:
+            Mood rating (1-10) or None if skipped/timed out/error
+        """
+        try:
+            # Get activity instance and initialize if needed
+            activity = None
+            if intent == "smalltalk":
+                if self.smalltalk_activity is None:
+                    from src.activities.smalltalk import SmallTalkActivity
+                    self.smalltalk_activity = SmallTalkActivity(
+                        backend_dir=self.backend_dir,
+                        user_id=self.user_id,
+                        ui_interface=self.ui_interface
+                    )
+                    if not self.smalltalk_activity.initialize():
+                        logger.error("Failed to initialize SmallTalk activity for mood rating")
+                        return None
+                activity = self.smalltalk_activity
+            elif intent == "journaling":
+                if self.journal_activity is None:
+                    from src.activities.journal import JournalActivity
+                    self.journal_activity = JournalActivity(
+                        backend_dir=self.backend_dir,
+                        user_id=self.user_id
+                    )
+                    if not self.journal_activity.initialize():
+                        logger.error("Failed to initialize Journal activity for mood rating")
+                        return None
+                activity = self.journal_activity
+            elif intent == "meditation":
+                if self.meditation_activity is None:
+                    from src.activities.meditation import MeditationActivity
+                    self.meditation_activity = MeditationActivity(
+                        backend_dir=self.backend_dir,
+                        user_id=self.user_id
+                    )
+                    if not self.meditation_activity.initialize():
+                        logger.error("Failed to initialize Meditation activity for mood rating")
+                        return None
+                activity = self.meditation_activity
+            elif intent == "quote":
+                if self.spiritual_quote_activity is None:
+                    from src.activities.spiritual_quote import SpiritualQuoteActivity
+                    self.spiritual_quote_activity = SpiritualQuoteActivity(
+                        backend_dir=self.backend_dir,
+                        user_id=self.user_id
+                    )
+                    if not self.spiritual_quote_activity.initialize():
+                        logger.error("Failed to initialize SpiritualQuote activity for mood rating")
+                        return None
+                activity = self.spiritual_quote_activity
+            elif intent == "gratitude":
+                if self.gratitude_activity is None:
+                    from src.activities.gratitude import GratitudeActivity
+                    self.gratitude_activity = GratitudeActivity(
+                        backend_dir=self.backend_dir,
+                        user_id=self.user_id
+                    )
+                    if not self.gratitude_activity.initialize():
+                        logger.error("Failed to initialize Gratitude activity for mood rating")
+                        return None
+                activity = self.gratitude_activity
+            
+            if not activity:
+                logger.warning(f"No activity found for intent: {intent}")
+                return None
+            
+            # Get configs
+            language_config = get_language_config(self.user_id)
+            global_config = get_global_config_for_user(self.user_id)
+            timeout_seconds = global_config.get("mood_rating", {}).get("timeout_seconds", 10.0)
+            
+            # Get TTS, STT, and audio_manager from activity
+            tts_service = getattr(activity, 'tts_service', None)
+            stt_service = getattr(activity, 'stt_service', None)
+            audio_manager = getattr(activity, 'audio_manager', None)
+            
+            if not (tts_service and stt_service and audio_manager):
+                logger.warning(f"Activity {intent} missing required services for mood rating")
+                return None
+            
+            # Prompt for mood rating
+            return prompt_mood_rating_before_activity(
+                tts_service=tts_service,
+                stt_service=stt_service,
+                audio_manager=audio_manager,
+                language_config=language_config,
+                global_config=global_config,
+                timeout_seconds=timeout_seconds
+            )
+        except Exception as e:
+            logger.error(f"Error in _prompt_pre_activity_mood_rating: {e}", exc_info=True)
+            return None
+
+    def _prompt_post_activity_mood_rating(self, activity) -> Optional[int]:
+        """
+        Prompt user for post-activity mood rating.
+        
+        Args:
+            activity: Activity instance
+            
+        Returns:
+            Mood rating (1-10) or None if skipped/timed out/error
+        """
+        try:
+            if not activity:
+                return None
+            
+            # Get configs
+            language_config = get_language_config(self.user_id)
+            global_config = get_global_config_for_user(self.user_id)
+            
+            # Check if mood rating is enabled
+            mood_rating_enabled = global_config.get("mood_rating", {}).get("enabled", True)
+            if not mood_rating_enabled:
+                logger.debug("Mood rating is disabled, skipping post-activity prompt")
+                return None
+            
+            timeout_seconds = global_config.get("mood_rating", {}).get("timeout_seconds", 10.0)
+            
+            # Get TTS, STT, and audio_manager from activity
+            tts_service = getattr(activity, 'tts_service', None)
+            stt_service = getattr(activity, 'stt_service', None)
+            audio_manager = getattr(activity, 'audio_manager', None)
+            
+            if not (tts_service and stt_service and audio_manager):
+                logger.warning("Activity missing required services for mood rating")
+                return None
+            
+            # Prompt for mood rating
+            return prompt_mood_rating_after_activity(
+                tts_service=tts_service,
+                stt_service=stt_service,
+                audio_manager=audio_manager,
+                language_config=language_config,
+                global_config=global_config,
+                timeout_seconds=timeout_seconds
+            )
+        except Exception as e:
+            logger.error(f"Error in _prompt_post_activity_mood_rating: {e}", exc_info=True)
+            return None
+
+    def _route_to_activity(self, intent: str, transcript: str, allow_nested_routing: bool = False):
+        """Route the user to proper activity based on intent.
+        
+        Args:
+            intent: The intent to route to
+            transcript: The transcript associated with the intent
+            allow_nested_routing: If True, allows routing when already in an activity (for activity_suggestion → other activity)
+        """
         logger.info(f"🔄 Routing to activity: {intent}")
         
-        # Only check trigger_intervention if user didn't explicitly request an activity
-        # If intent is "unknown", we can use intervention suggestions
-        if intent == "unknown":
-            try:
-                from src.utils.intervention_record import InterventionRecordManager
-                record_path = self.backend_dir / "config" / "intervention_record.json"
-                record_manager = InterventionRecordManager(record_path)
-                record = record_manager.load_record()
-                
-                decision = record.get("latest_decision", {})
-                trigger_intervention = decision.get("trigger_intervention", False)
-                
-                if trigger_intervention:
-                    logger.info("🎯 trigger_intervention=true detected - launching activity suggestion")
-                    self._start_activity_suggestion_activity()
-                    return
-            except Exception as e:
-                logger.warning(f"Failed to check trigger_intervention: {e}")
+        # Check if an activity is already running
+        # Store thread reference and activity name atomically to avoid race conditions
+        with self._lock:
+            is_running = (
+                self.state == SystemState.ACTIVITY_ACTIVE and
+                self._activity_thread is not None and
+                self._activity_thread.is_alive()
+            )
+            current_activity_name = self.current_activity
+            activity_thread_ref = self._activity_thread  # Store reference while holding lock
         
-        # Stop intervention poller when starting an activity
-        self._stop_intervention_poller()
+        if is_running:
+            # Allow nested routing if explicitly requested (e.g., activity_suggestion routing to another activity)
+            if allow_nested_routing:
+                current_thread = threading.current_thread()
+                if activity_thread_ref is current_thread:
+                    logger.info(f"✅ Allowing nested routing from activity thread: {intent}")
+                    # Clear current activity state before starting new activity to prevent guard from blocking
+                    # The finally block of the old activity will skip cleanup due to nested_routing_occurred flag
+                    with self._lock:
+                        self._activity_thread = None
+                        # Keep state as ACTIVITY_ACTIVE since new activity will set it
+                else:
+                    logger.warning(f"⚠️ Activity already running ({current_activity_name}), but allow_nested_routing=True requested from different thread - allowing anyway")
+            else:
+                logger.warning(f"⚠️ Cannot route to '{intent}': activity '{current_activity_name}' is already running. Ignoring routing request.")
+                return
 
         # Map intent to activity type for logging
         intent_to_activity_type = {
-            "smalltalk": None,  # Smalltalk is not logged as an activity
+            "smalltalk": "smalltalk",  # Smalltalk is now logged as an activity
             "journaling": "journal",
             "meditation": "meditation",
             "quote": "quote",
             "gratitude": "gratitude",
+            "activity_suggestion": "activity_suggestion",
             "termination": None,
         }
         
@@ -295,8 +612,26 @@ class WellBotOrchestrator:
                 emotional_log_id=None  # Command-triggered, not emotion-triggered
             )
             self._current_activity_log_id = public_id  # Keep variable name for backward compatibility
+            
+            # Prompt for pre-activity mood rating (if enabled)
+            try:
+                global_config = get_global_config_for_user(self.user_id)
+                mood_rating_enabled = global_config.get("mood_rating", {}).get("enabled", True)
+                if mood_rating_enabled:
+                    pre_rating = self._prompt_pre_activity_mood_rating(intent)
+                    self._pre_activity_mood_rating = pre_rating
+                    # Update database with pre-rating if provided
+                    if pre_rating is not None:
+                        update_mood_rating(public_id, pre_rating=pre_rating)
+                else:
+                    logger.debug("Mood rating is disabled, skipping pre-activity prompt")
+                    self._pre_activity_mood_rating = None
+            except Exception as e:
+                logger.error(f"Error prompting for pre-activity mood rating: {e}", exc_info=True)
+                # Non-blocking: continue even if mood rating fails
         else:
             self._current_activity_log_id = None
+            self._pre_activity_mood_rating = None
 
         if intent == "smalltalk":
             self._start_smalltalk_activity()
@@ -322,6 +657,16 @@ class WellBotOrchestrator:
         """Start the smalltalk activity thread."""
         logger.info("💬 Starting SmallTalk activity…")
         
+        # Check if another activity is already running
+        if self._is_activity_running():
+            with self._lock:
+                current_activity = self.current_activity
+            logger.warning(f"⚠️ Cannot start SmallTalk activity: activity '{current_activity}' is already running. Ignoring start request.")
+            with self._lock:
+                self.state = SystemState.LISTENING
+                self.current_activity = None
+            return
+        
         # Lazy import and initialize if needed
         if self.smalltalk_activity is None:
             from src.activities.smalltalk import SmallTalkActivity
@@ -333,6 +678,15 @@ class WellBotOrchestrator:
             )
             if not self.smalltalk_activity.initialize():
                 logger.error("❌ Failed to initialize SmallTalk activity")
+                # Notify user that activity is unavailable
+                from src.components.activity_error_handler import handle_activity_error
+                handle_activity_error(self.backend_dir, self.user_id, activity_name="smalltalk")
+                # Reset state back to LISTENING since activity failed
+                with self._lock:
+                    self.state = SystemState.LISTENING
+                    self.current_activity = None
+                # Restart idle mode since activity failed
+                self._restart_idle_mode()
                 return
         
         with self._lock:
@@ -364,6 +718,21 @@ class WellBotOrchestrator:
             except Exception as e:
                 logger.error(f"Error in SmallTalk activity: {e}", exc_info=True)
             finally:
+                # Prompt for post-activity mood rating before cleanup
+                try:
+                    if self._current_activity_log_id:
+                        post_rating = self._prompt_post_activity_mood_rating(self.smalltalk_activity)
+                        if post_rating is not None or self._pre_activity_mood_rating is not None:
+                            # Update database with both pre and post ratings
+                            update_mood_rating(
+                                self._current_activity_log_id,
+                                pre_rating=self._pre_activity_mood_rating,
+                                post_rating=post_rating
+                            )
+                except Exception as e:
+                    logger.error(f"Error prompting for post-activity mood rating: {e}", exc_info=True)
+                    # Non-blocking: continue even if mood rating fails
+                
                 # Cleanup activity resources before restarting wakeword
                 logger.info("🧹 Cleaning up SmallTalk activity resources...")
                 if self.smalltalk_activity:
@@ -381,14 +750,21 @@ class WellBotOrchestrator:
                     except Exception as e:
                         logger.warning(f"Error during activity cleanup/reinit: {e}")
                 
-                # Clear log ID
+                # Clear log ID and mood rating
                 self._current_activity_log_id = None
+                self._pre_activity_mood_rating = None
+                
+                # Clear activity thread reference to allow new activities to start
+                with self._lock:
+                    self._activity_thread = None
                 
                 # When activity ends, restart wake word detection
                 self._restart_idle_mode()
 
         self._activity_thread = threading.Thread(target=run_activity, daemon=True)
         self._activity_thread.start()
+        # Clear transition flag now that activity thread has started
+        self._transitioning_to_activity = False
 
     def _handle_termination(self):
         """Handle termination intent by shutting down the system."""
@@ -402,14 +778,59 @@ class WellBotOrchestrator:
         """Handle unknown/unrecognized intent by prompting user to repeat and looping back"""
         logger.info(f"Handling unknown intent for transcript: '{transcript}' - prompting to repeat")
         
-        # Note: TTS and audio playback are now handled by idle_mode activity
-        # We just need to restart idle_mode to listen again
+        # Prompt user to repeat using TTS
+        try:
+            if self.idle_mode_activity and self.idle_mode_activity.tts_service:
+                # Load prompt from config
+                language_code = resolve_language(self.user_id)
+                language_config = get_language_config(language_code)
+                wakeword_responses_config = language_config.get("wakeword_responses", {})
+                unknown_intent_prompt = wakeword_responses_config.get(
+                    "unknown_intent",
+                    "I didn't quite catch that. Could you call my name again and repeat please?"
+                )
+                logger.info(f"Speaking unknown intent prompt: {unknown_intent_prompt}")
+                self.idle_mode_activity._speak(unknown_intent_prompt)
+        except Exception as e:
+            logger.warning(f"Failed to speak unknown intent prompt: {e}")
+            # Fallback prompt
+            try:
+                if self.idle_mode_activity:
+                    self.idle_mode_activity._speak("I didn't quite catch that. Could you call my name again and repeat please?")
+            except Exception as e2:
+                logger.error(f"Failed to speak fallback prompt: {e2}")
+        
+        # Clear any stale intent flags before restarting to prevent immediate re-detection
+        if self.idle_mode_activity:
+            try:
+                self.idle_mode_activity._intent_detected.clear()
+                self.idle_mode_activity._detected_intent = None
+                self.idle_mode_activity._detected_transcript = None
+                logger.debug("Cleared stale intent flags before restarting idle mode")
+            except Exception as e:
+                logger.warning(f"Error clearing intent flags: {e}")
+        
+        # Reset system state to LISTENING before restarting
+        with self._lock:
+            self.state = SystemState.LISTENING
+        
+        # Restart idle_mode to listen again
         logger.info("Restarting idle mode to listen for command again")
         self._restart_idle_mode()
 
     def _start_journal_activity(self):
         """Start the journal activity thread."""
         logger.info("📖 Starting Journal activity…")
+        
+        # Check if another activity is already running
+        if self._is_activity_running():
+            with self._lock:
+                current_activity = self.current_activity
+            logger.warning(f"⚠️ Cannot start Journal activity: activity '{current_activity}' is already running. Ignoring start request.")
+            with self._lock:
+                self.state = SystemState.LISTENING
+                self.current_activity = None
+            return
         
         # Lazy import and initialize if needed
         if self.journal_activity is None:
@@ -418,6 +839,15 @@ class WellBotOrchestrator:
             self.journal_activity = JournalActivity(backend_dir=self.backend_dir, user_id=self.user_id, ui_interface=self.ui_interface)
             if not self.journal_activity.initialize():
                 logger.error("❌ Failed to initialize Journal activity")
+                # Notify user that activity is unavailable
+                from src.components.activity_error_handler import handle_activity_error
+                handle_activity_error(self.backend_dir, self.user_id, activity_name="journaling")
+                # Reset state back to LISTENING since activity failed
+                with self._lock:
+                    self.state = SystemState.LISTENING
+                    self.current_activity = None
+                # Restart idle mode since activity failed
+                self._restart_idle_mode()
                 return
         
         with self._lock:
@@ -449,6 +879,21 @@ class WellBotOrchestrator:
             except Exception as e:
                 logger.error(f"Error in Journal activity: {e}", exc_info=True)
             finally:
+                # Prompt for post-activity mood rating before cleanup
+                try:
+                    if self._current_activity_log_id:
+                        post_rating = self._prompt_post_activity_mood_rating(self.journal_activity)
+                        if post_rating is not None or self._pre_activity_mood_rating is not None:
+                            # Update database with both pre and post ratings
+                            update_mood_rating(
+                                self._current_activity_log_id,
+                                pre_rating=self._pre_activity_mood_rating,
+                                post_rating=post_rating
+                            )
+                except Exception as e:
+                    logger.error(f"Error prompting for post-activity mood rating: {e}", exc_info=True)
+                    # Non-blocking: continue even if mood rating fails
+                
                 # Cleanup activity resources before restarting wakeword
                 logger.info("🧹 Cleaning up Journal activity resources...")
                 if self.journal_activity:
@@ -466,18 +911,35 @@ class WellBotOrchestrator:
                     except Exception as e:
                         logger.warning(f"Error during activity cleanup/reinit: {e}")
                 
-                # Clear log ID
+                # Clear log ID and mood rating
                 self._current_activity_log_id = None
+                self._pre_activity_mood_rating = None
+                
+                # Clear activity thread reference to allow new activities to start
+                with self._lock:
+                    self._activity_thread = None
                 
                 # When activity ends, restart wake word detection
                 self._restart_idle_mode()
 
         self._activity_thread = threading.Thread(target=run_activity, daemon=True)
         self._activity_thread.start()
+        # Clear transition flag now that activity thread has started
+        self._transitioning_to_activity = False
 
     def _start_spiritual_quote_activity(self):
         """Start the spiritual quote activity thread."""
         logger.info("📜 Starting Spiritual Quote activity…")
+        
+        # Check if another activity is already running
+        if self._is_activity_running():
+            with self._lock:
+                current_activity = self.current_activity
+            logger.warning(f"⚠️ Cannot start Spiritual Quote activity: activity '{current_activity}' is already running. Ignoring start request.")
+            with self._lock:
+                self.state = SystemState.LISTENING
+                self.current_activity = None
+            return
         
         # Lazy import and initialize if needed
         if self.spiritual_quote_activity is None:
@@ -486,6 +948,15 @@ class WellBotOrchestrator:
             self.spiritual_quote_activity = SpiritualQuoteActivity(backend_dir=self.backend_dir, user_id=self.user_id, ui_interface=self.ui_interface)
             if not self.spiritual_quote_activity.initialize():
                 logger.error("❌ Failed to initialize Spiritual Quote activity")
+                # Notify user that activity is unavailable
+                from src.components.activity_error_handler import handle_activity_error
+                handle_activity_error(self.backend_dir, self.user_id, activity_name="quote")
+                # Reset state back to LISTENING since activity failed
+                with self._lock:
+                    self.state = SystemState.LISTENING
+                    self.current_activity = None
+                # Restart idle mode since activity failed
+                self._restart_idle_mode()
                 return
 
         with self._lock:
@@ -513,8 +984,24 @@ class WellBotOrchestrator:
             except Exception as e:
                 logger.error(f"Error in Spiritual Quote activity: {e}", exc_info=True)
             finally:
-                # Clear log ID
+                # Prompt for post-activity mood rating before cleanup
+                try:
+                    if self._current_activity_log_id:
+                        post_rating = self._prompt_post_activity_mood_rating(self.spiritual_quote_activity)
+                        if post_rating is not None or self._pre_activity_mood_rating is not None:
+                            # Update database with both pre and post ratings
+                            update_mood_rating(
+                                self._current_activity_log_id,
+                                pre_rating=self._pre_activity_mood_rating,
+                                post_rating=post_rating
+                            )
+                except Exception as e:
+                    logger.error(f"Error prompting for post-activity mood rating: {e}", exc_info=True)
+                    # Non-blocking: continue even if mood rating fails
+                
+                # Clear log ID and mood rating
                 self._current_activity_log_id = None
+                self._pre_activity_mood_rating = None
                 
                 # Re-initialize for next run
                 try:
@@ -522,15 +1009,32 @@ class WellBotOrchestrator:
                     self.spiritual_quote_activity.initialize()
                 except Exception:
                     pass
+                
+                # Clear activity thread reference to allow new activities to start
+                with self._lock:
+                    self._activity_thread = None
+                
                 # Restart wakeword
                 self._restart_idle_mode()
 
         self._activity_thread = threading.Thread(target=run_activity, daemon=True)
         self._activity_thread.start()
+        # Clear transition flag now that activity thread has started
+        self._transitioning_to_activity = False
 
     def _start_gratitude_activity(self):
         """Start the gratitude activity thread."""
         logger.info("🙏 Starting Gratitude activity…")
+        
+        # Check if another activity is already running
+        if self._is_activity_running():
+            with self._lock:
+                current_activity = self.current_activity
+            logger.warning(f"⚠️ Cannot start Gratitude activity: activity '{current_activity}' is already running. Ignoring start request.")
+            with self._lock:
+                self.state = SystemState.LISTENING
+                self.current_activity = None
+            return
         
         # Lazy import and initialize if needed
         if self.gratitude_activity is None:
@@ -539,6 +1043,15 @@ class WellBotOrchestrator:
             self.gratitude_activity = GratitudeActivity(backend_dir=self.backend_dir, user_id=self.user_id, ui_interface=self.ui_interface)
             if not self.gratitude_activity.initialize():
                 logger.error("❌ Failed to initialize Gratitude activity")
+                # Notify user that activity is unavailable
+                from src.components.activity_error_handler import handle_activity_error
+                handle_activity_error(self.backend_dir, self.user_id, activity_name="gratitude")
+                # Reset state back to LISTENING since activity failed
+                with self._lock:
+                    self.state = SystemState.LISTENING
+                    self.current_activity = None
+                # Restart idle mode since activity failed
+                self._restart_idle_mode()
                 return
 
         with self._lock:
@@ -566,8 +1079,24 @@ class WellBotOrchestrator:
             except Exception as e:
                 logger.error(f"Error in Gratitude activity: {e}", exc_info=True)
             finally:
-                # Clear log ID
+                # Prompt for post-activity mood rating before cleanup
+                try:
+                    if self._current_activity_log_id:
+                        post_rating = self._prompt_post_activity_mood_rating(self.gratitude_activity)
+                        if post_rating is not None or self._pre_activity_mood_rating is not None:
+                            # Update database with both pre and post ratings
+                            update_mood_rating(
+                                self._current_activity_log_id,
+                                pre_rating=self._pre_activity_mood_rating,
+                                post_rating=post_rating
+                            )
+                except Exception as e:
+                    logger.error(f"Error prompting for post-activity mood rating: {e}", exc_info=True)
+                    # Non-blocking: continue even if mood rating fails
+                
+                # Clear log ID and mood rating
                 self._current_activity_log_id = None
+                self._pre_activity_mood_rating = None
                 
                 # Re-initialize for next run
                 try:
@@ -575,15 +1104,32 @@ class WellBotOrchestrator:
                     self.gratitude_activity.initialize()
                 except Exception:
                     pass
+                
+                # Clear activity thread reference to allow new activities to start
+                with self._lock:
+                    self._activity_thread = None
+                
                 # Restart wakeword
                 self._restart_idle_mode()
 
         self._activity_thread = threading.Thread(target=run_activity, daemon=True)
         self._activity_thread.start()
+        # Clear transition flag now that activity thread has started
+        self._transitioning_to_activity = False
 
     def _start_meditation_activity(self):
         """Start the meditation activity thread."""
         logger.info("🧘 Starting Meditation activity…")
+        
+        # Check if another activity is already running
+        if self._is_activity_running():
+            with self._lock:
+                current_activity = self.current_activity
+            logger.warning(f"⚠️ Cannot start Meditation activity: activity '{current_activity}' is already running. Ignoring start request.")
+            with self._lock:
+                self.state = SystemState.LISTENING
+                self.current_activity = None
+            return
         
         # Lazy import and initialize if needed
         if self.meditation_activity is None:
@@ -592,13 +1138,23 @@ class WellBotOrchestrator:
             self.meditation_activity = MeditationActivity(backend_dir=self.backend_dir, user_id=self.user_id, ui_interface=self.ui_interface)
             if not self.meditation_activity.initialize():
                 logger.error("❌ Failed to initialize Meditation activity")
+                # Notify user that activity is unavailable
+                from src.components.activity_error_handler import handle_activity_error
+                handle_activity_error(self.backend_dir, self.user_id, activity_name="meditation")
+                # Reset state back to LISTENING since activity failed
+                with self._lock:
+                    self.state = SystemState.LISTENING
+                    self.current_activity = None
+                # Restart idle mode since activity failed
+                self._restart_idle_mode()
                 return
 
+        # Set state first, then stop idle mode (consistent with other activities)
         with self._lock:
             self.state = SystemState.ACTIVITY_ACTIVE
             self.current_activity = "meditation"
 
-        # Stop idle mode activity before starting Meditation
+        # Stop idle mode activity after setting state to ensure STT sessions are stopped
         self._stop_idle_mode_for_activity()
 
         def run_activity():
@@ -619,8 +1175,24 @@ class WellBotOrchestrator:
             except Exception as e:
                 logger.error(f"Error in Meditation activity: {e}", exc_info=True)
             finally:
-                # Clear log ID
+                # Prompt for post-activity mood rating before cleanup
+                try:
+                    if self._current_activity_log_id:
+                        post_rating = self._prompt_post_activity_mood_rating(self.meditation_activity)
+                        if post_rating is not None or self._pre_activity_mood_rating is not None:
+                            # Update database with both pre and post ratings
+                            update_mood_rating(
+                                self._current_activity_log_id,
+                                pre_rating=self._pre_activity_mood_rating,
+                                post_rating=post_rating
+                            )
+                except Exception as e:
+                    logger.error(f"Error prompting for post-activity mood rating: {e}", exc_info=True)
+                    # Non-blocking: continue even if mood rating fails
+                
+                # Clear log ID and mood rating
                 self._current_activity_log_id = None
+                self._pre_activity_mood_rating = None
                 
                 # Re-initialize for next run
                 try:
@@ -628,15 +1200,32 @@ class WellBotOrchestrator:
                     self.meditation_activity.initialize()
                 except Exception:
                     pass
+                
+                # Clear activity thread reference to allow new activities to start
+                with self._lock:
+                    self._activity_thread = None
+                
                 # Restart wakeword
                 self._restart_idle_mode()
 
         self._activity_thread = threading.Thread(target=run_activity, daemon=True)
         self._activity_thread.start()
+        # Clear transition flag now that activity thread has started
+        self._transitioning_to_activity = False
 
     def _start_activity_suggestion_activity(self):
         """Start the activity suggestion activity thread."""
         logger.info("💡 Starting Activity Suggestion activity…")
+        
+        # Check if another activity is already running
+        if self._is_activity_running():
+            with self._lock:
+                current_activity = self.current_activity
+            logger.warning(f"⚠️ Cannot start Activity Suggestion activity: activity '{current_activity}' is already running. Ignoring start request.")
+            with self._lock:
+                self.state = SystemState.LISTENING
+                self.current_activity = None
+            return
         
         # Lazy import and initialize if needed
         if self.activity_suggestion_activity is None:
@@ -655,6 +1244,7 @@ class WellBotOrchestrator:
         self._stop_idle_mode_for_activity()
 
         def run_activity():
+            nested_routing_occurred = False  # Track if we routed to another activity
             try:
                 if self.activity_suggestion_activity is None:
                     logger.error("❌ Activity Suggestion activity is None - cannot run")
@@ -671,6 +1261,25 @@ class WellBotOrchestrator:
                 
                 if success:
                     logger.info("✅ Activity Suggestion activity completed successfully")
+                    
+                    # Check for termination first
+                    if self.activity_suggestion_activity and self.activity_suggestion_activity.is_termination_detected():
+                        logger.info("👋 Termination phrase detected in activity suggestion - returning to idle mode")
+                        # Cleanup and restart idle mode
+                        if self.activity_suggestion_activity:
+                            try:
+                                self.activity_suggestion_activity.cleanup()
+                                self.activity_suggestion_activity.reinitialize()
+                            except Exception as e:
+                                logger.warning(f"Error during cleanup: {e}")
+                        
+                        # Reset state and restart wakeword detection
+                        with self._lock:
+                            self.state = SystemState.LISTENING
+                        
+                        logger.info("🔄 Restarting idle mode after termination")
+                        self._restart_idle_mode()
+                        return  # Exit early - don't route to any activity
                     
                     # Check if timeout occurred (special sentinel value)
                     if selected_activity == "__timeout__":
@@ -699,7 +1308,9 @@ class WellBotOrchestrator:
                                 logger.warning(f"Error during cleanup before routing: {e}")
                         
                         # Route to the selected activity (this will handle state management)
-                        self._route_to_activity(selected_activity, transcript)
+                        # Allow nested routing since we're routing from within activity_suggestion
+                        nested_routing_occurred = True
+                        self._route_to_activity(selected_activity, transcript, allow_nested_routing=True)
                         return  # Don't restart wakeword - routing handles it
                     else:
                         # No match - route to smalltalk with context
@@ -723,7 +1334,9 @@ class WellBotOrchestrator:
                                 logger.warning(f"Error during cleanup before routing: {e}")
                         
                         # Route to smalltalk (this will handle state management)
-                        self._route_to_activity("smalltalk", "")
+                        # Allow nested routing since we're routing from within activity_suggestion
+                        nested_routing_occurred = True
+                        self._route_to_activity("smalltalk", "", allow_nested_routing=True)
                         return  # Don't restart wakeword - routing handles it
                 else:
                     logger.error("❌ Activity Suggestion activity ended with failure")
@@ -747,19 +1360,58 @@ class WellBotOrchestrator:
                     except Exception as e:
                         logger.warning(f"Error during activity cleanup/reinit: {e}")
                 
-                # Reset state and restart wakeword detection
-                with self._lock:
-                    self.state = SystemState.LISTENING
-                
-                logger.info("🔄 Restarting wake word detection after activity suggestion completion")
-                self._restart_idle_mode()
+                # Only clear thread reference and reset state if we didn't route to another activity
+                # When nested routing occurs, the new activity manages its own state and thread
+                if not nested_routing_occurred:
+                    # Clear activity thread reference to allow new activities to start
+                    with self._lock:
+                        self._activity_thread = None
+                    
+                    # Reset state and restart wakeword detection
+                    with self._lock:
+                        self.state = SystemState.LISTENING
+                    
+                    logger.info("🔄 Restarting wake word detection after activity suggestion completion")
+                    self._restart_idle_mode()
+                else:
+                    logger.info("⏭️ Skipping state reset and idle mode restart - nested routing occurred, new activity manages state")
 
         self._activity_thread = threading.Thread(target=run_activity, daemon=True)
         self._activity_thread.start()
+        # Clear transition flag now that activity thread has started
+        self._transitioning_to_activity = False
 
     def _start_idle_mode_activity(self):
         """Start the idle mode activity in a thread with error handling"""
         logger.info("🎬 Starting idle mode activity...")
+        
+        # Check if an activity is already running - idle mode should not start if an activity is active
+        if self._is_activity_running():
+            with self._lock:
+                current_activity = self.current_activity
+            logger.warning(f"⚠️ Cannot start idle mode: activity '{current_activity}' is already running. Idle mode will start after activity completes.")
+            return
+        
+        # Check if there's already a running idle mode thread
+        if self._idle_mode_thread and self._idle_mode_thread.is_alive():
+            current_thread = threading.current_thread()
+            if self._idle_mode_thread is current_thread:
+                logger.warning("⚠️ Cannot start idle mode from within idle mode thread - skipping")
+                return
+            logger.warning("⚠️ Idle mode thread is already running - stopping it first")
+            try:
+                if self.idle_mode_activity:
+                    self.idle_mode_activity.stop()
+                # Check if thread is still valid before joining
+                if self._idle_mode_thread:
+                    self._idle_mode_thread.join(timeout=1.0)
+                    # Check again after join (thread might have been cleared)
+                    if self._idle_mode_thread and self._idle_mode_thread.is_alive():
+                        logger.warning("Previous idle mode thread did not finish within timeout")
+            except Exception as e:
+                logger.warning(f"Error stopping previous idle mode thread: {e}")
+            finally:
+                self._idle_mode_thread = None
         
         def run_idle_mode():
             try:
@@ -772,12 +1424,89 @@ class WellBotOrchestrator:
                 
                 if success:
                     logger.info("✅ Idle mode completed successfully (intent detected)")
-                    # Intent was detected - routing will be handled by _handle_intent_detected callback
+                    # Check if intent was detected (either from wakeword or intervention trigger)
+                    detected_intent = self.idle_mode_activity.get_detected_intent()
+                    detected_transcript = self.idle_mode_activity.get_detected_transcript()
+                    
+                    # Check system state - if we're already in an activity or processing, don't route again
+                    with self._lock:
+                        current_state = self.state
+                    
+                    if current_state != SystemState.LISTENING:
+                        logger.info(f"System state is {current_state.value}, not LISTENING - skipping intent routing (likely already handled)")
+                        # Clear intent flags to prevent stale intents
+                        if self.idle_mode_activity:
+                            try:
+                                self.idle_mode_activity._intent_detected.clear()
+                                self.idle_mode_activity._detected_intent = None
+                                self.idle_mode_activity._detected_transcript = None
+                            except:
+                                pass
+                        return
+                    
+                    if detected_intent:
+                        # Update state before routing
+                        with self._lock:
+                            if self.state == SystemState.LISTENING:
+                                self.state = SystemState.PROCESSING
+                                logger.info("🎯 Transitioning to PROCESSING state")
+                            self.state = SystemState.ACTIVITY_ACTIVE
+                        
+                        # Route to activity based on detected intent
+                        intent = detected_intent.get('intent', 'unknown')
+                        transcript = detected_transcript or ""
+                        logger.info(f"🎯 Routing to activity based on detected intent: {intent}")
+                        
+                        # Clear detected intent to prevent duplicate routing
+                        # This is safe because we're about to route, and reinitialize() will clear it anyway
+                        if hasattr(self.idle_mode_activity, '_detected_intent'):
+                            self.idle_mode_activity._detected_intent = None
+                            self.idle_mode_activity._detected_transcript = None
+                        
+                        self._route_to_activity(intent, transcript)
+                    else:
+                        # Intent was detected via callback, routing already handled
+                        logger.info("Intent routing handled by callback")
+                        # For unknown intents, callback calls _restart_idle_mode() itself
+                        # Check if we're already restarting to avoid double restarts
+                        with self._lock:
+                            if self.state == SystemState.LISTENING:
+                                # State is LISTENING, which means callback already handled unknown intent
+                                # and called _restart_idle_mode(). Don't restart again.
+                                logger.debug("State is LISTENING after callback - restart already handled by callback")
+                        return
                 else:
                     logger.info("⏰ Idle mode exited without intent detection (timeout or stopped)")
+                    # Check if we're transitioning to an activity - if so, don't restart idle mode
+                    if self._transitioning_to_activity:
+                        logger.info("System is transitioning to activity - skipping idle mode restart")
+                        return
+                    
+                    # Check if restart is already in progress (e.g., from _handle_unknown_intent)
+                    with self._lock:
+                        if self._restarting_idle_mode:
+                            logger.info("Idle mode restart already in progress - skipping duplicate restart")
+                            return
+                        current_state = self.state
+                    
+                    if current_state in [SystemState.PROCESSING, SystemState.ACTIVITY_ACTIVE]:
+                        logger.info("System state indicates activity transition - skipping idle mode restart")
+                        return
+                    
                     # No intent detected (timeout) - restart idle mode to return to wakeword listening
+                    # Don't restart from within the idle mode thread - schedule it from outside
                     logger.info("🔄 Restarting idle mode after timeout...")
-                    self._restart_idle_mode()
+                    current_thread = threading.current_thread()
+                    if self._idle_mode_thread is current_thread:
+                        # We're in the idle mode thread - schedule restart from a different thread
+                        logger.info("Scheduling idle mode restart from outside thread...")
+                        def restart_from_outside():
+                            time.sleep(0.1)  # Brief delay to ensure thread cleanup
+                            self._restart_idle_mode()
+                        threading.Thread(target=restart_from_outside, daemon=True).start()
+                    else:
+                        # We're not in the idle mode thread - safe to restart directly
+                        self._restart_idle_mode()
                     
             except Exception as e:
                 logger.error(f"Error running idle mode activity: {e}", exc_info=True)
@@ -792,73 +1521,128 @@ class WellBotOrchestrator:
                             logger.error("Failed to reinitialize idle mode after error")
                 except Exception as retry_error:
                     logger.error(f"Failed to restart idle mode: {retry_error}")
+            finally:
+                # Clear thread reference when thread exits
+                with self._lock:
+                    if self._idle_mode_thread == threading.current_thread():
+                        self._idle_mode_thread = None
         
-        # Start idle mode in a daemon thread
-        idle_thread = threading.Thread(target=run_idle_mode, daemon=True)
-        idle_thread.start()
+        # Start idle mode in a daemon thread and track it
+        self._idle_mode_thread = threading.Thread(target=run_idle_mode, daemon=True)
+        self._idle_mode_thread.start()
         logger.info("✅ Idle mode activity thread started")
 
     def _restart_idle_mode(self):
         """Restart idle mode activity after an activity ends."""
         logger.info("🔄 Restarting idle mode activity…")
         
-        # 1) Ensure complete cleanup of previous idle mode
-        if self.idle_mode_activity:
-            logger.info("🧹 Performing complete idle mode cleanup...")
-            try:
-                # Stop the activity completely
-                self.idle_mode_activity.stop()
-                
-                # Cleanup resources
-                self.idle_mode_activity.cleanup()
-                logger.info("✅ Idle mode cleanup completed")
-                
-                # Re-initialize for next run
-                logger.info("🔄 Re-initializing idle mode activity...")
-                if not self.idle_mode_activity.reinitialize():
-                    logger.error("❌ Failed to re-initialize idle mode activity")
-                    raise RuntimeError("Failed to re-initialize idle mode")
-                
-                logger.info("✅ Idle mode re-initialized successfully")
-                
-                # Add guard delay for Windows audio device release
-                time.sleep(0.2)
-                
-            except Exception as e:
-                logger.error(f"Error during idle mode cleanup/reinit: {e}", exc_info=True)
-                # Try to recreate the activity if reinit failed
-                try:
-                    logger.info("Attempting to recreate idle mode activity...")
-                    self.idle_mode_activity = IdleModeActivity(
-                        backend_dir=self.backend_dir,
-                        user_id=self.user_id,
-                        on_intent_detected=self._handle_intent_detected,
-                        ui_interface=self.ui_interface
-                    )
-                    if not self.idle_mode_activity.initialize():
-                        raise RuntimeError("Failed to recreate idle mode activity")
-                except Exception as recreate_error:
-                    logger.error(f"Failed to recreate idle mode activity: {recreate_error}", exc_info=True)
-                    with self._lock:
-                        self.state = SystemState.SHUTTING_DOWN
-                    return
-        
-        # 2) Reset state
+        # Prevent concurrent restart attempts
         with self._lock:
-            self.state = SystemState.LISTENING
-            self.current_activity = None
+            if self._restarting_idle_mode:
+                logger.warning("Idle mode restart already in progress - skipping duplicate restart")
+                return
+            self._restarting_idle_mode = True
         
-        # 3) Start intervention poller when returning to LISTENING state
-        self._start_intervention_poller()
+        # Prevent calling from within idle mode thread
+        current_thread = threading.current_thread()
+        if self._idle_mode_thread and self._idle_mode_thread.is_alive():
+            if self._idle_mode_thread is current_thread:
+                logger.warning("Cannot restart idle mode from within idle mode thread - skipping")
+                with self._lock:
+                    self._restarting_idle_mode = False
+                return
         
-        # 4) Start the idle mode activity
         try:
+            # 1) Wait for any existing idle mode thread to finish first
+            if self._idle_mode_thread and self._idle_mode_thread.is_alive():
+                logger.info("Waiting for existing idle mode thread to finish...")
+                try:
+                    if self.idle_mode_activity:
+                        self.idle_mode_activity.stop()
+                    # Check if thread is still valid before joining
+                    if self._idle_mode_thread:
+                        self._idle_mode_thread.join(timeout=2.0)
+                        if self._idle_mode_thread and self._idle_mode_thread.is_alive():
+                            logger.warning("Idle mode thread did not finish within timeout during restart")
+                        else:
+                            logger.info("✅ Existing idle mode thread finished")
+                except Exception as e:
+                    logger.warning(f"Error waiting for idle mode thread: {e}")
+                finally:
+                    self._idle_mode_thread = None
+            
+            # 2) Ensure complete cleanup of previous idle mode
+            if self.idle_mode_activity:
+                logger.info("🧹 Performing complete idle mode cleanup...")
+                try:
+                    # Stop the activity completely
+                    self.idle_mode_activity.stop()
+                    
+                    # Cleanup resources
+                    self.idle_mode_activity.cleanup()
+                    logger.info("✅ Idle mode cleanup completed")
+                    
+                    # Re-initialize for next run
+                    logger.info("🔄 Re-initializing idle mode activity...")
+                    if not self.idle_mode_activity.reinitialize():
+                        logger.error("❌ Failed to re-initialize idle mode activity")
+                        with self._lock:
+                            self._restarting_idle_mode = False
+                        raise RuntimeError("Failed to re-initialize idle mode")
+                    
+                    logger.info("✅ Idle mode re-initialized successfully")
+                except Exception as e:
+                    logger.error(f"Error during idle mode cleanup/reinit: {e}", exc_info=True)
+                    # Try to recreate the activity if reinit failed
+                    try:
+                        logger.info("Attempting to recreate idle mode activity...")
+                        self.idle_mode_activity = IdleModeActivity(
+                            backend_dir=self.backend_dir,
+                            user_id=self.user_id,
+                            on_intent_detected=self._handle_intent_detected
+                        )
+                        if not self.idle_mode_activity.initialize():
+                            raise RuntimeError("Failed to recreate idle mode activity")
+                    except Exception as recreate_error:
+                        logger.error(f"Failed to recreate idle mode activity: {recreate_error}", exc_info=True)
+                        with self._lock:
+                            self.state = SystemState.SHUTTING_DOWN
+                        with self._lock:
+                            self._restarting_idle_mode = False
+                        return
+            # 3) Reset state and clear transition flag
+            with self._lock:
+                self.state = SystemState.LISTENING
+                self.current_activity = None
+            
+            # Clear any stale intent flags to prevent immediate re-detection
+            # This is critical when restarting after activity failures
+            if self.idle_mode_activity:
+                try:
+                    self.idle_mode_activity._intent_detected.clear()
+                    self.idle_mode_activity._detected_intent = None
+                    self.idle_mode_activity._detected_transcript = None
+                    logger.debug("Cleared stale intent flags in _restart_idle_mode")
+                except Exception as e:
+                    logger.warning(f"Error clearing intent flags in _restart_idle_mode: {e}")
+            
+            self._transitioning_to_activity = False  # Clear flag when restarting idle mode
+            
+            # 4) Start the idle mode activity (will check for existing thread)
             self._start_idle_mode_activity()
             logger.info("🎤 Idle mode restarted – LISTENING for wake word")
         except Exception as e:
             logger.error(f"Failed to restart idle mode: {e}", exc_info=True)
             with self._lock:
                 self.state = SystemState.SHUTTING_DOWN
+        finally:
+            # Clear restart flag when done (only if not already cleared)
+            with self._lock:
+                if self._restarting_idle_mode:
+                    self._restarting_idle_mode = False
+            
+            # Add guard delay for Windows audio device release
+            time.sleep(0.2)
 
     def start(self) -> bool:
         """Start the entire orchestration system."""
@@ -874,28 +1658,31 @@ class WellBotOrchestrator:
             logger.error("Component initialization failed")
             return False
 
+        # Speak startup success message before starting idle mode
         try:
-            # Initialize intervention polling service (but don't start yet - will start when entering LISTENING state)
-            if self.global_config:
-                try:
-                    record_file_path = self.backend_dir / "config" / "intervention_record.json"
-                    # Get cloud service URL from environment (CLOUD_SERVICE_URL) or config
-                    import os
-                    from dotenv import load_dotenv
-                    load_dotenv()
-                    service_url = os.getenv("CLOUD_SERVICE_URL")
-                    
-                    self.intervention_poller = InterventionPoller(
-                        user_id=self.user_id,
-                        record_file_path=record_file_path,
-                        poll_interval_minutes=5,
-                        service_url=service_url
-                    )
-                    logger.info("✓ Intervention polling service initialized (will start when listening)")
-                except Exception as e:
-                    logger.warning(f"Failed to initialize intervention polling service: {e}")
-                    logger.warning("Continuing without intervention polling...")
+            # Get user's language preference
+            user_language = resolve_language(self.user_id)
             
+            # Load language config for user's language
+            language_config = get_language_config(self.user_id)
+            
+            # Get success message template
+            success_template = language_config.get('startup', {}).get('startup_completed',
+                "Startup completed. Hi {name}, call me Well-Bot to wake me up!")
+            
+            # Format message with user's name (prefer prefer_name, fallback to full_name, then "there")
+            user_name = self.prefer_name or self.full_name or "there"
+            success_message = success_template.format(name=user_name)
+            
+            # Speak success message via TTS
+            logger.info("Speaking startup completion message...")
+            self._speak_startup_message(success_message, language=user_language)
+            logger.info(f"✓ Startup success message: {success_message}")
+        except Exception as e:
+            logger.warning(f"Failed to speak startup success message: {e}", exc_info=True)
+            # Continue startup even if TTS fails
+
+        try:
             # Start idle mode activity
             if self.idle_mode_activity:
                 self._start_idle_mode_activity()
@@ -909,8 +1696,6 @@ class WellBotOrchestrator:
             # Start GUI if enabled
             self._start_gui_if_enabled()
             
-            # Start poller when entering LISTENING state
-            self._start_intervention_poller()
             logger.info("🎤 Idle mode started – system ready")
             logger.info("Say the wake word to activate the system")
             return True
@@ -924,9 +1709,6 @@ class WellBotOrchestrator:
 
         with self._lock:
             self.state = SystemState.SHUTTING_DOWN
-
-        # Stop intervention polling service
-        self._stop_intervention_poller()
 
         # Stop activity if active
         if self.current_activity == "smalltalk" and self.smalltalk_activity:
@@ -957,27 +1739,6 @@ class WellBotOrchestrator:
                 pass
 
         logger.info("✅ Well-Bot Orchestrator stopped")
-    
-    def _start_intervention_poller(self):
-        """Start the intervention polling service if not already running."""
-        if self.intervention_poller:
-            try:
-                # Check if already running by checking internal state
-                # We'll use a simple approach: try to start (start() checks if already running)
-                self.intervention_poller.start()
-                logger.debug("Intervention poller started/resumed")
-            except Exception as e:
-                logger.warning(f"Failed to start intervention poller: {e}")
-    
-    def _stop_intervention_poller(self):
-        """Stop the intervention polling service."""
-        if self.intervention_poller:
-            logger.info("Stopping intervention polling service…")
-            try:
-                self.intervention_poller.stop()
-                logger.info("✓ Intervention polling service stopped")
-            except Exception as e:
-                logger.warning(f"Error stopping intervention polling service: {e}")
 
     def is_active(self) -> bool:
         """Check if the orchestrator is still active (not shutting down)."""
