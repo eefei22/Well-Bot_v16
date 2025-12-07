@@ -39,9 +39,10 @@ logger = logging.getLogger(__name__)
 
 
 class MeditationActivity:
-    def __init__(self, backend_dir: Path, user_id: Optional[str] = None):
+    def __init__(self, backend_dir: Path, user_id: Optional[str] = None, ui_interface = None):
         self.backend_dir = backend_dir
         self.user_id = user_id or get_current_user_id()
+        self.ui_interface = ui_interface
 
         # Components
         self.audio_manager: Optional[ConversationAudioManager] = None
@@ -75,7 +76,7 @@ class MeditationActivity:
             self.meditation_config = self.language_config.get("meditation", {})
 
             # Initialize Rhino intent recognition for termination detection
-            context_path = self.backend_dir / "config" / "Intent" / "Well-Bot-Commands_en_windows_v3_0_0.rhn"
+            context_path = self.backend_dir / "config" / "Intent" / "Well-Bot-Commands_en_raspberry-pi_v3_0_0.rhn"
             try:
                 if not RHINO_ACCESS_KEY:
                     logger.error("RHINO_ACCESS_KEY not configured, cannot initialize Rhino")
@@ -113,7 +114,7 @@ class MeditationActivity:
             audio_config = {
                 "backend_dir": str(self.backend_dir),
             }
-            self.audio_manager = ConversationAudioManager(stt_service, mic_factory, audio_config)
+            self.audio_manager = ConversationAudioManager(stt_service, mic_factory, audio_config, ui_interface=self.ui_interface)
 
             # TTS client for speaking prompts
             from google.cloud import texttospeech

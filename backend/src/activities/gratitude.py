@@ -38,9 +38,10 @@ logger = logging.getLogger(__name__)
 
 
 class GratitudeActivity:
-    def __init__(self, backend_dir: Path, user_id: Optional[str] = None):
+    def __init__(self, backend_dir: Path, user_id: Optional[str] = None, ui_interface = None):
         self.backend_dir = backend_dir
         self.user_id = user_id or get_current_user_id()
+        self.ui_interface = ui_interface
 
         # Components
         self.stt_service: Optional[GoogleSTTService] = None
@@ -92,7 +93,7 @@ class GratitudeActivity:
                 "end_audio_path": self.audio_paths.get("end_audio_path"),
                 "start_audio_path": self.audio_paths.get("start_gratitude_audio_path"),
             }
-            self.audio_manager = ConversationAudioManager(self.stt_service, mic_factory, audio_config)
+            self.audio_manager = ConversationAudioManager(self.stt_service, mic_factory, audio_config, ui_interface=self.ui_interface)
 
             # TTS client
             # Import texttospeech locally for AudioEncoding enum

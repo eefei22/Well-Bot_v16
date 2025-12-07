@@ -138,20 +138,26 @@ class WellBotOrchestrator:
             logger.info(f"Resolved language '{user_lang}' for user {self.user_id}")
             
             self.global_config = get_global_config_for_user(self.user_id)
-            logger.info(f"Loaded global config for user")
+            logger.info("Loaded global config for user")
+            
+            # 1) Initialize UI interface ONCE so everyone shares the same instance
+            self._initialize_ui()
+            logger.info(
+                f"Orchestrator UI interface: {type(self.ui_interface).__name__} "
+                f"(id={id(self.ui_interface)})"
+            )
 
+            # 2) Initialize Idle Mode with the SAME ui_interface instance
             logger.info("Initializing Idle Mode activity (wakeword detection)…")
             self.idle_mode_activity = IdleModeActivity(
                 backend_dir=self.backend_dir,
                 user_id=self.user_id,
-                on_intent_detected=self._handle_intent_detected
+                on_intent_detected=self._handle_intent_detected,
+                ui_interface=self.ui_interface,
             )
             if not self.idle_mode_activity.initialize():
                 raise RuntimeError("Failed to initialize Idle Mode activity")
             logger.info("✓ Idle Mode activity initialized")
-
-            # Initialize UI interface
-            self._initialize_ui()
             
             # Activities are lazy-loaded - only initialize when needed
             # This reduces memory footprint when idle_mode is running
@@ -161,6 +167,7 @@ class WellBotOrchestrator:
             logger.error(f"Component initialization failed: {e}", exc_info=True)
             return False
 
+
     def _initialize_ui(self):
         """Initialize UI interface based on configuration."""
         try:
@@ -168,9 +175,18 @@ class WellBotOrchestrator:
             gui_enabled = gui_config.get("enabled", False)
             
             if gui_enabled:
-                logger.info("Initializing UI interface for GUI...")
-                self.ui_interface = UIInterface()
-                logger.info("✓ UI interface initialized")
+                # Reuse existing UIInterface if already created
+                if isinstance(self.ui_interface, UIInterface):
+                    logger.info(
+                        f"UI interface already initialized, reusing existing instance "
+                        f"(id={id(self.ui_interface)})"
+                    )
+                else:
+                    logger.info("Initializing UI interface for GUI...")
+                    self.ui_interface = UIInterface()
+                    logger.info(
+                        f"✓ UI interface initialized (id={id(self.ui_interface)})"
+                    )
             else:
                 logger.info("GUI disabled - using NoOp UI interface")
                 self.ui_interface = NoOpUIInterface()
@@ -178,6 +194,8 @@ class WellBotOrchestrator:
             logger.warning(f"Failed to initialize UI interface: {e}")
             logger.warning("Falling back to NoOp UI interface")
             self.ui_interface = NoOpUIInterface()
+
+          
 
     def _start_gui_if_enabled(self):
         """Start GUI window if enabled in configuration."""
@@ -397,7 +415,7 @@ class WellBotOrchestrator:
         if self.journal_activity is None:
             from src.activities.journal import JournalActivity
             logger.info("Lazy loading Journal activity...")
-            self.journal_activity = JournalActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+            self.journal_activity = JournalActivity(backend_dir=self.backend_dir, user_id=self.user_id, ui_interface=self.ui_interface)
             if not self.journal_activity.initialize():
                 logger.error("❌ Failed to initialize Journal activity")
                 return
@@ -465,7 +483,7 @@ class WellBotOrchestrator:
         if self.spiritual_quote_activity is None:
             from src.activities.spiritual_quote import SpiritualQuoteActivity
             logger.info("Lazy loading Spiritual Quote activity...")
-            self.spiritual_quote_activity = SpiritualQuoteActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+            self.spiritual_quote_activity = SpiritualQuoteActivity(backend_dir=self.backend_dir, user_id=self.user_id, ui_interface=self.ui_interface)
             if not self.spiritual_quote_activity.initialize():
                 logger.error("❌ Failed to initialize Spiritual Quote activity")
                 return
@@ -500,7 +518,7 @@ class WellBotOrchestrator:
                 
                 # Re-initialize for next run
                 try:
-                    self.spiritual_quote_activity = SpiritualQuoteActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+                    self.spiritual_quote_activity = SpiritualQuoteActivity(backend_dir=self.backend_dir, user_id=self.user_id, ui_interface=self.ui_interface)
                     self.spiritual_quote_activity.initialize()
                 except Exception:
                     pass
@@ -518,7 +536,7 @@ class WellBotOrchestrator:
         if self.gratitude_activity is None:
             from src.activities.gratitude import GratitudeActivity
             logger.info("Lazy loading Gratitude activity...")
-            self.gratitude_activity = GratitudeActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+            self.gratitude_activity = GratitudeActivity(backend_dir=self.backend_dir, user_id=self.user_id, ui_interface=self.ui_interface)
             if not self.gratitude_activity.initialize():
                 logger.error("❌ Failed to initialize Gratitude activity")
                 return
@@ -553,7 +571,7 @@ class WellBotOrchestrator:
                 
                 # Re-initialize for next run
                 try:
-                    self.gratitude_activity = GratitudeActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+                    self.gratitude_activity = GratitudeActivity(backend_dir=self.backend_dir, user_id=self.user_id, ui_interface=self.ui_interface)
                     self.gratitude_activity.initialize()
                 except Exception:
                     pass
@@ -571,7 +589,7 @@ class WellBotOrchestrator:
         if self.meditation_activity is None:
             from src.activities.meditation import MeditationActivity
             logger.info("Lazy loading Meditation activity...")
-            self.meditation_activity = MeditationActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+            self.meditation_activity = MeditationActivity(backend_dir=self.backend_dir, user_id=self.user_id, ui_interface=self.ui_interface)
             if not self.meditation_activity.initialize():
                 logger.error("❌ Failed to initialize Meditation activity")
                 return
@@ -606,7 +624,7 @@ class WellBotOrchestrator:
                 
                 # Re-initialize for next run
                 try:
-                    self.meditation_activity = MeditationActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+                    self.meditation_activity = MeditationActivity(backend_dir=self.backend_dir, user_id=self.user_id, ui_interface=self.ui_interface)
                     self.meditation_activity.initialize()
                 except Exception:
                     pass
@@ -624,7 +642,7 @@ class WellBotOrchestrator:
         if self.activity_suggestion_activity is None:
             from src.activities.activity_suggestion import ActivitySuggestionActivity
             logger.info("Lazy loading Activity Suggestion activity...")
-            self.activity_suggestion_activity = ActivitySuggestionActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+            self.activity_suggestion_activity = ActivitySuggestionActivity(backend_dir=self.backend_dir, user_id=self.user_id, ui_interface=self.ui_interface)
             if not self.activity_suggestion_activity.initialize():
                 logger.error("❌ Failed to initialize Activity Suggestion activity")
                 return
@@ -814,7 +832,8 @@ class WellBotOrchestrator:
                     self.idle_mode_activity = IdleModeActivity(
                         backend_dir=self.backend_dir,
                         user_id=self.user_id,
-                        on_intent_detected=self._handle_intent_detected
+                        on_intent_detected=self._handle_intent_detected,
+                        ui_interface=self.ui_interface
                     )
                     if not self.idle_mode_activity.initialize():
                         raise RuntimeError("Failed to recreate idle mode activity")

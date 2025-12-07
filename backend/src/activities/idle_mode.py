@@ -55,7 +55,8 @@ class IdleModeActivity:
         self,
         backend_dir: Path,
         user_id: Optional[str] = None,
-        on_intent_detected: Optional[Callable[[str, Dict[str, Any]], None]] = None
+        on_intent_detected: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+        ui_interface=None,
     ):
         """
         Initialize the Idle Mode Activity
@@ -69,6 +70,8 @@ class IdleModeActivity:
         self.backend_dir = backend_dir
         self.user_id = user_id if user_id is not None else get_current_user_id()
         self.on_intent_detected = on_intent_detected
+        # Optional UI interface for updating GUI state
+        self.ui_interface = ui_interface
         
         # Components (initialized in initialize())
         self.wakeword_detector: Optional[WakeWordDetector] = None
@@ -152,7 +155,7 @@ class IdleModeActivity:
             
             # Initialize wakeword detector
             try:
-                wakeword_model_path = self.backend_dir / "config" / "WakeWord" / "WellBot_WakeWordModel.ppn"
+                wakeword_model_path = self.backend_dir / "config" / "WakeWord" / "WellBot_WakeWordModel_ARM.ppn"
                 self.wakeword_detector = create_wake_word_detector(PORCUPINE_ACCESS_KEY, str(wakeword_model_path))
                 logger.info("✓ Wakeword detector created")
             except Exception as e:
@@ -369,6 +372,12 @@ class IdleModeActivity:
                 self._current_mic.mute()
         
         try:
+            # Notify UI that we are speaking
+            if self.ui_interface:
+                try:
+                    self.ui_interface.update_speaker_status("speaking")
+                except Exception:
+                    pass
             def text_gen():
                 yield text
             
@@ -396,6 +405,12 @@ class IdleModeActivity:
         except Exception as e:
             logger.error(f"TTS error: {e}")
         finally:
+            # Update UI: speaker idle
+            if self.ui_interface:
+                try:
+                    self.ui_interface.update_speaker_status("idle")
+                except Exception:
+                    pass
             # Unmute the mic after speaking (if it's still running)
             with self._lock:
                 if self._current_mic and self._current_mic.is_running():
@@ -418,16 +433,33 @@ class IdleModeActivity:
         # Play feedback audio if enabled
         if use_audio_files and self.wakeword_audio_path:
             try:
+                # Tell UI: we are "speaking" during the wakeword feedback sound
+                if self.ui_interface:
+                    try:
+                        self.ui_interface.update_speaker_status("speaking")
+                    except Exception:
+                        pass
+
                 logger.info(f"Playing wakeword feedback audio: {self.wakeword_audio_path}")
                 success = self._play_audio_file(self.wakeword_audio_path)
                 if success:
                     logger.info("Wakeword feedback audio played successfully")
                 else:
                     logger.error("Failed to play wakeword feedback audio")
+
             except Exception as e:
                 logger.error(f"Error playing wakeword audio: {e}")
+            finally:
+                # 🔊 After audio finishes (or fails), mark speaker idle.
+                # `_speak()` will set it back to "speaking" again for the TTS prompt.
+                if self.ui_interface:
+                    try:
+                        self.ui_interface.update_speaker_status("idle")
+                    except Exception:
+                        pass
         else:
             logger.debug("No wakeword feedback audio configured or audio files disabled")
+
 
         # TTS prompt from config
         try:
@@ -473,7 +505,14 @@ class IdleModeActivity:
         try:
             mic.start()
             logger.info("Microphone active, awaiting speech for keyword matching")
-            
+
+            # UI: show listening face while mic is active
+            if self.ui_interface:
+                try:
+                    self.ui_interface.update_mic_status("listening")
+                except Exception:
+                    pass
+
             # Capture transcript using STT
             def on_transcript(text: str, is_final: bool):
                 nonlocal transcript
@@ -561,6 +600,14 @@ class IdleModeActivity:
             # Ensure mic is stopped and cleared
             if mic.is_running():
                 mic.stop()
+            
+            # UI: mic no longer listening
+            if self.ui_interface:
+                try:
+                    self.ui_interface.update_mic_status("idle")
+                except Exception:
+                    pass
+
             with self._lock:
                 self._current_mic = None
                 self.stt_active = False
@@ -685,5 +732,12 @@ class IdleModeActivity:
                     logger.debug("Stopping mic in STT session to prevent TTS pickup")
                     self._current_mic.stop()
                     self._current_mic = None
+            
+            # UI: mic no longer listening
+            if self.ui_interface:
+                try:
+                    self.ui_interface.update_mic_status("idle")
+                except Exception:
+                    pass
         except Exception as e:
             logger.warning(f"Failed to stop STT session: {e}")

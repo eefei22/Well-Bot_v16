@@ -47,10 +47,11 @@ class JournalActivity:
     and automatically saves journal entries to the database.
     """
     
-    def __init__(self, backend_dir: Path, user_id: Optional[str] = None):
+    def __init__(self, backend_dir: Path, user_id: Optional[str] = None, ui_interface = None):
         """Initialize the Journal activity"""
         self.backend_dir = backend_dir
         self.user_id = user_id or get_current_user_id()
+        self.ui_interface = ui_interface
         
         # Components (initialized in initialize())
         self.audio_manager: Optional[ConversationAudioManager] = None
@@ -148,7 +149,8 @@ class JournalActivity:
                 audio_config=audio_config,
                 sample_rate=audio_settings.get("tts_sample_rate_hertz", 24000),
                 sample_width_bytes=audio_settings.get("tts_sample_width_bytes", 2),
-                num_channels=audio_settings.get("tts_num_channels", 1)
+                num_channels=audio_settings.get("tts_num_channels", 1),
+                ui_interface=self.ui_interface
             )
             logger.info("✓ Audio manager initialized")
             

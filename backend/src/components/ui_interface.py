@@ -25,7 +25,8 @@ class UIInterface:
         self._lock = threading.Lock()
         self._state: Dict[str, Any] = {
             "mic_status": "idle",      # "listening", "idle", "muted"
-            "speaker_status": "idle"   # "speaking", "idle"
+                "speaker_status": "idle",  # "speaking", "idle"
+                "loading_status": "idle"   # "loading", "idle"
         }
         self._listeners: list[Callable] = []
         
@@ -58,6 +59,21 @@ class UIInterface:
             self._state["speaker_status"] = status
             if old_status != status:
                 logger.debug(f"Speaker status updated: {old_status} -> {status}")
+        
+        self._notify_listeners()
+    
+    def update_loading_status(self, status: str):
+        """
+        Update loading status.
+        
+        Args:
+            status: "loading" or "idle"
+        """
+        with self._lock:
+            old_status = self._state.get("loading_status")
+            self._state["loading_status"] = status
+            if old_status != status:
+                logger.debug(f"Loading status updated: {old_status} -> {status}")
         
         self._notify_listeners()
     
@@ -123,11 +139,15 @@ class NoOpUIInterface:
     def update_speaker_status(self, status: str):
         """No-op: do nothing."""
         pass
+        
+        def update_loading_status(self, status: str):
+            """No-op: do nothing."""
+            pass
     
     def get_snapshot(self) -> Dict[str, Any]:
         """No-op: return empty state."""
-        return {"mic_status": "idle", "speaker_status": "idle"}
     
+        return {"mic_status": "idle", "speaker_status": "idle", "loading_status": "idle"}
     def register_listener(self, callback: Callable):
         """No-op: do nothing."""
         pass
