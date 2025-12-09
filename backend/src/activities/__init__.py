@@ -8,7 +8,8 @@ Each activity is a self-contained component with its own configuration and lifec
 from .smalltalk import SmallTalkActivity
 from .journal import JournalActivity
 from .idle_mode import IdleModeActivity
+from .emotion_monitoring import EmotionMonitoringActivity
 
-__all__ = ['SmallTalkActivity', 'JournalActivity', 'IdleModeActivity']
+__all__ = ['SmallTalkActivity', 'JournalActivity', 'IdleModeActivity', 'EmotionMonitoringActivity']
 
 

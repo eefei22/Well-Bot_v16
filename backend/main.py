@@ -33,6 +33,7 @@ from src.components.mic_stream import MicStream
 # from src.activities.gratitude import GratitudeActivity
 # from src.activities.activity_suggestion import ActivitySuggestionActivity
 from src.activities.idle_mode import IdleModeActivity
+from src.activities.emotion_monitoring import EmotionMonitoringActivity
 from src.utils.config_resolver import get_global_config_for_user, resolve_language, get_language_config
 from src.supabase.auth import get_current_user_id, resolve_user_from_device_id
 from src.supabase.database import log_activity_start, save_user_context_to_local, update_mood_rating
@@ -134,6 +135,7 @@ class WellBotOrchestrator:
 
         # Components
         self.idle_mode_activity: Optional[IdleModeActivity] = None
+        self.emotion_monitoring_activity = None  # Emotion monitoring activity
         # Activities are lazy-loaded (imported when needed)
         self.smalltalk_activity = None
         self.journal_activity = None
@@ -145,6 +147,7 @@ class WellBotOrchestrator:
         self.current_activity: Optional[str] = None
         self._activity_thread: Optional[threading.Thread] = None
         self._idle_mode_thread: Optional[threading.Thread] = None  # Track idle mode thread
+        self._emotion_monitoring_thread: Optional[threading.Thread] = None  # Track emotion monitoring thread
         self._transitioning_to_activity = False  # Flag to prevent idle mode restart during activity transition
         self._restarting_idle_mode = False  # Flag to prevent multiple concurrent idle mode restarts
         self._current_activity_log_id: Optional[str] = None  # Track log ID for completion
@@ -296,6 +299,16 @@ class WellBotOrchestrator:
             if not self.idle_mode_activity.initialize():
                 raise RuntimeError("Failed to initialize Idle Mode activity")
             logger.info("✓ Idle Mode activity initialized")
+
+            # Initialize Emotion Monitoring activity
+            logger.info("Initializing Emotion Monitoring activity…")
+            self.emotion_monitoring_activity = EmotionMonitoringActivity(
+                backend_dir=self.backend_dir,
+                user_id=self.user_id
+            )
+            if not self.emotion_monitoring_activity.initialize():
+                raise RuntimeError("Failed to initialize Emotion Monitoring activity")
+            logger.info("✓ Emotion Monitoring activity initialized")
 
             # Initialize UI interface
             self._initialize_ui()
@@ -574,12 +587,12 @@ class WellBotOrchestrator:
 
         # Map intent to activity type for logging
         intent_to_activity_type = {
-            "smalltalk": "smalltalk",  # Smalltalk is now logged as an activity
-            "journaling": "journal",
-            "meditation": "meditation",
-            "quote": "quote",
-            "gratitude": "gratitude",
-            "activity_suggestion": "activity_suggestion",
+            "smalltalk": "Support Chat",  # Smalltalk is logged as "Support Chat"
+            "journaling": "Journaling",
+            "meditation": "Meditation with Music",
+            "quote": "Daily Quote",
+            "gratitude": "Gratitude",
+            "activity_suggestion": None,  # activity_suggestion routes to activities but doesn't log itself
             "termination": None,
         }
         
@@ -1514,6 +1527,87 @@ class WellBotOrchestrator:
         self._idle_mode_thread.start()
         logger.info("✅ Idle mode activity thread started")
 
+    def _start_emotion_monitoring(self):
+        """Start the emotion monitoring activity in a thread with error handling"""
+        logger.info("🎬 Starting emotion monitoring activity...")
+        
+        # Check if there's already a running emotion monitoring thread
+        if self._emotion_monitoring_thread and self._emotion_monitoring_thread.is_alive():
+            current_thread = threading.current_thread()
+            if self._emotion_monitoring_thread is current_thread:
+                logger.warning("⚠️ Cannot start emotion monitoring from within emotion monitoring thread - skipping")
+                return
+            logger.warning("⚠️ Emotion monitoring thread is already running - stopping it first")
+            try:
+                if self.emotion_monitoring_activity:
+                    self.emotion_monitoring_activity.stop()
+                # Check if thread is still valid before joining
+                if self._emotion_monitoring_thread:
+                    self._emotion_monitoring_thread.join(timeout=1.0)
+                    # Check again after join (thread might have been cleared)
+                    if self._emotion_monitoring_thread and self._emotion_monitoring_thread.is_alive():
+                        logger.warning("Previous emotion monitoring thread did not finish within timeout")
+            except Exception as e:
+                logger.warning(f"Error stopping previous emotion monitoring thread: {e}")
+            finally:
+                self._emotion_monitoring_thread = None
+        
+        def run_emotion_monitoring():
+            try:
+                if not self.emotion_monitoring_activity:
+                    logger.error("Emotion monitoring activity is None - cannot start")
+                    return
+                
+                # Run the emotion monitoring activity (this will run continuously)
+                self.emotion_monitoring_activity.run()
+                
+            except Exception as e:
+                logger.error(f"Error running emotion monitoring activity: {e}", exc_info=True)
+                # Don't restart automatically - let it fail gracefully
+            finally:
+                # Clear thread reference when thread exits
+                with self._lock:
+                    if self._emotion_monitoring_thread == threading.current_thread():
+                        self._emotion_monitoring_thread = None
+        
+        # Start emotion monitoring in a daemon thread and track it
+        self._emotion_monitoring_thread = threading.Thread(target=run_emotion_monitoring, daemon=True)
+        self._emotion_monitoring_thread.start()
+        logger.info("✅ Emotion monitoring activity thread started")
+
+    def _stop_emotion_monitoring(self):
+        """Stop the emotion monitoring activity"""
+        logger.info("Stopping emotion monitoring activity...")
+        
+        current_thread = threading.current_thread()
+        if self._emotion_monitoring_thread and self._emotion_monitoring_thread.is_alive():
+            if self._emotion_monitoring_thread is current_thread:
+                logger.warning("Cannot stop emotion monitoring from within emotion monitoring thread")
+                return
+            
+            try:
+                if self.emotion_monitoring_activity:
+                    self.emotion_monitoring_activity.stop()
+                # Check if thread is still valid before joining
+                if self._emotion_monitoring_thread:
+                    self._emotion_monitoring_thread.join(timeout=2.0)
+                    if self._emotion_monitoring_thread and self._emotion_monitoring_thread.is_alive():
+                        logger.warning("Emotion monitoring thread did not finish within timeout during stop")
+                    else:
+                        logger.info("✅ Emotion monitoring thread finished")
+            except Exception as e:
+                logger.warning(f"Error waiting for emotion monitoring thread: {e}")
+            finally:
+                self._emotion_monitoring_thread = None
+        
+        if self.emotion_monitoring_activity:
+            try:
+                self.emotion_monitoring_activity.cleanup()
+            except Exception as e:
+                logger.warning(f"Error cleaning up emotion monitoring activity: {e}")
+        
+        logger.info("✅ Emotion monitoring stopped")
+
     def _restart_idle_mode(self):
         """Restart idle mode activity after an activity ends."""
         logger.info("🔄 Restarting idle mode activity…")
@@ -1672,6 +1766,12 @@ class WellBotOrchestrator:
                 logger.error("Idle mode activity not initialized")
                 return False
             
+            # Start emotion monitoring activity
+            if self.emotion_monitoring_activity:
+                self._start_emotion_monitoring()
+            else:
+                logger.warning("Emotion monitoring activity not initialized - continuing without it")
+            
             with self._lock:
                 self.state = SystemState.LISTENING
             
@@ -1710,6 +1810,9 @@ class WellBotOrchestrator:
             logger.info("Stopping Meditation activity…")
             if self.meditation_activity.is_active():
                 self.meditation_activity.cleanup()
+
+        # Stop emotion monitoring activity
+        self._stop_emotion_monitoring()
 
         # Stop idle mode activity
         if self.idle_mode_activity:

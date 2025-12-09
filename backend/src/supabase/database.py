@@ -520,7 +520,7 @@ def log_activity_start(
     
     Args:
         user_id: User ID
-        activity_type: Type of intervention ('journal', 'gratitude', 'todo', 'meditation', 'quote', 'activity_suggestion')
+        activity_type: Type of intervention ('Support Chat', 'Journaling', 'Meditation with Music', 'Daily Quote', 'Gratitude')
         emotional_log_id: Optional emotional_log ID if intervention was triggered by emotion detection.
                          None for command-triggered interventions.
     
@@ -530,7 +530,7 @@ def log_activity_start(
     """
     try:
         # Validate enum values match schema constraints
-        valid_activity_types = ['journal', 'gratitude', 'todo', 'meditation', 'quote', 'activity_suggestion']
+        valid_activity_types = ['Support Chat', 'Journaling', 'Meditation with Music', 'Daily Quote', 'Gratitude']
         
         if activity_type not in valid_activity_types:
             logger.error(f"Invalid activity_type: {activity_type}. Must be one of {valid_activity_types}")
@@ -690,7 +690,7 @@ def query_recent_activity_logs(
     
     Args:
         user_id: User ID to filter logs
-        activity_type: Optional filter by intervention type ('journal', 'gratitude', 'todo', 'meditation', 'quote')
+        activity_type: Optional filter by intervention type ('Support Chat', 'Journaling', 'Meditation with Music', 'Daily Quote', 'Gratitude')
         emotional_log_id: Optional filter by emotional_log_id (None for command-triggered, int for emotion-triggered)
         limit: Maximum number of records to return
         days_back: Number of days to look back from current time
