@@ -124,14 +124,14 @@ Well-Bot_CMS/
 - **Request Body**:
   ```json
   {
-    "user_id": "8517c97f-66ef-4955-86ed-531013d33d3e"
+    "user_id": "96975f52-5b05-4eb1-bfa5-530485112518"
   }
   ```
 - **Response** (Success):
   ```json
   {
     "status": "success",
-    "user_id": "8517c97f-66ef-4955-86ed-531013d33d3e",
+    "user_id": "96975f52-5b05-4eb1-bfa5-530485112518",
     "facts": "• Communication style: [extracted facts]\n• Interests: [interests]\n...",
     "persona_summary": "• Daily routines: [routines]\n• Stories: [experiences]\n..."
   }

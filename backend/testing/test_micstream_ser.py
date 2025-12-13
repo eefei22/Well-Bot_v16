@@ -32,7 +32,7 @@ ENV_FILE_PATH = os.path.join(os.path.dirname(__file__), '..', '.env')
 SER_SERVICE_URL = os.getenv("SER_SERVICE_URL", "http://localhost:8008")  # Default to local
 SER_ENDPOINT = "/analyze-speech"
 SER_TIMEOUT = 30  # Request timeout in seconds
-TEST_USER_ID = os.getenv("TEST_USER_ID", "8517c97f-66ef-4955-86ed-531013d33d3e")  # Default test user ID
+TEST_USER_ID = os.getenv("TEST_USER_ID", "96975f52-5b05-4eb1-bfa5-530485112518")  # Default test user ID
 
 # Audio capture settings
 AUDIO_SAMPLE_RATE = 16000  # Audio sample rate in Hz

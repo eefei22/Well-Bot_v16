@@ -9,7 +9,8 @@ from .smalltalk import SmallTalkActivity
 from .journal import JournalActivity
 from .idle_mode import IdleModeActivity
 from .emotion_monitoring import EmotionMonitoringActivity
+from .wake_mode import WakeModeActivity
 
-__all__ = ['SmallTalkActivity', 'JournalActivity', 'IdleModeActivity', 'EmotionMonitoringActivity']
+__all__ = ['SmallTalkActivity', 'JournalActivity', 'IdleModeActivity', 'EmotionMonitoringActivity', 'WakeModeActivity']
 
 

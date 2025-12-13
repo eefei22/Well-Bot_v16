@@ -12,7 +12,7 @@ import json
 logger = logging.getLogger(__name__)
 
 # Default dev user ID (fallback)
-DEFAULT_DEV_USER_ID = "8517c97f-66ef-4955-86ed-531013d33d3e"
+DEFAULT_DEV_USER_ID = "96975f52-5b05-4eb1-bfa5-530485112518"
 
 def resolve_user_from_device_id(device_id: str) -> Dict[str, str]:
     """

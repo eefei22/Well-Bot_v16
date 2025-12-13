@@ -46,7 +46,7 @@ def get_current_time_utc8_naive() -> datetime:
 
 # If you're running everything locally now, hardcode your dev user_id here:
 # NOTE: This constant is deprecated. Use get_current_user_id() instead.
-# DEV_USER_ID = "8517c97f-66ef-4955-86ed-531013d33d3e"
+# DEV_USER_ID = "96975f52-5b05-4eb1-bfa5-530485112518"
 
 sb = get_supabase(service=True)
 

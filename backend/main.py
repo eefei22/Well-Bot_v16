@@ -33,7 +33,7 @@ from src.components.mic_stream import MicStream
 # from src.activities.gratitude import GratitudeActivity
 # from src.activities.activity_suggestion import ActivitySuggestionActivity
 from src.activities.idle_mode import IdleModeActivity
-from src.activities.emotion_monitoring import EmotionMonitoringActivity
+from src.activities.wake_mode import WakeModeActivity
 from src.utils.config_resolver import get_global_config_for_user, resolve_language, get_language_config
 from src.supabase.auth import get_current_user_id, resolve_user_from_device_id
 from src.supabase.database import log_activity_start, save_user_context_to_local, update_mood_rating
@@ -135,7 +135,7 @@ class WellBotOrchestrator:
 
         # Components
         self.idle_mode_activity: Optional[IdleModeActivity] = None
-        self.emotion_monitoring_activity = None  # Emotion monitoring activity
+        self.wake_mode_activity: Optional[WakeModeActivity] = None
         # Activities are lazy-loaded (imported when needed)
         self.smalltalk_activity = None
         self.journal_activity = None
@@ -147,7 +147,7 @@ class WellBotOrchestrator:
         self.current_activity: Optional[str] = None
         self._activity_thread: Optional[threading.Thread] = None
         self._idle_mode_thread: Optional[threading.Thread] = None  # Track idle mode thread
-        self._emotion_monitoring_thread: Optional[threading.Thread] = None  # Track emotion monitoring thread
+        self._wake_mode_thread: Optional[threading.Thread] = None  # Track wake mode thread
         self._transitioning_to_activity = False  # Flag to prevent idle mode restart during activity transition
         self._restarting_idle_mode = False  # Flag to prevent multiple concurrent idle mode restarts
         self._current_activity_log_id: Optional[str] = None  # Track log ID for completion
@@ -294,21 +294,23 @@ class WellBotOrchestrator:
             self.idle_mode_activity = IdleModeActivity(
                 backend_dir=self.backend_dir,
                 user_id=self.user_id,
-                on_intent_detected=self._handle_intent_detected
+                on_wake_detected=self._on_wake_detected,
+                on_intervention_triggered=self._on_intervention_triggered
             )
             if not self.idle_mode_activity.initialize():
                 raise RuntimeError("Failed to initialize Idle Mode activity")
             logger.info("✓ Idle Mode activity initialized")
 
-            # Initialize Emotion Monitoring activity
-            logger.info("Initializing Emotion Monitoring activity…")
-            self.emotion_monitoring_activity = EmotionMonitoringActivity(
+            # Initialize Wake Mode activity
+            logger.info("Initializing Wake Mode activity (intent recognition)…")
+            self.wake_mode_activity = WakeModeActivity(
                 backend_dir=self.backend_dir,
-                user_id=self.user_id
+                user_id=self.user_id,
+                on_intent_detected=self._handle_intent_detected
             )
-            if not self.emotion_monitoring_activity.initialize():
-                raise RuntimeError("Failed to initialize Emotion Monitoring activity")
-            logger.info("✓ Emotion Monitoring activity initialized")
+            if not self.wake_mode_activity.initialize():
+                raise RuntimeError("Failed to initialize Wake Mode activity")
+            logger.info("✓ Wake Mode activity initialized")
 
             # Initialize UI interface
             self._initialize_ui()
@@ -1414,94 +1416,24 @@ class WellBotOrchestrator:
                     logger.error("Idle mode activity is None - cannot start")
                     return
                 
-                # Run the idle mode activity (this will block until intent detected or timeout)
+                # Run the idle mode activity (this will block until wake word/intervention detected)
                 success = self.idle_mode_activity.run()
                 
                 if success:
-                    logger.info("✅ Idle mode completed successfully (intent detected)")
-                    # Check if intent was detected (either from wakeword or intervention trigger)
-                    detected_intent = self.idle_mode_activity.get_detected_intent()
-                    detected_transcript = self.idle_mode_activity.get_detected_transcript()
-                    
-                    # Check system state - if we're already in an activity or processing, don't route again
+                    logger.info("✅ Idle mode completed (wake word/intervention detected)")
+                    # Note: wake_mode should already be started by callback, but check if it wasn't
+                    # This is a fallback in case callback didn't fire
                     with self._lock:
-                        current_state = self.state
-                    
-                    if current_state != SystemState.LISTENING:
-                        logger.info(f"System state is {current_state.value}, not LISTENING - skipping intent routing (likely already handled)")
-                        # Clear intent flags to prevent stale intents
-                        if self.idle_mode_activity:
-                            try:
-                                self.idle_mode_activity._intent_detected.clear()
-                                self.idle_mode_activity._detected_intent = None
-                                self.idle_mode_activity._detected_transcript = None
-                            except:
-                                pass
-                        return
-                    
-                    if detected_intent:
-                        # Update state before routing
-                        with self._lock:
-                            if self.state == SystemState.LISTENING:
-                                self.state = SystemState.PROCESSING
-                                logger.info("🎯 Transitioning to PROCESSING state")
-                            self.state = SystemState.ACTIVITY_ACTIVE
-                        
-                        # Route to activity based on detected intent
-                        intent = detected_intent.get('intent', 'unknown')
-                        transcript = detected_transcript or ""
-                        logger.info(f"🎯 Routing to activity based on detected intent: {intent}")
-                        
-                        # Clear detected intent to prevent duplicate routing
-                        # This is safe because we're about to route, and reinitialize() will clear it anyway
-                        if hasattr(self.idle_mode_activity, '_detected_intent'):
-                            self.idle_mode_activity._detected_intent = None
-                            self.idle_mode_activity._detected_transcript = None
-                        
-                        self._route_to_activity(intent, transcript)
-                    else:
-                        # Intent was detected via callback, routing already handled
-                        logger.info("Intent routing handled by callback")
-                        # For unknown intents, callback calls _restart_idle_mode() itself
-                        # Check if we're already restarting to avoid double restarts
-                        with self._lock:
-                            if self.state == SystemState.LISTENING:
-                                # State is LISTENING, which means callback already handled unknown intent
-                                # and called _restart_idle_mode(). Don't restart again.
-                                logger.debug("State is LISTENING after callback - restart already handled by callback")
-                        return
+                        if self._wake_mode_thread is None or not self._wake_mode_thread.is_alive():
+                            logger.warning("Wake mode not started by callback - starting now as fallback")
+                            intervention_mode = False
+                            if hasattr(self.idle_mode_activity, 'was_last_trigger_intervention'):
+                                intervention_mode = self.idle_mode_activity.was_last_trigger_intervention()
+                            self._start_wake_mode(intervention_mode=intervention_mode)
                 else:
-                    logger.info("⏰ Idle mode exited without intent detection (timeout or stopped)")
-                    # Check if we're transitioning to an activity - if so, don't restart idle mode
-                    if self._transitioning_to_activity:
-                        logger.info("System is transitioning to activity - skipping idle mode restart")
-                        return
-                    
-                    # Check if restart is already in progress (e.g., from _handle_unknown_intent)
-                    with self._lock:
-                        if self._restarting_idle_mode:
-                            logger.info("Idle mode restart already in progress - skipping duplicate restart")
-                            return
-                        current_state = self.state
-                    
-                    if current_state in [SystemState.PROCESSING, SystemState.ACTIVITY_ACTIVE]:
-                        logger.info("System state indicates activity transition - skipping idle mode restart")
-                        return
-                    
-                    # No intent detected (timeout) - restart idle mode to return to wakeword listening
-                    # Don't restart from within the idle mode thread - schedule it from outside
-                    logger.info("🔄 Restarting idle mode after timeout...")
-                    current_thread = threading.current_thread()
-                    if self._idle_mode_thread is current_thread:
-                        # We're in the idle mode thread - schedule restart from a different thread
-                        logger.info("Scheduling idle mode restart from outside thread...")
-                        def restart_from_outside():
-                            time.sleep(0.1)  # Brief delay to ensure thread cleanup
-                            self._restart_idle_mode()
-                        threading.Thread(target=restart_from_outside, daemon=True).start()
-                    else:
-                        # We're not in the idle mode thread - safe to restart directly
-                        self._restart_idle_mode()
+                    logger.info("⏰ Idle mode exited without wake word/intervention (stopped)")
+                    # Restart idle mode if needed
+                    self._restart_idle_mode_if_needed()
                     
             except Exception as e:
                 logger.error(f"Error running idle mode activity: {e}", exc_info=True)
@@ -1527,86 +1459,197 @@ class WellBotOrchestrator:
         self._idle_mode_thread.start()
         logger.info("✅ Idle mode activity thread started")
 
-    def _start_emotion_monitoring(self):
-        """Start the emotion monitoring activity in a thread with error handling"""
-        logger.info("🎬 Starting emotion monitoring activity...")
+    def _on_wake_detected(self):
+        """Callback when wake word is detected by idle_mode - start wake_mode immediately"""
+        logger.info("🔔 Wake word detected callback - starting wake_mode immediately")
         
-        # Check if there's already a running emotion monitoring thread
-        if self._emotion_monitoring_thread and self._emotion_monitoring_thread.is_alive():
+        # Check system state
+        with self._lock:
+            current_state = self.state
+        
+        if current_state != SystemState.LISTENING:
+            logger.info(f"System state is {current_state.value}, not LISTENING - skipping wake_mode start")
+            return
+        
+        # Start wake_mode immediately (non-blocking)
+        intervention_mode = False
+        if self.idle_mode_activity and hasattr(self.idle_mode_activity, 'was_last_trigger_intervention'):
+            intervention_mode = self.idle_mode_activity.was_last_trigger_intervention()
+        
+        # Start wake_mode in a separate thread to avoid blocking
+        def start_wake_mode_async():
+            time.sleep(0.05)  # Tiny delay to ensure idle_mode flag is set
+            self._start_wake_mode(intervention_mode=intervention_mode)
+        
+        threading.Thread(target=start_wake_mode_async, daemon=True).start()
+    
+    def _on_intervention_triggered(self):
+        """Callback when intervention is triggered by idle_mode - start wake_mode immediately"""
+        logger.info("🔔 Intervention triggered callback - starting wake_mode immediately")
+        
+        # Check system state
+        with self._lock:
+            current_state = self.state
+        
+        if current_state != SystemState.LISTENING:
+            logger.info(f"System state is {current_state.value}, not LISTENING - skipping wake_mode start")
+            return
+        
+        # Start wake_mode immediately in intervention mode (non-blocking)
+        def start_wake_mode_async():
+            time.sleep(0.05)  # Tiny delay to ensure idle_mode flag is set
+            self._start_wake_mode(intervention_mode=True)
+        
+        threading.Thread(target=start_wake_mode_async, daemon=True).start()
+    
+    def _start_wake_mode(self, intervention_mode: bool = False):
+        """Start the wake mode activity in a thread with error handling"""
+        logger.info("🎬 Starting wake mode activity...")
+        
+        # Check if there's already a running wake mode thread
+        if self._wake_mode_thread and self._wake_mode_thread.is_alive():
             current_thread = threading.current_thread()
-            if self._emotion_monitoring_thread is current_thread:
-                logger.warning("⚠️ Cannot start emotion monitoring from within emotion monitoring thread - skipping")
+            if self._wake_mode_thread is current_thread:
+                logger.warning("⚠️ Cannot start wake mode from within wake mode thread - skipping")
                 return
-            logger.warning("⚠️ Emotion monitoring thread is already running - stopping it first")
+            logger.warning("⚠️ Wake mode thread is already running - stopping it first")
             try:
-                if self.emotion_monitoring_activity:
-                    self.emotion_monitoring_activity.stop()
+                if self.wake_mode_activity:
+                    self.wake_mode_activity.stop()
                 # Check if thread is still valid before joining
-                if self._emotion_monitoring_thread:
-                    self._emotion_monitoring_thread.join(timeout=1.0)
-                    # Check again after join (thread might have been cleared)
-                    if self._emotion_monitoring_thread and self._emotion_monitoring_thread.is_alive():
-                        logger.warning("Previous emotion monitoring thread did not finish within timeout")
+                if self._wake_mode_thread:
+                    self._wake_mode_thread.join(timeout=1.0)
+                    if self._wake_mode_thread and self._wake_mode_thread.is_alive():
+                        logger.warning("Previous wake mode thread did not finish within timeout")
             except Exception as e:
-                logger.warning(f"Error stopping previous emotion monitoring thread: {e}")
+                logger.warning(f"Error stopping previous wake mode thread: {e}")
             finally:
-                self._emotion_monitoring_thread = None
+                self._wake_mode_thread = None
         
-        def run_emotion_monitoring():
+        def run_wake_mode():
             try:
-                if not self.emotion_monitoring_activity:
-                    logger.error("Emotion monitoring activity is None - cannot start")
+                if not self.wake_mode_activity:
+                    logger.error("Wake mode activity is None - cannot start")
                     return
                 
-                # Run the emotion monitoring activity (this will run continuously)
-                self.emotion_monitoring_activity.run()
+                # Start wake mode
+                if not self.wake_mode_activity.start(intervention_mode=intervention_mode):
+                    logger.error("Failed to start wake mode activity")
+                    return
                 
+                # Run the wake mode activity (this will block until intent detected or timeout)
+                success = self.wake_mode_activity.run()
+                
+                if success:
+                    logger.info("✅ Wake mode completed successfully (intent detected)")
+                    # Get detected intent and transcript
+                    detected_intent = self.wake_mode_activity.get_detected_intent()
+                    detected_transcript = self.wake_mode_activity.get_detected_transcript()
+                    
+                    # Check system state
+                    with self._lock:
+                        current_state = self.state
+                    
+                    if current_state != SystemState.LISTENING:
+                        logger.info(f"System state is {current_state.value}, not LISTENING - skipping intent routing")
+                        return
+                    
+                    if detected_intent:
+                        # Update state before routing
+                        with self._lock:
+                            if self.state == SystemState.LISTENING:
+                                self.state = SystemState.PROCESSING
+                                logger.info("🎯 Transitioning to PROCESSING state")
+                            self.state = SystemState.ACTIVITY_ACTIVE
+                        
+                        # Route to activity based on detected intent
+                        intent = detected_intent.get('intent', 'unknown')
+                        transcript = detected_transcript or ""
+                        logger.info(f"🎯 Routing to activity based on detected intent: {intent}")
+                        
+                        self._route_to_activity(intent, transcript)
+                    else:
+                        logger.warning("Wake mode completed but no intent detected")
+                        # Restart idle mode
+                        self._restart_idle_mode_if_needed()
+                else:
+                    logger.info("⏰ Wake mode exited without intent detection (timeout)")
+                    # Restart idle mode
+                    self._restart_idle_mode_if_needed()
+                    
             except Exception as e:
-                logger.error(f"Error running emotion monitoring activity: {e}", exc_info=True)
-                # Don't restart automatically - let it fail gracefully
+                logger.error(f"Error running wake mode activity: {e}", exc_info=True)
+                # Restart idle mode on error
+                self._restart_idle_mode_if_needed()
             finally:
                 # Clear thread reference when thread exits
                 with self._lock:
-                    if self._emotion_monitoring_thread == threading.current_thread():
-                        self._emotion_monitoring_thread = None
+                    if self._wake_mode_thread == threading.current_thread():
+                        self._wake_mode_thread = None
         
-        # Start emotion monitoring in a daemon thread and track it
-        self._emotion_monitoring_thread = threading.Thread(target=run_emotion_monitoring, daemon=True)
-        self._emotion_monitoring_thread.start()
-        logger.info("✅ Emotion monitoring activity thread started")
+        # Start wake mode in a daemon thread and track it
+        self._wake_mode_thread = threading.Thread(target=run_wake_mode, daemon=True)
+        self._wake_mode_thread.start()
+        logger.info("✅ Wake mode activity thread started")
 
-    def _stop_emotion_monitoring(self):
-        """Stop the emotion monitoring activity"""
-        logger.info("Stopping emotion monitoring activity...")
+    def _stop_wake_mode(self):
+        """Stop the wake mode activity"""
+        logger.info("Stopping wake mode activity...")
         
         current_thread = threading.current_thread()
-        if self._emotion_monitoring_thread and self._emotion_monitoring_thread.is_alive():
-            if self._emotion_monitoring_thread is current_thread:
-                logger.warning("Cannot stop emotion monitoring from within emotion monitoring thread")
+        if self._wake_mode_thread and self._wake_mode_thread.is_alive():
+            if self._wake_mode_thread is current_thread:
+                logger.warning("Cannot stop wake mode from within wake mode thread")
                 return
             
             try:
-                if self.emotion_monitoring_activity:
-                    self.emotion_monitoring_activity.stop()
+                if self.wake_mode_activity:
+                    self.wake_mode_activity.stop()
                 # Check if thread is still valid before joining
-                if self._emotion_monitoring_thread:
-                    self._emotion_monitoring_thread.join(timeout=2.0)
-                    if self._emotion_monitoring_thread and self._emotion_monitoring_thread.is_alive():
-                        logger.warning("Emotion monitoring thread did not finish within timeout during stop")
+                if self._wake_mode_thread:
+                    self._wake_mode_thread.join(timeout=2.0)
+                    if self._wake_mode_thread and self._wake_mode_thread.is_alive():
+                        logger.warning("Wake mode thread did not finish within timeout during stop")
                     else:
-                        logger.info("✅ Emotion monitoring thread finished")
+                        logger.info("✅ Wake mode thread finished")
             except Exception as e:
-                logger.warning(f"Error waiting for emotion monitoring thread: {e}")
+                logger.warning(f"Error waiting for wake mode thread: {e}")
             finally:
-                self._emotion_monitoring_thread = None
+                self._wake_mode_thread = None
         
-        if self.emotion_monitoring_activity:
-            try:
-                self.emotion_monitoring_activity.cleanup()
-            except Exception as e:
-                logger.warning(f"Error cleaning up emotion monitoring activity: {e}")
+        logger.info("✅ Wake mode stopped")
+    
+    def _restart_idle_mode_if_needed(self):
+        """Helper to restart idle mode if needed (checks state and flags)"""
+        # Check if we're transitioning to an activity
+        if self._transitioning_to_activity:
+            logger.info("System is transitioning to activity - skipping idle mode restart")
+            return
         
-        logger.info("✅ Emotion monitoring stopped")
+        # Check if restart is already in progress
+        with self._lock:
+            if self._restarting_idle_mode:
+                logger.info("Idle mode restart already in progress - skipping duplicate restart")
+                return
+            current_state = self.state
+        
+        if current_state in [SystemState.PROCESSING, SystemState.ACTIVITY_ACTIVE]:
+            logger.info("System state indicates activity transition - skipping idle mode restart")
+            return
+        
+        # Restart idle mode
+        logger.info("🔄 Restarting idle mode...")
+        current_thread = threading.current_thread()
+        if self._idle_mode_thread is current_thread:
+            # We're in the idle mode thread - schedule restart from a different thread
+            logger.info("Scheduling idle mode restart from outside thread...")
+            def restart_from_outside():
+                time.sleep(0.1)  # Brief delay to ensure thread cleanup
+                self._restart_idle_mode()
+            threading.Thread(target=restart_from_outside, daemon=True).start()
+        else:
+            # We're not in the idle mode thread - safe to restart directly
+            self._restart_idle_mode()
 
     def _restart_idle_mode(self):
         """Restart idle mode activity after an activity ends."""
@@ -1675,7 +1718,8 @@ class WellBotOrchestrator:
                         self.idle_mode_activity = IdleModeActivity(
                             backend_dir=self.backend_dir,
                             user_id=self.user_id,
-                            on_intent_detected=self._handle_intent_detected
+                            on_wake_detected=self._on_wake_detected,
+                            on_intervention_triggered=self._on_intervention_triggered
                         )
                         if not self.idle_mode_activity.initialize():
                             raise RuntimeError("Failed to recreate idle mode activity")
@@ -1759,18 +1803,12 @@ class WellBotOrchestrator:
             # Continue startup even if TTS fails
 
         try:
-            # Start idle mode activity
+            # Start idle mode activity (emotion monitoring is managed internally by idle_mode)
             if self.idle_mode_activity:
                 self._start_idle_mode_activity()
             else:
                 logger.error("Idle mode activity not initialized")
                 return False
-            
-            # Start emotion monitoring activity
-            if self.emotion_monitoring_activity:
-                self._start_emotion_monitoring()
-            else:
-                logger.warning("Emotion monitoring activity not initialized - continuing without it")
             
             with self._lock:
                 self.state = SystemState.LISTENING
@@ -1811,10 +1849,10 @@ class WellBotOrchestrator:
             if self.meditation_activity.is_active():
                 self.meditation_activity.cleanup()
 
-        # Stop emotion monitoring activity
-        self._stop_emotion_monitoring()
+        # Stop wake mode activity
+        self._stop_wake_mode()
 
-        # Stop idle mode activity
+        # Stop idle mode activity (emotion monitoring is stopped internally)
         if self.idle_mode_activity:
             logger.info("Stopping idle mode activity…")
             self.idle_mode_activity.stop()

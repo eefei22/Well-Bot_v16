@@ -589,10 +589,13 @@ class ConversationAudioManager:
     
     def get_status(self) -> dict:
         """Get current audio manager status."""
+        with self._mic_lock:
+            mic_active = bool(self._current_mic and self._current_mic.is_running())
+        
         return {
             "active": self._active,
             "audio_playing": self._is_audio_playing(),
-            "mic_active": bool(self._current_mic and self._current_mic.is_running()),
+            "mic_active": mic_active,
             "silence_monitoring": bool(self._silence_watcher_thread and self._silence_watcher_thread.is_alive()),
             "last_user_time": self._last_user_time,
             "nudged": self._nudged
