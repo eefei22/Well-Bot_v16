@@ -30,7 +30,7 @@ env_path = backend_dir.parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
 # Import modules
-from src.supabase.database import log_activity_start, update_mood_rating, query_recent_activity_logs
+from src.supabase.database import log_activity_start, log_activity_end, update_mood_rating, query_recent_activity_logs
 from src.supabase.auth import get_current_user_id
 
 print("=" * 80)
@@ -94,12 +94,38 @@ def test_intervention_logging():
     print()
     
     if not inserted_logs:
-        print("ERROR: No logs were inserted. Cannot continue with mood rating tests.")
+        print("ERROR: No logs were inserted. Cannot continue with tests.")
         return False
+    
+    # Test end timestamps
+    print("=" * 80)
+    print("TEST 2: TESTING END TIMESTAMPS")
+    print("=" * 80)
+    print()
+    
+    end_timestamp_results = []
+    
+    # Add end timestamps to first few logs
+    for i, log_entry in enumerate(inserted_logs[:3]):
+        print(f"Adding end_timestamp to log {i+1}: {log_entry['intervention_type']}")
+        
+        # Small delay to simulate activity duration
+        time.sleep(1)
+        
+        success = log_activity_end(public_id=log_entry["public_id"])
+        
+        if success:
+            print(f"  ✓ Successfully logged end timestamp")
+            end_timestamp_results.append(True)
+        else:
+            print(f"  ✗ Failed to log end timestamp")
+            end_timestamp_results.append(False)
+    
+    print()
     
     # Test mood ratings
     print("=" * 80)
-    print("TEST 2: TESTING MOOD RATINGS")
+    print("TEST 3: TESTING MOOD RATINGS")
     print("=" * 80)
     print()
     
@@ -135,7 +161,7 @@ def test_intervention_logging():
     
     # Query recent logs to verify
     print("=" * 80)
-    print("TEST 3: QUERYING RECENT LOGS")
+    print("TEST 4: QUERYING RECENT LOGS")
     print("=" * 80)
     print()
     
@@ -162,7 +188,12 @@ def test_intervention_logging():
         if matching_log:
             print(f"Public ID: {log_entry['public_id']}")
             print(f"  Intervention Type: {matching_log.get('intervention_type', 'N/A')}")
-            print(f"  Timestamp: {matching_log.get('timestamp', 'N/A')}")
+            print(f"  Start Timestamp: {matching_log.get('timestamp', 'N/A')}")
+            end_timestamp = matching_log.get('end_timestamp')
+            if end_timestamp:
+                print(f"  End Timestamp: {end_timestamp}")
+            else:
+                print(f"  End Timestamp: None")
             mood_rating = matching_log.get('mood_rating')
             if mood_rating:
                 print(f"  Mood Rating: {mood_rating}")
@@ -178,13 +209,16 @@ def test_intervention_logging():
     print("TEST SUMMARY")
     print("=" * 80)
     print(f"✓ Test 1: Insert Intervention Logs - {len(inserted_logs)}/{len(intervention_types)} passed")
-    print(f"✓ Test 2: Mood Ratings - {sum(mood_rating_results)}/{len(mood_rating_results)} passed")
-    print(f"✓ Test 3: Query Logs - Found {len(recent_logs)} logs")
+    print(f"✓ Test 2: End Timestamps - {sum(end_timestamp_results)}/{len(end_timestamp_results)} passed")
+    print(f"✓ Test 3: Mood Ratings - {sum(mood_rating_results)}/{len(mood_rating_results)} passed")
+    print(f"✓ Test 4: Query Logs - Found {len(recent_logs)} logs")
     print()
     print("Check the database intervention_log table to verify:")
     print("  - All intervention_type values match the new standardized names")
+    print("  - Start timestamps (timestamp column) are populated")
+    print("  - End timestamps (end_timestamp column) are populated for first 3 logs")
     print("  - Mood ratings are stored as arrays [pre, post]")
-    print("  - Timestamps are correct")
+    print("  - Duration column remains but is NOT populated (as per requirements)")
     print("=" * 80)
     print()
     

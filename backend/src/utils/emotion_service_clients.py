@@ -30,7 +30,7 @@ class SERServiceClient:
             service_url: Optional service URL. If not provided, uses SER_SERVICE_URL from .env
         """
         self.service_url = service_url or os.getenv("SER_SERVICE_URL", "https://well-bot-emotionrecognition-520080168829.asia-south1.run.app")
-        self.analyze_endpoint = f"{self.service_url}/analyze-speech"
+        self.analyze_endpoint = f"{self.service_url}/ser/analyze-speech"
         self.timeout = 30  # 30 second timeout for requests
         
         logger.info(f"SERServiceClient initialized with URL: {self.service_url}")

@@ -36,7 +36,7 @@ from src.activities.idle_mode import IdleModeActivity
 from src.activities.wake_mode import WakeModeActivity
 from src.utils.config_resolver import get_global_config_for_user, resolve_language, get_language_config
 from src.supabase.auth import get_current_user_id, resolve_user_from_device_id
-from src.supabase.database import log_activity_start, save_user_context_to_local, update_mood_rating
+from src.supabase.database import log_activity_start, log_activity_end, save_user_context_to_local, update_mood_rating
 from src.components.activity_logger import prompt_mood_rating_before_activity, prompt_mood_rating_after_activity
 
 # GUI imports
@@ -715,6 +715,13 @@ class WellBotOrchestrator:
             except Exception as e:
                 logger.error(f"Error in SmallTalk activity: {e}", exc_info=True)
             finally:
+                # Log activity end timestamp
+                try:
+                    if self._current_activity_log_id:
+                        log_activity_end(self._current_activity_log_id)
+                except Exception as e:
+                    logger.error(f"Error logging activity end: {e}", exc_info=True)
+                
                 # Prompt for post-activity mood rating before cleanup
                 try:
                     if self._current_activity_log_id:
@@ -876,6 +883,13 @@ class WellBotOrchestrator:
             except Exception as e:
                 logger.error(f"Error in Journal activity: {e}", exc_info=True)
             finally:
+                # Log activity end timestamp
+                try:
+                    if self._current_activity_log_id:
+                        log_activity_end(self._current_activity_log_id)
+                except Exception as e:
+                    logger.error(f"Error logging activity end: {e}", exc_info=True)
+                
                 # Prompt for post-activity mood rating before cleanup
                 try:
                     if self._current_activity_log_id:
@@ -981,6 +995,13 @@ class WellBotOrchestrator:
             except Exception as e:
                 logger.error(f"Error in Spiritual Quote activity: {e}", exc_info=True)
             finally:
+                # Log activity end timestamp
+                try:
+                    if self._current_activity_log_id:
+                        log_activity_end(self._current_activity_log_id)
+                except Exception as e:
+                    logger.error(f"Error logging activity end: {e}", exc_info=True)
+                
                 # Prompt for post-activity mood rating before cleanup
                 try:
                     if self._current_activity_log_id:
@@ -1076,6 +1097,13 @@ class WellBotOrchestrator:
             except Exception as e:
                 logger.error(f"Error in Gratitude activity: {e}", exc_info=True)
             finally:
+                # Log activity end timestamp
+                try:
+                    if self._current_activity_log_id:
+                        log_activity_end(self._current_activity_log_id)
+                except Exception as e:
+                    logger.error(f"Error logging activity end: {e}", exc_info=True)
+                
                 # Prompt for post-activity mood rating before cleanup
                 try:
                     if self._current_activity_log_id:
@@ -1172,6 +1200,13 @@ class WellBotOrchestrator:
             except Exception as e:
                 logger.error(f"Error in Meditation activity: {e}", exc_info=True)
             finally:
+                # Log activity end timestamp
+                try:
+                    if self._current_activity_log_id:
+                        log_activity_end(self._current_activity_log_id)
+                except Exception as e:
+                    logger.error(f"Error logging activity end: {e}", exc_info=True)
+                
                 # Prompt for post-activity mood rating before cleanup
                 try:
                     if self._current_activity_log_id:

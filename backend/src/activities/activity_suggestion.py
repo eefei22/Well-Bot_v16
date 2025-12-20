@@ -29,9 +29,8 @@ from src.components import (
     KeywordIntentMatcher
 )
 from src.utils.config_loader import get_deepseek_config
-from src.utils.config_resolver import get_global_config_for_user, get_language_config
+from src.utils.config_resolver import get_global_config_for_user, get_language_config, resolve_language
 from src.supabase.auth import get_current_user_id
-from src.supabase.database import get_user_language
 from src.utils.intervention_record import InterventionRecordManager
 
 logger = logging.getLogger(__name__)
@@ -149,8 +148,8 @@ class ActivitySuggestionActivity:
             self.audio_config = audio_config
             
             # Get user language for system prompt
-            user_lang = get_user_language(self.user_id) or 'en'
-            language_name = LANGUAGE_NAMES.get(user_lang, 'English')
+            user_lang_code = resolve_language(self.user_id)  # Returns 'en', 'cn', or 'bm'
+            language_name = LANGUAGE_NAMES.get(user_lang_code, 'English')
             
             # Build system prompt with language instruction
             base_system_prompt = self.smalltalk_config.get("system_prompt", "You are a friendly assistant. Do not use emojis and always always ask follow up questions.")

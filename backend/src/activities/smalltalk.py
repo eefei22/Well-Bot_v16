@@ -32,9 +32,8 @@ from src.components import (
     normalize_text
 )
 from src.utils.config_loader import get_deepseek_config
-from src.utils.config_resolver import get_global_config_for_user, get_language_config
+from src.utils.config_resolver import get_global_config_for_user, get_language_config, resolve_language
 from src.supabase.auth import get_current_user_id
-from src.supabase.database import get_user_language
 from src.components import UserContextInjector
 
 logger = logging.getLogger(__name__)
@@ -131,13 +130,33 @@ class SmallTalkActivity:
             # Store audio config for callback methods
             self.audio_config = audio_config
             
-            # Get user language for system prompt
-            user_lang = get_user_language(self.user_id) or 'en'
-            language_name = LANGUAGE_NAMES.get(user_lang, 'English')
+            # Get user language for system prompt - use resolve_language to get normalized code
+            user_lang_code = resolve_language(self.user_id)  # Returns 'en', 'cn', or 'bm'
+            language_name = LANGUAGE_NAMES.get(user_lang_code, 'English')
             
-            # Build system prompt with language instruction
+            # Build system prompt with STRONG language instruction at the beginning
             base_system_prompt = self.smalltalk_config.get("system_prompt", "You are a friendly assistant. Do not use emojis and always always ask follow up questions.")
-            system_prompt_with_language = f"{base_system_prompt}\n\nImportant: Always respond in {language_name}. This is the user's preferred language."
+            
+            # Create a much stronger language enforcement instruction
+            # Use explicit language names in the target language for better LLM understanding
+            lang_instructions = {
+                'cn': '中文',
+                'bm': 'Bahasa Melayu', 
+                'en': 'English'
+            }
+            target_lang_name = lang_instructions.get(user_lang_code, language_name)
+            
+            language_instruction = f"""CRITICAL LANGUAGE REQUIREMENT: You MUST respond ONLY in {language_name} ({target_lang_name}). 
+- The user's preferred language is {language_name} (language code: {user_lang_code})
+- ALL your responses must be in {language_name} - never use English or any other language
+- If the user writes in {language_name}, respond in {language_name}
+- If the user writes in English, still respond in {language_name}
+- This is non-negotiable: every single response must be in {language_name}
+- Do NOT switch to English even if the user asks questions in English
+
+{base_system_prompt}"""
+            
+            system_prompt_with_language = language_instruction
             
             # Initialize ConversationSession
             logger.info("Initializing ConversationSession...")

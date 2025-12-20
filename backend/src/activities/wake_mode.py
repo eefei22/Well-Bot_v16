@@ -393,6 +393,9 @@ class WakeModeActivity:
                     transcript = text
                     # Reset silence timer on transcript
                     self._stop_silence_monitoring()
+                    # Stop microphone immediately to allow STT to exit early
+                    if mic.is_running():
+                        mic.stop()
             
             # Run STT in a thread with timeout to prevent 5-minute hangs
             stt_completed = threading.Event()
