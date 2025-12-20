@@ -37,6 +37,7 @@ from src.utils.config_resolver import get_global_config_for_user, resolve_langua
 from src.supabase.auth import get_current_user_id, resolve_user_from_device_id
 from src.supabase.database import log_activity_start, save_user_context_to_local, update_mood_rating
 from src.components.activity_logger import prompt_mood_rating_before_activity, prompt_mood_rating_after_activity
+from src.components.servo_controller import ServoController
 
 # GUI imports
 from src.components.ui_interface import UIInterface, NoOpUIInterface
@@ -77,6 +78,13 @@ class WellBotOrchestrator:
         self.backend_dir = backend_dir
         self.wakeword_model_path  = self.backend_dir / "config" / "WakeWord" / "WellBot_WakeWordModel.ppn"
         
+        try:
+            self.servo_controller = ServoController()
+            logger.info("✓ Servo controller loaded (On-Demand mode)")
+        except Exception as e:
+            logger.warning(f"Could not load servo controller: {e}")
+            self.servo_controller = None
+
         # Resolve user from device_id at startup
         if not DEVICE_ID:
             # Load English config for error message (default)
@@ -337,17 +345,23 @@ class WellBotOrchestrator:
                 f"(id={id(self.ui_interface)})"
             )
 
-            # 2) Initialize Idle Mode with the SAME ui_interface instance
+            # 2) Initialize Idle Mode with BOTH ui_interface AND servo_controller
             logger.info("Initializing Idle Mode activity (wakeword detection)…")
+            
+            # --- FIXED CODE STARTS HERE ---
             self.idle_mode_activity = IdleModeActivity(
                 backend_dir=self.backend_dir,
                 user_id=self.user_id,
                 on_intent_detected=self._handle_intent_detected,
                 ui_interface=self.ui_interface,
+                servo_controller=self.servo_controller 
             )
+            
             if not self.idle_mode_activity.initialize():
                 raise RuntimeError("Failed to initialize Idle Mode activity")
+            
             logger.info("✓ Idle Mode activity initialized")
+            # --- FIXED CODE ENDS HERE ---
             
             # Activities are lazy-loaded - only initialize when needed
             # This reduces memory footprint when idle_mode is running
@@ -1798,6 +1812,11 @@ class WellBotOrchestrator:
 
         with self._lock:
             self.state = SystemState.SHUTTING_DOWN
+
+        # Cleanup servo
+        if self.servo_controller:
+            self.servo_controller.cleanup()
+            logger.info("✅ Servo controller cleaned up")
 
         # Stop activity if active
         if self.current_activity == "smalltalk" and self.smalltalk_activity:

@@ -58,6 +58,7 @@ class IdleModeActivity:
         user_id: Optional[str] = None,
         on_intent_detected: Optional[Callable[[str, Dict[str, Any]], None]] = None,
         ui_interface=None,
+        servo_controller=None,
     ):
         """
         Initialize the Idle Mode Activity
@@ -71,8 +72,8 @@ class IdleModeActivity:
         self.backend_dir = backend_dir
         self.user_id = user_id if user_id is not None else get_current_user_id()
         self.on_intent_detected = on_intent_detected
-        # Optional UI interface for updating GUI state
         self.ui_interface = ui_interface
+        self.servo_controller = servo_controller
         
         # Components (initialized in initialize())
         # Can be either WakeWordDetector (Porcupine) or OpenWakeWordDetector (fallback)
@@ -587,76 +588,85 @@ class IdleModeActivity:
         """Callback when wake word is detected"""
         current_time = time.time()
         
-        # Atomic debounce check and state update to prevent race conditions
+        # Atomic debounce check and state update
         with self._lock:
-            # Debounce: ignore wake words detected too quickly after the last one
             if current_time - self._last_wake_time < self._wake_debounce_seconds:
                 logger.debug(f"Ignoring wake word detected too soon (debounce: {self._wake_debounce_seconds}s)")
                 return
             
-            # Check if STT is already active
             if self.stt_active:
                 logger.warning("Intent recognition already active after wakeword – ignoring this wake event")
                 return
             
-            # Update state atomically: mark STT as active and update last wake time
             self.stt_active = True
             self._last_wake_time = current_time
         
         logger.info("Wake word detected")
 
-        # Load wakeword response config
+        # =========================================================================
+        # SYNCHRONIZED ACTIVATION
+        # Trigger Face, Servo, and Audio setup sequentially for near-instant sync
+        # =========================================================================
+
+        # 1. VISUAL: Set Face to Speaking immediately
+        # We do this first so the user sees reaction instantly
+        if self.ui_interface:
+            try:
+                self.ui_interface.update_speaker_status("speaking")
+            except Exception:
+                pass
+
+        # 2. PHYSICAL: Trigger Servo Wave (Non-blocking)
+        # Runs in its own thread, so it starts moving immediately alongside audio
+        if self.servo_controller:
+            try:
+                self.servo_controller.trigger_wave()
+            except Exception as e:
+                logger.warning(f"Failed to trigger servo gesture: {e}")
+
+        # 3. AUDIO: Play Feedback Sound (Blocking)
+        # The face remains "speaking" and servo continues waving during this
         wakeword_config = self.language_config.get("wakeword_responses", {})
         use_audio_files = self.global_config["wakeword"].get("use_audio_files", False)
         
-        # Play feedback audio if enabled
         if use_audio_files and self.wakeword_audio_path:
             try:
-                # Tell UI: we are "speaking" during the wakeword feedback sound
-                if self.ui_interface:
-                    try:
-                        self.ui_interface.update_speaker_status("speaking")
-                    except Exception:
-                        pass
-
                 logger.info(f"Playing wakeword feedback audio: {self.wakeword_audio_path}")
-                success = self._play_audio_file(self.wakeword_audio_path)
-                if success:
-                    logger.info("Wakeword feedback audio played successfully")
-                else:
-                    logger.error("Failed to play wakeword feedback audio")
-
+                self._play_audio_file(self.wakeword_audio_path)
             except Exception as e:
                 logger.error(f"Error playing wakeword audio: {e}")
-            finally:
-                # 🔊 After audio finishes (or fails), mark speaker idle.
-                # `_speak()` will set it back to "speaking" again for the TTS prompt.
-                if self.ui_interface:
-                    try:
-                        self.ui_interface.update_speaker_status("idle")
-                    except Exception:
-                        pass
-        else:
-            logger.debug("No wakeword feedback audio configured or audio files disabled")
+            
+            # CRITICAL CHANGE: We REMOVED the 'finally: set idle' block here.
+            # This prevents the face from flickering to 'Idle' for a split second 
+            # between the "Ding" sound and the TTS voice.
 
-
-        # TTS prompt from config
+        # 4. AUDIO: Play TTS Prompt (Blocking)
+        # _speak() will keep the face as "speaking" and then set it to "idle" when done.
         try:
             prompts = wakeword_config.get("prompts", {})
             wakeword_prompt = prompts.get("wakeword_detected", "Hey, I heard you called me. What can I help you with?")
+            
+            logger.info(f"Speaking wakeword prompt: {wakeword_prompt}")
+            self._speak(wakeword_prompt)
         except Exception as e:
-            logger.warning(f"Failed to load wakeword detected prompt from config: {e}")
-            wakeword_prompt = "Hey, I heard you called me. What can I help you with?"
-        
-        # Speak the prompt (this will block until TTS finishes)
-        logger.info(f"Speaking wakeword prompt: {wakeword_prompt}")
-        self._speak(wakeword_prompt)
+            logger.warning(f"Failed to speak wakeword prompt: {e}")
+            # Safety fallback: if TTS fails, ensure we reset face to idle
+            if self.ui_interface:
+                try:
+                    self.ui_interface.update_speaker_status("idle")
+                except Exception:
+                    pass
+
         logger.info("Wakeword prompt finished, starting keyword intent recognition")
 
-        # Start silence monitoring after wake word detection
+        # =========================================================================
+        # TRANSITION TO LISTENING
+        # =========================================================================
+
+        # Start silence monitoring
         self._start_silence_monitoring()
 
-        # Launch STT-based keyword intent recognition thread AFTER TTS completes
+        # Launch STT-based keyword intent recognition thread
         logger.info("Launching keyword intent recognition session")
         self._stt_thread = threading.Thread(target=self._run_keyword_intent, daemon=True)
         self._stt_thread.start()
