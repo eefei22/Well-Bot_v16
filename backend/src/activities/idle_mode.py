@@ -163,7 +163,7 @@ class IdleModeActivity:
             
             # Initialize wakeword detector (with automatic fallback to OpenWakeWord)
             try:
-                wakeword_model_path = self.backend_dir / "config" / "WakeWord" / "WellBot_WakeWordModel.ppn"
+                wakeword_model_path = self.backend_dir / "config" / "WakeWord" / "WellBot_WakeWordModel_ARM2.ppn"
                 self.wakeword_detector = create_wake_word_detector(
                     PORCUPINE_ACCESS_KEY, 
                     str(wakeword_model_path),

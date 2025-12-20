@@ -41,6 +41,8 @@ from src.components.activity_logger import prompt_mood_rating_before_activity, p
 # GUI imports
 from src.components.ui_interface import UIInterface, NoOpUIInterface
 from src.gui import start_gui
+# Preloader helper (loads PIL frames into memory before GUI thread starts)
+from src.gui.face_animation_window import preload_gif_data
 from src.utils.config_loader import DEVICE_ID, load_language_config
 from src.components.tts import GoogleTTSClient
 from google.cloud import texttospeech
@@ -85,6 +87,47 @@ class WellBotOrchestrator:
                 
                 # Speak error message via TTS
                 logger.error("DEVICE_ID environment variable is not set")
+                # Initialize a minimal UI so the face GUI can load frames and display
+                # before we play the startup TTS. This improves UX so the user sees
+                # the face immediately while the startup message is spoken.
+                try:
+                    self.ui_interface = UIInterface()
+
+                    # Build GIF paths and preload into memory to avoid GUI lag
+                    backend_assets = self.backend_dir / "assets" / "GUI"
+                    gif_files = {
+                        "idle": str((backend_assets / "gui_idleing.gif") if (backend_assets / "gui_idleing.gif").exists() else (backend_assets / "gui_idleing.gif")),
+                        "listening": str((backend_assets / "gui_listening.gif") if (backend_assets / "gui_listening.gif").exists() else (backend_assets / "gui_listening.gif")),
+                        "speaking": str((backend_assets / "gui_speaking.gif") if (backend_assets / "gui_speaking.gif").exists() else (backend_assets / "gui_speaking.gif")),
+                        "loading": str(backend_assets / "gui_loading.gif"),
+                        "journaling": str(backend_assets / "gui_journaling.gif"),
+                        "meditating": str(backend_assets / "gui_meditating.gif"),
+                        "gratitude": str(backend_assets / "gui_gratitude.gif"),
+                    }
+
+                    try:
+                        preloaded = preload_gif_data(gif_files)
+                    except Exception as e:
+                        logger.warning(f"Preloading GIFs failed: {e}")
+                        preloaded = {}
+
+                    # Start GUI and pass preloaded frames (if any)
+                    self._gui_window = start_gui(self.ui_interface, preloaded if preloaded else None, update_interval_ms=100, wait_for_ready_seconds=2.0)
+                    if self._gui_window:
+                        # Wait until the window reports first frame rendered (max 5s)
+                        try:
+                            if getattr(self._gui_window, 'wait_until_ready', None):
+                                if self._gui_window.wait_until_ready(timeout=5.0):
+                                    logger.info("✓ GUI frames loaded and first frame displayed")
+                                else:
+                                    logger.warning("GUI did not signal readiness within timeout; proceeding to speak")
+                        except Exception:
+                            logger.debug("GUI readiness check failed - continuing")
+                    else:
+                        logger.warning("GUI window not ready yet; continuing to speak startup message")
+                except Exception as ui_err:
+                    logger.warning(f"Failed to start GUI before startup TTS: {ui_err}")
+
                 self._speak_startup_message(error_message, language='en')
                 logger.error(error_message)
             except Exception as tts_error:
@@ -345,19 +388,65 @@ class WellBotOrchestrator:
           
 
     def _start_gui_if_enabled(self):
-        """Start GUI window if enabled in configuration."""
+        """
+        Start GUI window if enabled in configuration, preload assets, 
+        and wait for the window to be ready.
+        """
         try:
             gui_config = self.global_config.get("gui", {})
             gui_enabled = gui_config.get("enabled", False)
             update_interval_ms = gui_config.get("update_interval_ms", 100)
             
             if gui_enabled and self.ui_interface and not isinstance(self.ui_interface, NoOpUIInterface):
-                logger.info("Starting GUI window...")
-                self._gui_window = start_gui(self.ui_interface, update_interval_ms)
+                logger.info("🖥️  Initializing GUI...")
+
+                # 1. Define GIF paths
+                backend_assets = self.backend_dir / "assets" / "GUI"
+                gif_files = {
+                    "idle": str((backend_assets / "gui_idleing.gif") if (backend_assets / "gui_idleing.gif").exists() else (backend_assets / "gui_idleing.gif")),
+                    "listening": str((backend_assets / "gui_listening.gif") if (backend_assets / "gui_listening.gif").exists() else (backend_assets / "gui_listening.gif")),
+                    "speaking": str((backend_assets / "gui_speaking.gif") if (backend_assets / "gui_speaking.gif").exists() else (backend_assets / "gui_speaking.gif")),
+                    "loading": str(backend_assets / "gui_loading.gif"),
+                    "journaling": str(backend_assets / "gui_journaling.gif"),
+                    "meditating": str(backend_assets / "gui_meditating.gif"),
+                    "gratitude": str(backend_assets / "gui_gratitude.gif"),
+                }
+
+                # 2. Preload assets (prevents white screen/lag)
+                preloaded = {}
+                try:
+                    logger.info("⏳ Preloading GUI assets...")
+                    preloaded = preload_gif_data(gif_files)
+                except Exception as e:
+                    logger.warning(f"Preloading GIFs failed: {e}")
+
+                # 3. Start the GUI Window
+                logger.info("🚀 Launching Face Animation Window...")
+                self._gui_window = start_gui(
+                    self.ui_interface, 
+                    preloaded if preloaded else None, 
+                    update_interval_ms=update_interval_ms,
+                    wait_for_ready_seconds=5.0 
+                )
+
+                # 4. Critical: Wait for the window to actually render the first frame
                 if self._gui_window:
-                    logger.info("✓ GUI window started")
+                    logger.info("⏳ Waiting for GUI to render first frame...")
+                    try:
+                        # Check if the window has the wait method (it should based on your previous code)
+                        if hasattr(self._gui_window, 'wait_until_ready'):
+                            is_ready = self._gui_window.wait_until_ready(timeout=15.0)
+                            if is_ready:
+                                logger.info("✓ GUI is ready and visible")
+                            else:
+                                logger.warning("GUI started but timed out waiting for readiness")
+                        else:
+                            # Fallback if method missing
+                            time.sleep(1.0) 
+                    except Exception as e:
+                        logger.warning(f"Error waiting for GUI readiness: {e}")
                 else:
-                    logger.warning("GUI window failed to start, continuing without GUI")
+                    logger.warning("GUI window failed to start object, continuing without GUI")
             else:
                 logger.debug("GUI not enabled or NoOp interface in use")
         except Exception as e:
@@ -1657,6 +1746,9 @@ class WellBotOrchestrator:
         if not self._initialize_components():
             logger.error("Component initialization failed")
             return False
+        
+        # Start GUI if enabled (and wait for it to be ready)
+        self._start_gui_if_enabled()
 
         # Speak startup success message before starting idle mode
         try:
@@ -1692,9 +1784,6 @@ class WellBotOrchestrator:
             
             with self._lock:
                 self.state = SystemState.LISTENING
-            
-            # Start GUI if enabled
-            self._start_gui_if_enabled()
             
             logger.info("🎤 Idle mode started – system ready")
             logger.info("Say the wake word to activate the system")

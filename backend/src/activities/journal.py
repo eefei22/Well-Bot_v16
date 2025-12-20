@@ -188,6 +188,12 @@ class JournalActivity:
         
         self._active = True
         logger.info("Starting journal session...")
+        # Inform GUI to switch to journaling face (if UI available)
+        try:
+            if self.ui_interface:
+                self.ui_interface.update_face_state("journaling")
+        except Exception:
+            logger.debug("Failed to update UIInterface face_state to 'journaling'")
         
         completed = False
         try:
@@ -650,6 +656,12 @@ class JournalActivity:
         self._active = False
         
         logger.info("Cleaning up journal activity...")
+        # Clear explicit face state so GUI can derive next state
+        try:
+            if self.ui_interface:
+                self.ui_interface.update_face_state(None)
+        except Exception:
+            logger.debug("Failed to clear UIInterface face_state during journal cleanup")
         
         if self.audio_manager:
             self.audio_manager.stop()

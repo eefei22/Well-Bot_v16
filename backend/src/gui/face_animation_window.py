@@ -1,56 +1,62 @@
 """
-Face Animation Window - Tkinter GUI with loop-safe state switching.
+Face Animation Window - Optimized with Preloading & Latency Buffering
 """
 
 import tkinter as tk
 from PIL import Image, ImageTk, ImageSequence
 import threading
 import logging
-import os
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional, Dict, List, Union
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------
+# 1. NEW HELPER: Preload raw PIL images
+# ---------------------------------------------------------
+def preload_gif_data(gif_paths: Dict[str, str]) -> Dict[str, List[Image.Image]]:
+    """
+    Reads GIF files and decompresses them into PIL Image objects.
+    """
+    preloaded_cache = {}
+    
+    backend_dir = Path(__file__).parent.parent.parent
+    default_asset_dir = backend_dir / "assets" / "GUI"
 
-def load_gif_frames(path):
-    """Load GIF frames into ImageTk format."""
-    try:
-        gif = Image.open(path)
-        frames = []
-        for frame in ImageSequence.Iterator(gif):
-            try:
-                img = frame.copy()
-                frames.append(ImageTk.PhotoImage(img))
-            except Exception:
-                # skip problematic frames but continue loading
-                continue
-        return frames
-    except Exception as e:
-        logger.error(f"Failed to load GIF {path}: {e}")
-        return []
+    for name, path_str in gif_paths.items():
+        try:
+            p = Path(path_str)
+            if not p.is_absolute():
+                p = (default_asset_dir / p).resolve()
+            
+            gif = Image.open(str(p))
+            frames = []
+            for frame in ImageSequence.Iterator(gif):
+                frames.append(frame.copy())
+            
+            preloaded_cache[name] = frames
+            logger.info(f"Preloaded {len(frames)} frames for '{name}' into memory.")
+            
+        except Exception as e:
+            logger.error(f"Failed to preload GIF {path_str}: {e}")
+            preloaded_cache[name] = []
+            
+    return preloaded_cache
 
 
 class FaceAnimationWindow:
     """
-    Tkinter fullscreen animation window for idle/listening/speaking faces.
-
-    NEW FEATURE:
-    -------------------------------------
-    ✔ GIF loops fully in its current state
-    ✔ State changes are only applied after completing 1 full GIF loop
-    -------------------------------------
+    Tkinter fullscreen animation window.
     """
 
-    def __init__(self, ui_interface, gif_paths: Optional[Dict[str, str]] = None, update_interval_ms=83):
+    def __init__(self, ui_interface, gif_source: Union[Dict[str, str], Dict[str, List]], update_interval_ms=83):
         self.ui_interface = ui_interface
         self.update_interval_ms = update_interval_ms
 
         # Tkinter setup
         self.root = tk.Tk()
         self.root.title("Well-Bot Face Display")
-        # self.root.attributes("-fullscreen", True)
-        self.root.geometry("480x320")
+        self.root.attributes("-fullscreen", True)
         self.root.configure(bg="black")
         self.root.bind("<Escape>", lambda e: self._on_close())
 
@@ -58,221 +64,189 @@ class FaceAnimationWindow:
         self.label = tk.Label(self.root, bg="black")
         self.label.pack(expand=True, fill="both")
 
-        # Resolve backend asset directory and default GIF paths
-        backend_dir = Path(__file__).parent.parent.parent
-        default_asset_dir = backend_dir / "assets" / "GUI"
-
-        DEFAULT_GIFS = {
-            "idle": str(default_asset_dir / "gui_idle.gif"),
-            "listening": str(default_asset_dir / "gui_listen.gif"),
-            "speaking": str(default_asset_dir / "gui_speak.gif"),
-            "loading": str(default_asset_dir / "gui_loading.gif"),
-        }
-
-        if not gif_paths:
-            gif_paths = DEFAULT_GIFS
-
-        # Load GIFs (resolve relative paths against the default asset dir)
-        self.gif_frames: Dict[str, list] = {}
-        for name, path in gif_paths.items():
-            try:
-                p = Path(path)
-                if not p.is_absolute():
-                    # allow passing just filenames or paths relative to assets/GUI
-                    p = (default_asset_dir / p).resolve()
-                frames = load_gif_frames(str(p))
-                if frames:
-                    logger.info(f"Loaded {len(frames)} frames for state '{name}' from {p}")
-                else:
-                    logger.warning(f"GIF for state '{name}' failed to load from {p}")
-                self.gif_frames[name] = frames
-            except Exception as e:
-                logger.error(f"Error loading GIF '{name}' from '{path}': {e}")
-                self.gif_frames[name] = []
-
-        # Diagnostic info: check asset directory and available GIFs
-        try:
-            logger.debug(f"Default asset dir: {default_asset_dir} (exists={default_asset_dir.exists()})")
-            if default_asset_dir.exists():
-                available = [p.name for p in default_asset_dir.glob('*.gif')]
-                logger.debug(f"GIFs found in asset dir: {available}")
-        except Exception:
-            pass
-
-        # Safer check for idle frames (avoid KeyError). If idle frames missing, log error and keep running
-        if not self.gif_frames.get("idle"):
-            logger.error("Idle GIF failed to load — animation cannot start! Ensure GUI GIFs are present under backend/assets/GUI or pass gif_paths to start_gui()")
-
         # Animation state
-        self.current_state = "idle"         # name of current GIF
-        self.requested_state = "idle"       # next state requested by UIInterface
+        self.current_state = "idle"
+        self.requested_state = "idle"
         self.frame_index = 0
+        self.gif_frames: Dict[str, list] = {}
+        self._ready_event = threading.Event()
+
+        # Start prioritized loading
+        self.root.after(10, lambda: self._load_assets_and_start(gif_source))
+
+        logger.info("FaceAnimationWindow initialized")
+
+    def _load_assets_and_start(self, gif_source):
+        """
+        Optimized Loader: 
+        1. Loads 'idle' state immediately to unblock window.
+        2. Loads other states in background.
+        """
+        if not gif_source:
+             backend_dir = Path(__file__).parent.parent.parent
+             default_asset_dir = backend_dir / "assets" / "GUI"
+             gif_source = {
+                     "idle": str(default_asset_dir / "gui_idleing.gif"),
+                     "listening": str(default_asset_dir / "gui_listening.gif"),
+                     "speaking": str(default_asset_dir / "gui_speaking.gif"),
+                     "loading": str(default_asset_dir / "gui_loading.gif"),
+                     "gratitude": str(default_asset_dir / "gui_gratitude.gif"),
+             }
+
+        first_value = next(iter(gif_source.values())) if gif_source else None
+        is_preloaded = isinstance(first_value, list)
+
+        # 1. IMMEDIATE LOAD: idle
+        if "idle" in gif_source:
+            if is_preloaded:
+                self.gif_frames["idle"] = [ImageTk.PhotoImage(img) for img in gif_source["idle"]]
+            else:
+                self.gif_frames["idle"] = self._load_frames_from_disk(gif_source["idle"])
+        else:
+            empty_img = ImageTk.PhotoImage(Image.new('RGB', (100, 100), 'black'))
+            self.gif_frames["idle"] = [empty_img]
+
+        # Start Animation Loop immediately with idle
         self.current_frame_list = self.gif_frames.get("idle", [])
-
-        # Poll UI for updates
         self._poll_state()
+        self._play_frame() 
+        
+        # 2. BACKGROUND LOAD: remaining states
+        remaining_keys = [k for k in gif_source.keys() if k != "idle"]
+        self.root.after(100, lambda: self._background_loader(remaining_keys, gif_source, is_preloaded))
 
-        # Start animation loop
-        self._play_frame()
+    def _background_loader(self, keys, source, is_preloaded):
+        if not keys:
+            return
 
-        logger.info("FaceAnimationWindow initialized (loop-safe mode)")
+        key = keys.pop(0)
+        try:
+            if is_preloaded:
+                self.gif_frames[key] = [ImageTk.PhotoImage(img) for img in source[key]]
+            else:
+                self.gif_frames[key] = self._load_frames_from_disk(source[key])
+        except Exception as e:
+            logger.error(f"Background load failed for {key}: {e}")
 
-    # -----------------------------------------------------
-    # POLL UI STATE
-    # -----------------------------------------------------
+        self.root.after(50, lambda: self._background_loader(keys, source, is_preloaded))
+
+    def _load_frames_from_disk(self, path):
+        try:
+            gif = Image.open(path)
+            frames = []
+            for frame in ImageSequence.Iterator(gif):
+                frames.append(ImageTk.PhotoImage(frame.copy()))
+            return frames
+        except Exception:
+            return []
+
+    def wait_until_ready(self, timeout: Optional[float] = None) -> bool:
+        return self._ready_event.wait(timeout)
+
     def _poll_state(self):
-        """Poll UIInterface for requested state changes."""
         try:
             snapshot = self.ui_interface.get_snapshot()
-
-            # Backwards-compatible mapping:
-            # - Prefer an explicit 'face_state' if provided by UI
-            # - Otherwise derive from speaker_status / mic_status / loading_status
             new_state = snapshot.get("face_state")
             if not new_state:
                 loading = snapshot.get("loading_status", "idle")
                 speaker = snapshot.get("speaker_status", "idle")
                 mic = snapshot.get("mic_status", "idle")
-
-                if loading == "loading":
-                    new_state = "loading"
-                elif speaker == "speaking":
-                    new_state = "speaking"
-                elif mic == "listening":
-                    new_state = "listening"
-                else:
-                    new_state = "idle"
+                
+                if loading == "loading": new_state = "loading"
+                elif speaker == "speaking": new_state = "speaking"
+                elif mic == "listening": new_state = "listening"
+                else: new_state = "idle"
 
             if new_state in self.gif_frames:
                 if new_state != self.requested_state:
-                    logger.info(f"State change requested: {self.requested_state} → {new_state}")
                     self.requested_state = new_state
-            else:
-                logger.warning(f"Unknown face state requested: {new_state}")
-
-        except Exception as e:
-            logger.error(f"Error polling UIInterface: {e}")
-
-        # Poll reliably every 100 ms
+        except Exception:
+            pass
         self.root.after(100, self._poll_state)
 
-
-    # -----------------------------------------------------
-    # ANIMATION LOOP (frame-level control)
-    # -----------------------------------------------------
     def _play_frame(self):
-        """Play next frame with loop-safe switching and idle fallback."""
+        """
+        Play next frame. 
+        CRITICAL FIX: Logic priority changed to prevent 'idle' glitch.
+        """
         try:
-            frames = self.current_frame_list
-            if not frames:
+            if not self.current_frame_list:
                 return
 
-            frame = frames[self.frame_index]
+            frame = self.current_frame_list[self.frame_index]
             self.label.config(image=frame)
             self.label.image = frame
-
             self.frame_index += 1
 
-            # Loop finished
-            if self.frame_index >= len(frames):
-                self.frame_index = 0  # restart
+            if not self._ready_event.is_set():
+                self._ready_event.set()
 
-                # Decide next state after completing the current GIF loop.
-                # If a different requested_state is present, switch to it.
-                # Otherwise, loop the current state indefinitely.
-                # This ensures:
-                # - Speaking stays speaking while activity is speaking
-                # - Listening stays listening while activity is listening
-                # - Only returns to idle when explicitly requested
-                if self.requested_state != self.current_state and self.requested_state in self.gif_frames:
-                    # Normal requested-state transition
-                    logger.info(f"Switching to requested state: {self.current_state} → {self.requested_state}")
-                    self.current_state = self.requested_state
+            # Loop Finished
+            if self.frame_index >= len(self.current_frame_list):
+                self.frame_index = 0
+                
+                # -------------------------------------------------------------
+                # LOGIC FIX: Determine Next State
+                # -------------------------------------------------------------
+                next_state = self.requested_state
+
+                # [INTERCEPT]
+                # If we are currently active (speaking/listening) and the backend 
+                # momentarily reports "idle", DO NOT go to idle. Go to "loading".
+                # This buffers the gap.
+                if (self.current_state in ("speaking", "listening") 
+                    and next_state == "idle" 
+                    and "loading" in self.gif_frames):
+                    
+                    next_state = "loading" 
+                    # Note: We do NOT update self.requested_state. We just override
+                    # the local decision. This ensures that if the backend stays 
+                    # idle for long enough, the NEXT loop (of the loading gif) 
+                    # will eventually fall through to idle.
+
+                # Apply the transition
+                if next_state != self.current_state and next_state in self.gif_frames:
+                    self.current_state = next_state
                     self.current_frame_list = self.gif_frames[self.current_state]
-                else:
-                    # No direct change requested. Handle a common edge case:
-                    # when the backend briefly reports 'idle' between speaking/listening
-                    # transitions, we prefer to show a 'loading' animation (if available)
-                    # so the face doesn't flash back to idle. Only apply this when
-                    # we're currently in a temporary active state.
-                    if (
-                        self.current_state in ("listening", "speaking")
-                        and self.requested_state == "idle"
-                        and "loading" in self.gif_frames
-                    ):
-                        logger.info(
-                            f"Interpreting transient idle as loading: {self.current_state} → loading"
-                        )
-                        self.current_state = "loading"
-                        self.current_frame_list = self.gif_frames.get("loading", [])
-                        # keep requested_state as-is; next poll will update if real idle
-                    # else: continue looping current state (speaking/listening continue)
 
         except Exception as e:
-            logger.error(f"GIF frame error: {e}", exc_info=True)
+            logger.error(f"Animation error: {e}")
 
         self.root.after(self.update_interval_ms, self._play_frame)
 
-
-    # -----------------------------------------------------
-    # WINDOW CONTROL
-    # -----------------------------------------------------
     def _on_close(self):
-        logger.info("Face animation window closed")
         self.root.destroy()
-
+    
     def run(self):
         self.root.mainloop()
 
-    def close(self):
-        self._on_close()
 
+def start_gui(ui_interface, gif_source_or_interval=None, update_interval_ms=83, wait_for_ready_seconds: float = 1.0):
+    import sys
+    gif_source = None
+    if isinstance(gif_source_or_interval, dict):
+        gif_source = gif_source_or_interval
+    elif isinstance(gif_source_or_interval, int):
+        update_interval_ms = gif_source_or_interval
 
-# ---------------------------------------------------------
-# Same start_gui() structure as StatusWindow
-# ---------------------------------------------------------
-def start_gui(ui_interface, gif_paths_or_update_interval=None, update_interval_ms=83) -> Optional[FaceAnimationWindow]:
-    try:
-        import sys
+    if sys.platform == "win32":
+        return FaceAnimationWindow(ui_interface, gif_source, update_interval_ms)
 
-        # Backwards-compatible parameter handling:
-        # - If caller passes a dict as second arg, treat it as gif_paths
-        # - If caller passes an int as second arg, treat it as update_interval_ms
-        gif_paths = None
-        if isinstance(gif_paths_or_update_interval, dict):
-            gif_paths = gif_paths_or_update_interval
-        elif isinstance(gif_paths_or_update_interval, int):
-            update_interval_ms = gif_paths_or_update_interval
+    created_event = threading.Event()
+    container = {"window": None}
 
-        # On Windows we must create and run Tk in the main thread
-        if sys.platform == "win32":
-            window = FaceAnimationWindow(ui_interface, gif_paths, update_interval_ms)
-            return window
+    def run_gui():
+        try:
+            win = FaceAnimationWindow(ui_interface, gif_source, update_interval_ms)
+            container["window"] = win
+            created_event.set()
+            win.run()
+        except Exception as e:
+            logger.error(f"GUI Thread failed: {e}")
 
-        # On non-Windows (e.g., Linux) create the Tk window inside the GUI thread
-        created_event = threading.Event()
-        container = {"window": None}
+    t = threading.Thread(target=run_gui, daemon=True, name="Face-GUI-Thread")
+    t.start()
 
-        def run_gui():
-            try:
-                win = FaceAnimationWindow(ui_interface, gif_paths, update_interval_ms)
-                container["window"] = win
-                # signal that window was created
-                created_event.set()
-                win.run()
-            except Exception as e:
-                logger.error(f"Face animation GUI error: {e}")
-
-        t = threading.Thread(target=run_gui, daemon=True, name="Face-GUI-Thread")
-        t.start()
-
-        # Wait briefly for window to be created so caller can get a reference if available
-        if created_event.wait(timeout=1.0):
-            return container.get("window")
-        else:
-            # Window not ready yet; return None (GUI runs in background)
-            return None
-
-    except Exception as e:
-        logger.error(f"Failed to start face animation GUI: {e}")
-        return None
+    if created_event.wait(timeout=wait_for_ready_seconds):
+        return container.get("window")
+    return None
