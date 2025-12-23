@@ -253,7 +253,7 @@ class MeditationActivity:
                             inference = self.intent_recognition.get_inference()
                             
                             if inference and inference.get('intent') == 'termination':
-                                logger.info(f"🎯 TERMINATION INTENT DETECTED during meditation")
+                                logger.info(f"TERMINATION INTENT DETECTED during meditation")
                                 self._termination_detected.set()
                                 break
                             else:
@@ -453,7 +453,7 @@ class MeditationActivity:
 
     def cleanup(self):
         """Complete cleanup of all resources including native libraries, cached resources, and dependencies"""
-        logger.info("🧹 Cleaning up Meditation activity resources...")
+        logger.info("Cleaning up Meditation activity resources...")
         
         # Stop if still active
         if self._active:
@@ -462,7 +462,7 @@ class MeditationActivity:
         # Stop threads if still running
         if self._audio_playback_thread and self._audio_playback_thread.is_alive():
             try:
-                logger.info("🧹 Stopping audio playback thread...")
+                logger.info("Stopping audio playback thread...")
                 self._audio_playback_thread.join(timeout=1.0)
                 logger.debug("Audio playback thread stopped")
             except Exception as e:
@@ -470,7 +470,7 @@ class MeditationActivity:
         
         if self._listening_thread and self._listening_thread.is_alive():
             try:
-                logger.info("🧹 Stopping listening thread...")
+                logger.info("Stopping listening thread...")
                 self._listening_thread.join(timeout=1.0)
                 logger.debug("Listening thread stopped")
             except Exception as e:
@@ -479,7 +479,7 @@ class MeditationActivity:
         # Cleanup audio manager (handles PyAudio streams)
         if self.audio_manager:
             try:
-                logger.info("🧹 Cleaning up audio manager...")
+                logger.info("Cleaning up audio manager...")
                 self.audio_manager.stop()
                 self.audio_manager.cleanup()
                 self.audio_manager = None
@@ -490,7 +490,7 @@ class MeditationActivity:
         # Cleanup TTS service (Google Cloud TTS client)
         if self.tts:
             try:
-                logger.info("🧹 Cleaning up TTS service...")
+                logger.info("Cleaning up TTS service...")
                 # Close Google Cloud TTS client
                 if hasattr(self.tts, 'client') and self.tts.client:
                     try:
@@ -506,7 +506,7 @@ class MeditationActivity:
         # Cleanup intent recognition (Rhino native library)
         if self.intent_recognition:
             try:
-                logger.info("🧹 Cleaning up intent recognition (Rhino)...")
+                logger.info("Cleaning up intent recognition (Rhino)...")
                 self.intent_recognition.delete()
                 self.intent_recognition = None
                 logger.info("✓ Intent recognition cleaned up")
@@ -517,7 +517,7 @@ class MeditationActivity:
         try:
             from src.utils.config_resolver import _resolver
             if hasattr(_resolver, 'clear_cache'):
-                logger.info("🧹 Clearing config caches...")
+                logger.info("Clearing config caches...")
                 _resolver.clear_cache()
                 logger.debug("Config caches cleared")
         except Exception as e:
@@ -525,7 +525,7 @@ class MeditationActivity:
         
         # Cleanup temporary files (if any were created)
         try:
-            logger.info("🧹 Checking for temporary files...")
+            logger.info("Checking for temporary files...")
             # Check for temporary Google Cloud credentials file
             # Note: This is a best-effort cleanup - the file may have been cleaned up already
             temp_dir = tempfile.gettempdir()
@@ -537,7 +537,7 @@ class MeditationActivity:
         
         # Force garbage collection to help release native library resources
         try:
-            logger.info("🧹 Running garbage collection...")
+            logger.info("Running garbage collection...")
             collected = gc.collect()
             logger.debug(f"Garbage collection collected {collected} objects")
         except Exception as e:
@@ -546,7 +546,7 @@ class MeditationActivity:
         # Reset initialization state
         self._initialized = False
         
-        logger.info("✅ Meditation activity cleanup completed")
+        logger.info("Meditation activity cleanup completed")
 
     def is_active(self) -> bool:
         return bool(self._active)

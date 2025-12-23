@@ -175,7 +175,7 @@ def test_openwakeword():
                         detection_count += 1
                         timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
                         logger.info(
-                            f"[{timestamp}] 🔔 WAKE WORD DETECTED: '{model_name}' "
+                            f"[{timestamp}] WAKE WORD DETECTED: '{model_name}' "
                             f"(score: {score:.3f})"
                         )
                 

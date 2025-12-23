@@ -150,7 +150,7 @@ class IdleModeActivity:
                 return False
             
             self._initialized = True
-            logger.info("✅ Idle Mode activity initialized successfully")
+            logger.info("Idle Mode activity initialized successfully")
             return True
             
         except Exception as e:
@@ -221,7 +221,7 @@ class IdleModeActivity:
                     logger.warning(f"Error starting emotion monitoring: {e}", exc_info=True)
             
             self._active = True
-            logger.info("✅ Idle mode active: listening for wake word and monitoring emotions")
+            logger.info("Idle mode active: listening for wake word and monitoring emotions")
             return True
         except Exception as e:
             logger.error(f"Failed to start idle mode: {e}", exc_info=True)
@@ -289,11 +289,11 @@ class IdleModeActivity:
         self._intervention_triggered_flag.clear()
         self._last_was_intervention = False
         
-        logger.info("✅ Idle mode stopped")
+        logger.info("Idle mode stopped")
     
     def _on_intervention_triggered(self):
         """Callback when intervention trigger is detected from poller"""
-        logger.info("🎯 Intervention trigger detected")
+        logger.info("Intervention trigger detected")
         
         # Stop emotion monitoring immediately (non-blocking - don't wait for it to finish)
         if self.emotion_monitoring_activity:
@@ -322,7 +322,7 @@ class IdleModeActivity:
             except Exception as e:
                 logger.error(f"Error invoking intervention callback: {e}")
         
-        logger.info("✅ Intervention trigger flag set - orchestrator will start wake_mode immediately")
+        logger.info("Intervention trigger flag set - orchestrator will start wake_mode immediately")
     
     def run(self) -> bool:
         """
@@ -332,7 +332,7 @@ class IdleModeActivity:
             True if wake word detected or intervention triggered (activity should exit to allow wake_mode)
             False on error or if activity was stopped
         """
-        logger.info("🎬 IdleModeActivity.run() - Starting idle mode execution")
+        logger.info("IdleModeActivity.run() - Starting idle mode execution")
         
         try:
             # Clear any stale state before starting
@@ -341,12 +341,12 @@ class IdleModeActivity:
             
             # Start the activity
             if not self.start():
-                logger.error("❌ Failed to start idle mode")
+                logger.error("Failed to start idle mode")
                 return False
             
             # Check if intervention was already triggered before we entered the wait loop
             if self._intervention_triggered_flag.is_set():
-                logger.info("✅ Intervention already triggered (detected before wait loop)")
+                logger.info("Intervention already triggered (detected before wait loop)")
                 self._intervention_triggered_flag.clear()
                 self.stop()
                 return True
@@ -359,13 +359,13 @@ class IdleModeActivity:
             
             # Check if wake word was detected
             if self._wake_detected.is_set():
-                logger.info("✅ Wake word detected - exiting idle mode to allow wake_mode")
+                logger.info("Wake word detected - exiting idle mode to allow wake_mode")
                 self.stop()
                 return True
             
             # Check if intervention was triggered
             if self._intervention_triggered_flag.is_set():
-                logger.info("✅ Intervention triggered - exiting idle mode to allow wake_mode")
+                logger.info("Intervention triggered - exiting idle mode to allow wake_mode")
                 self._intervention_triggered_flag.clear()
                 self.stop()
                 return True
@@ -397,13 +397,13 @@ class IdleModeActivity:
                 except Exception as e:
                     logger.warning(f"Error cleaning up emotion monitoring: {e}")
             
-            logger.info("✅ Idle mode cleanup completed")
+            logger.info("Idle mode cleanup completed")
         except Exception as e:
             logger.error(f"Error during idle mode cleanup: {e}", exc_info=True)
     
     def reinitialize(self) -> bool:
         """Re-initialize the activity for subsequent runs"""
-        logger.info("🔄 Re-initializing Idle Mode activity...")
+        logger.info("Re-initializing Idle Mode activity...")
         
         # Cleanup existing wakeword detector before resetting state
         if self.wakeword_detector:
@@ -486,4 +486,4 @@ class IdleModeActivity:
             except Exception as e:
                 logger.error(f"Error invoking wake detected callback: {e}")
         
-        logger.info("✅ Wake word flag set - orchestrator will start wake_mode immediately")
+        logger.info("Wake word flag set - orchestrator will start wake_mode immediately")

@@ -58,7 +58,7 @@
     "update_interval_ms": 100
   },
   "intervention": {
-    "poll_interval_minutes": 15
+    "poll_interval_minutes": 1.5
   },
   "mood_rating": {
     "enabled": false,

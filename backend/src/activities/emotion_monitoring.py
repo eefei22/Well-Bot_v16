@@ -23,6 +23,7 @@ sys.path.append(str(backend_dir))
 from src.components.shared_audio_manager import SharedAudioManager
 from src.utils.emotion_service_clients import SERServiceClient, FERServiceClient
 from src.supabase.auth import get_current_user_id
+from src.supabase.database import get_current_time_utc8_naive
 
 logger = logging.getLogger(__name__)
 
@@ -103,7 +104,7 @@ class EmotionMonitoringActivity:
             logger.info("✓ Subscribed to SharedAudioManager")
             
             self._initialized = True
-            logger.info("✅ Emotion Monitoring activity initialized successfully")
+            logger.info("Emotion Monitoring activity initialized successfully")
             return True
             
         except Exception as e:
@@ -123,7 +124,7 @@ class EmotionMonitoringActivity:
             
             self._active = True
             self._running = True
-            logger.info("✅ Emotion monitoring active")
+            logger.info("Emotion monitoring active")
             return True
     
     def stop(self):
@@ -157,7 +158,7 @@ class EmotionMonitoringActivity:
                 except Exception as e:
                     logger.warning(f"Error unsubscribing from SharedAudioManager: {e}")
             
-            logger.info("✅ Emotion monitoring stopped (flags set, operations will abort)")
+            logger.info("Emotion monitoring stopped (flags set, operations will abort)")
     
     def run(self) -> bool:
         """
@@ -166,7 +167,7 @@ class EmotionMonitoringActivity:
         Returns:
             True if activity completed normally, False if stopped or error
         """
-        logger.info("🎬 EmotionMonitoringActivity.run() - Starting emotion monitoring execution")
+        logger.info("EmotionMonitoringActivity.run() - Starting emotion monitoring execution")
         
         if not self._initialized:
             logger.error("Cannot run: activity not initialized")
@@ -219,10 +220,10 @@ class EmotionMonitoringActivity:
             return
         
         logger.debug("Starting capture cycle...")
-        
-        # Generate timestamp for this cycle
-        timestamp = datetime.now().isoformat()
-        
+
+        # Generate timestamp for this cycle (Malaysia time UTC+8)
+        timestamp = get_current_time_utc8_naive().isoformat()
+
         audio_sent = False
         image_sent = False
         
@@ -237,7 +238,7 @@ class EmotionMonitoringActivity:
                     audio_sent = result is not None
                     
                     if audio_sent:
-                        logger.info(f"✅ Audio sent to SER service successfully")
+                        logger.info(f"Audio sent to SER service successfully")
                         # Only delete file if send was successful and completed
                         try:
                             audio_file.unlink()
@@ -260,7 +261,7 @@ class EmotionMonitoringActivity:
                     image_sent = success
                     
                     if image_sent:
-                        logger.info(f"✅ Image sent to FER service successfully")
+                        logger.info(f"Image sent to FER service successfully")
                     else:
                         logger.warning("Failed to send image to FER service")
                     

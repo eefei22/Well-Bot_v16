@@ -72,7 +72,7 @@ def test_database_query(user_id: str):
             
             return latest_entry
         else:
-            print("\n  ⚠ No entries found in last 24 hours")
+            print("\n  No entries found in last 24 hours")
             print("  Creating a test entry structure for cloud service test...")
             # Return a mock entry structure for testing
             return {
@@ -113,7 +113,7 @@ def test_cloud_service(emotion_entry: dict):
         if is_healthy:
             print("  ✓ Service is healthy")
         else:
-            print("  ⚠ Service health check failed (continuing anyway)")
+            print("  Service health check failed (continuing anyway)")
         
         # Parse timestamp
         timestamp_str = emotion_entry.get("timestamp")
@@ -125,7 +125,7 @@ def test_cloud_service(emotion_entry: dict):
             else:
                 timestamp = datetime.now()
         except Exception as e:
-            print(f"  ⚠ Failed to parse timestamp, using current time: {e}")
+            print(f"  Failed to parse timestamp, using current time: {e}")
             timestamp = datetime.now()
         
         # Prepare request
@@ -203,7 +203,7 @@ def test_record_saving(emotion_entry: dict, cloud_response: dict):
         if record_file_path.exists():
             print(f"  ✓ Record file exists")
         else:
-            print(f"  ⚠ Record file does not exist (will be created)")
+            print(f"  Record file does not exist (will be created)")
         
         # Load current record
         print("\nLoading current record...")
@@ -270,7 +270,7 @@ def test_record_saving(emotion_entry: dict, cloud_response: dict):
         if file_contents == saved_record:
             print(f"  ✓ File contents match loaded record")
         else:
-            print(f"  ⚠ File contents differ from loaded record")
+            print(f"  File contents differ from loaded record")
         
         print("\n✓ TEST 3 PASSED: Record saving working correctly")
         return True
@@ -331,7 +331,7 @@ def main():
         print("\n✓ All tests passed!")
     else:
         print(f"✗ Test 3: Record Saving - FAILED")
-        print("\n⚠ Some tests failed")
+        print("\nSome tests failed")
     print("=" * 80)
     print()
 

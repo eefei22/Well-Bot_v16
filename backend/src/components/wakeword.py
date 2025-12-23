@@ -798,7 +798,7 @@ if __name__ == "__main__":
     
     def on_wake_word_detected():
         """Callback function called when wake word is detected."""
-        print("🎤 Wake word detected! Starting STT pipeline...")
+        print("Wake word detected! Starting STT pipeline...")
         # Here you would trigger the STT pipeline
         # For example: stt_pipeline.start()
     

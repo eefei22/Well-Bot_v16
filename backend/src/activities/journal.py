@@ -656,7 +656,7 @@ class JournalActivity:
     
     def cleanup(self):
         """Complete cleanup of all resources including native libraries, cached resources, and dependencies"""
-        logger.info("🧹 Cleaning up Journal activity resources...")
+        logger.info("Cleaning up Journal activity resources...")
         
         # Stop if still active
         if self._active:
@@ -665,7 +665,7 @@ class JournalActivity:
         # Cleanup audio manager (handles PyAudio streams)
         if self.audio_manager:
             try:
-                logger.info("🧹 Cleaning up audio manager...")
+                logger.info("Cleaning up audio manager...")
                 self.audio_manager.cleanup()
                 self.audio_manager = None
                 logger.info("✓ Audio manager cleaned up")
@@ -675,7 +675,7 @@ class JournalActivity:
         # Cleanup STT service (Google Cloud Speech client)
         if self.stt_service:
             try:
-                logger.info("🧹 Cleaning up STT service...")
+                logger.info("Cleaning up STT service...")
                 # Close Google Cloud Speech client
                 if hasattr(self.stt_service, 'client') and self.stt_service.client:
                     try:
@@ -692,7 +692,7 @@ class JournalActivity:
         # Cleanup TTS service (Google Cloud TTS client)
         if self.tts_service:
             try:
-                logger.info("🧹 Cleaning up TTS service...")
+                logger.info("Cleaning up TTS service...")
                 # Close Google Cloud TTS client
                 if hasattr(self.tts_service, 'client') and self.tts_service.client:
                     try:
@@ -708,7 +708,7 @@ class JournalActivity:
         # Cleanup termination detector
         if hasattr(self, 'termination_detector') and self.termination_detector:
             try:
-                logger.info("🧹 Cleaning up termination detector...")
+                logger.info("Cleaning up termination detector...")
                 self.termination_detector = None
                 logger.debug("Termination detector cleaned up")
             except Exception as e:
@@ -718,7 +718,7 @@ class JournalActivity:
         try:
             from src.utils.config_resolver import _resolver
             if hasattr(_resolver, 'clear_cache'):
-                logger.info("🧹 Clearing config caches...")
+                logger.info("Clearing config caches...")
                 _resolver.clear_cache()
                 logger.debug("Config caches cleared")
         except Exception as e:
@@ -726,7 +726,7 @@ class JournalActivity:
         
         # Cleanup temporary files (if any were created)
         try:
-            logger.info("🧹 Checking for temporary files...")
+            logger.info("Checking for temporary files...")
             # Check for temporary Google Cloud credentials file
             # Note: This is a best-effort cleanup - the file may have been cleaned up already
             temp_dir = tempfile.gettempdir()
@@ -738,7 +738,7 @@ class JournalActivity:
         
         # Force garbage collection to help release native library resources
         try:
-            logger.info("🧹 Running garbage collection...")
+            logger.info("Running garbage collection...")
             collected = gc.collect()
             logger.debug(f"Garbage collection collected {collected} objects")
         except Exception as e:
@@ -754,11 +754,11 @@ class JournalActivity:
         # Reset initialization state
         self._initialized = False
         
-        logger.info("✅ Journal activity cleanup completed")
+        logger.info("Journal activity cleanup completed")
     
     def reinitialize(self) -> bool:
         """Re-initialize the activity for subsequent runs"""
-        logger.info("🔄 Re-initializing Journal activity...")
+        logger.info("Re-initializing Journal activity...")
         
         # Reset state
         self._active = False
@@ -779,7 +779,7 @@ class JournalActivity:
         Returns:
             True if activity completed successfully, False otherwise
         """
-        logger.info("🎬 JournalActivity.run() - Starting activity execution")
+        logger.info("JournalActivity.run() - Starting activity execution")
         try:
             # Start the activity (runs the full session synchronously)
             self.start()

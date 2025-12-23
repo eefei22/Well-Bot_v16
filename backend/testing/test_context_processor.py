@@ -63,15 +63,15 @@ def test_context_processor_endpoint(
             health_data = health_response.json() if health_response.text else {}
             logger.info(f"  ✓ Service is healthy: {health_data}")
         else:
-            logger.warning(f"  ⚠ Health check returned status {health_response.status_code}")
+            logger.warning(f"  Health check returned status {health_response.status_code}")
     except requests.exceptions.ConnectionError:
         logger.error(f"  ✗ Cannot connect to service at {context_service_url}")
         logger.error(f"  Please verify the context processor service is running")
         return False
     except requests.exceptions.Timeout:
-        logger.warning(f"  ⚠ Health check timed out (service may be slow)")
+        logger.warning(f"  Health check timed out (service may be slow)")
     except Exception as e:
-        logger.warning(f"  ⚠ Health check failed: {e} (continuing anyway)")
+        logger.warning(f"  Health check failed: {e} (continuing anyway)")
     
     logger.info("")
     

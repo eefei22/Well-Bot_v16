@@ -276,7 +276,7 @@ class SmallTalkSession:
 
         try:
             self.conversation_session.start_session(title="Small Talk")
-            print("🎤 Small-Talk session started. Speak after wakeword.")
+            print("Small-Talk session started. Speak after wakeword.")
         except Exception as e:
             logger.warning(f"Could not start conversation: {e}")
 

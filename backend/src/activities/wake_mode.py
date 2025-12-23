@@ -149,7 +149,7 @@ class WakeModeActivity:
                 return False
             
             self._initialized = True
-            logger.info("✅ Wake Mode activity initialized successfully")
+            logger.info("Wake Mode activity initialized successfully")
             return True
             
         except Exception as e:
@@ -168,7 +168,7 @@ class WakeModeActivity:
         
         self._intervention_mode = intervention_mode
         self._active = True
-        logger.info(f"✅ Wake mode active (intervention_mode={intervention_mode})")
+        logger.info(f"Wake mode active (intervention_mode={intervention_mode})")
         return True
     
     def stop(self):
@@ -205,7 +205,7 @@ class WakeModeActivity:
         self._detected_intent = None
         self._detected_transcript = None
         
-        logger.info("✅ Wake mode stopped")
+        logger.info("Wake mode stopped")
     
     def run(self) -> bool:
         """
@@ -214,7 +214,7 @@ class WakeModeActivity:
         Returns:
             True if intent was detected, False on timeout or error
         """
-        logger.info("🎬 WakeModeActivity.run() - Starting wake mode execution")
+        logger.info("WakeModeActivity.run() - Starting wake mode execution")
         
         try:
             # Clear any stale state
@@ -242,11 +242,11 @@ class WakeModeActivity:
             
             # Check if intent was detected
             if self._intent_detected.is_set():
-                logger.info("✅ Intent detected - exiting wake mode")
+                logger.info("Intent detected - exiting wake mode")
                 self.stop()
                 return True
             elif self._timeout_occurred.is_set():
-                logger.info("⏰ Timeout occurred - no intent detected")
+                logger.info("Timeout occurred - no intent detected")
                 self.stop()
                 return False
             else:
@@ -282,7 +282,7 @@ class WakeModeActivity:
         logger.info("Cleaning up wake mode resources...")
         try:
             self.stop()
-            logger.info("✅ Wake mode cleanup completed")
+            logger.info("Wake mode cleanup completed")
         except Exception as e:
             logger.error(f"Error during wake mode cleanup: {e}", exc_info=True)
     

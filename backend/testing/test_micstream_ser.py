@@ -217,20 +217,20 @@ def send_audio_to_ser(audio_file_path, service_url, endpoint, user_id):
         
         if response.status_code == 200:
             result = response.json()
-            logger.info("✅ SER service responded successfully")
+            logger.info("SER service responded successfully")
             return result
         else:
-            logger.error(f"❌ SER service error: {response.status_code} - {response.text}")
+            logger.error(f"SER service error: {response.status_code} - {response.text}")
             return None
             
     except requests.exceptions.Timeout:
-        logger.error(f"❌ Request timeout after {SER_TIMEOUT} seconds")
+        logger.error(f"Request timeout after {SER_TIMEOUT} seconds")
         return None
     except requests.exceptions.ConnectionError:
-        logger.error(f"❌ Connection error - is the SER service running at {service_url}?")
+        logger.error(f"Connection error - is the SER service running at {service_url}?")
         return None
     except Exception as e:
-        logger.error(f"❌ Error sending audio to SER service: {e}", exc_info=True)
+        logger.error(f"Error sending audio to SER service: {e}", exc_info=True)
         return None
 
 def save_result(result, audio_file_path):
@@ -439,11 +439,11 @@ def main():
             test_url = f"{service_url}/docs"
             response = requests.get(test_url, timeout=5)
             if response.status_code == 200:
-                logger.info("✅ SER service is reachable")
+                logger.info("SER service is reachable")
             else:
-                logger.warning(f"⚠️  SER service responded with status {response.status_code}")
+                logger.warning(f"  SER service responded with status {response.status_code}")
         except requests.exceptions.ConnectionError:
-            logger.error(f"❌ Cannot connect to SER service at {service_url}")
+            logger.error(f"Cannot connect to SER service at {service_url}")
             logger.error("   Make sure the SER service is running!")
             return False
         
@@ -460,16 +460,16 @@ def main():
         test_url = f"{service_url}/docs"  # Try to access FastAPI docs
         response = requests.get(test_url, timeout=5)
         if response.status_code == 200:
-            logger.info("✅ SER service is reachable")
+            logger.info("SER service is reachable")
         else:
-            logger.warning(f"⚠️  SER service responded with status {response.status_code}")
+            logger.warning(f"  SER service responded with status {response.status_code}")
     except requests.exceptions.ConnectionError:
-        logger.error(f"❌ Cannot connect to SER service at {service_url}")
+        logger.error(f"Cannot connect to SER service at {service_url}")
         logger.error("   Make sure the SER service is running!")
         logger.error("   For local testing: cd Well-Bot_SER && uvicorn app.main:app --reload --port 8008")
         return False
     except Exception as e:
-        logger.warning(f"⚠️  Could not verify SER service connectivity: {e}")
+        logger.warning(f"  Could not verify SER service connectivity: {e}")
     
     # Test loop
     logger.info("=" * 60)
@@ -488,9 +488,9 @@ def main():
                 result = test_ser_capture(service_url)
                 
                 if result:
-                    logger.info("\n✅ SER analysis completed successfully")
+                    logger.info("\nSER analysis completed successfully")
                 else:
-                    logger.warning("\n⚠️  SER analysis failed or returned no result")
+                    logger.warning("\n  SER analysis failed or returned no result")
                 
             except KeyboardInterrupt:
                 logger.info("\nInterrupted by user (Ctrl+C)")
