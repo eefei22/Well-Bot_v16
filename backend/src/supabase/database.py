@@ -46,7 +46,7 @@ def get_current_time_utc8_naive() -> datetime:
 
 # If you're running everything locally now, hardcode your dev user_id here:
 # NOTE: This constant is deprecated. Use get_current_user_id() instead.
-# DEV_USER_ID = "8517c97f-66ef-4955-86ed-531013d33d3e"
+# DEV_USER_ID = "96975f52-5b05-4eb1-bfa5-530485112518"
 
 sb = get_supabase(service=True)
 
@@ -277,6 +277,60 @@ def _normalize_religion(value: Optional[str]) -> str:
     return "general"
 
 
+def _normalize_language_for_quote(value: Optional[str]) -> str:
+    """
+    Normalize language value for wb_quote queries.
+    Maps language codes and names to language codes expected by wb_quote table.
+    Returns language code: 'en', 'cn', 'bm' (wb_quote stores codes, not names).
+    """
+    if not value:
+        return "en"
+    
+    # Normalize to lowercase
+    v = value.strip().lower()
+    
+    # Map language codes directly (wb_quote uses codes: 'en', 'cn', 'bm')
+    code_map = {
+        'en': 'en',
+        'cn': 'cn',
+        'zh': 'cn',  # Chinese variants
+        'bm': 'bm',
+        'ms': 'bm',  # Malay variants
+        'id': 'bm'   # Indonesian -> Malay
+    }
+    
+    # Check if it's already a code
+    if v in code_map:
+        return code_map[v]
+    
+    # Map common language name variations to codes
+    name_to_code = {
+        'english': 'en',
+        'chinese': 'cn',
+        'mandarin': 'cn',
+        'malay': 'bm',
+        'bahasa': 'bm',
+        'bahasa malay': 'bm',
+        'bahasa melayu': 'bm'
+    }
+    
+    # Check if it matches a known name
+    if v in name_to_code:
+        return name_to_code[v]
+    
+    # If it contains "chinese" or Chinese-related terms, assume Chinese
+    if 'chin' in v or v == 'zh':
+        return 'cn'
+    
+    # If it contains "malay" or "bahasa", assume Malay
+    if 'malay' in v or 'bahasa' in v:
+        return 'bm'
+    
+    # Default to English
+    logger.warning(f"Unknown language value '{value}', defaulting to 'en' for quote query")
+    return 'en'
+
+
 def get_user_religion(user_id: str) -> Optional[str]:
     """
     Resolve the user's religion for quote filtering.
@@ -314,7 +368,10 @@ def fetch_next_quote(user_id: str, religion: Optional[str] = None, language: Opt
         seen_ids = {row["quote_id"] for row in (seen_resp.data or [])}
 
         category = religion or get_user_religion(user_id) or "general"
-        lang = language or get_user_language(user_id) or "en"
+        raw_lang = language or get_user_language(user_id) or "en"
+        # Normalize language for wb_quote query (handles "Chinese" -> "cn", "chinese" -> "cn", etc.)
+        lang = _normalize_language_for_quote(raw_lang)
+        logger.debug(f"Quote query: raw_lang='{raw_lang}' -> normalized_lang='{lang}', category='{category}'")
         categories = [category, "general"] if category != "general" else ["general"]
 
         # Pull a reasonable pool from DB and then filter locally
@@ -520,7 +577,7 @@ def log_activity_start(
     
     Args:
         user_id: User ID
-        activity_type: Type of intervention ('journal', 'gratitude', 'todo', 'meditation', 'quote', 'activity_suggestion')
+        activity_type: Type of intervention ('Support Chat', 'Journaling', 'Meditation with Music', 'Daily Quote', 'Gratitude')
         emotional_log_id: Optional emotional_log ID if intervention was triggered by emotion detection.
                          None for command-triggered interventions.
     
@@ -530,7 +587,7 @@ def log_activity_start(
     """
     try:
         # Validate enum values match schema constraints
-        valid_activity_types = ['journal', 'gratitude', 'todo', 'meditation', 'quote', 'activity_suggestion']
+        valid_activity_types = ['Support Chat', 'Journaling', 'Meditation with Music', 'Daily Quote', 'Gratitude']
         
         if activity_type not in valid_activity_types:
             logger.error(f"Invalid activity_type: {activity_type}. Must be one of {valid_activity_types}")
@@ -556,13 +613,12 @@ def log_activity_start(
         return None
 
 
-def log_intervention_duration(public_id: str, duration_seconds: Optional[float] = None) -> bool:
+def log_activity_end(public_id: str) -> bool:
     """
-    Update intervention log with duration.
+    Log the end timestamp of an intervention/activity.
     
     Args:
         public_id: Public ID (UUID string) from log_activity_start()
-        duration_seconds: Duration in seconds. If None, duration will be calculated from timestamp.
     
     Returns:
         True if successful, False if failed.
@@ -570,42 +626,45 @@ def log_intervention_duration(public_id: str, duration_seconds: Optional[float] 
     """
     try:
         if not public_id:
-            logger.warning("log_intervention_duration called with empty public_id")
+            logger.warning("log_activity_end called with empty public_id")
             return False
         
-        update_data = {}
+        # Get current timestamp in UTC+8 (timezone-naive for intervention_log)
+        end_timestamp = get_current_time_utc8_naive()
         
-        if duration_seconds is not None:
-            # Convert seconds to interval format (PostgreSQL interval)
-            update_data["duration"] = f"{duration_seconds} seconds"
-        else:
-            # Calculate duration from timestamp to now
-            # First fetch the log to get timestamp
-            res = sb.table("intervention_log").select("timestamp").eq("public_id", public_id).limit(1).execute()
-            if res.data:
-                log_timestamp = datetime.fromisoformat(res.data[0]["timestamp"].replace('Z', '+00:00'))
-                if log_timestamp.tzinfo:
-                    log_timestamp = log_timestamp.replace(tzinfo=None)
-                # Use UTC+8 current time for consistent calculation
-                now = get_current_time_utc8_naive()
-                duration_seconds = (now - log_timestamp).total_seconds()
-                update_data["duration"] = f"{duration_seconds} seconds"
-            else:
-                logger.warning(f"No intervention log found to update: {public_id}")
-                return False
+        update_data = {
+            "end_timestamp": end_timestamp.isoformat()
+        }
         
         res = sb.table("intervention_log").update(update_data).eq("public_id", public_id).execute()
         
         if res.data:
-            logger.info(f"Intervention log updated: {public_id}, duration={update_data.get('duration')}")
+            logger.info(f"Intervention log end timestamp updated: {public_id}, end_timestamp={end_timestamp.isoformat()}")
             return True
         else:
             logger.warning(f"No log record found to update: {public_id}")
             return False
             
     except Exception as e:
-        logger.error(f"Failed to log intervention duration: {e}", exc_info=True)
+        logger.error(f"Failed to log activity end: {e}", exc_info=True)
         return False
+
+
+def log_intervention_duration(public_id: str, duration_seconds: Optional[float] = None) -> bool:
+    """
+    Update intervention log with duration (DEPRECATED - duration is no longer written to database).
+    This function is kept for backward compatibility but does not write duration to database.
+    The duration column remains in the schema but is not populated.
+    
+    Args:
+        public_id: Public ID (UUID string) from log_activity_start()
+        duration_seconds: Duration in seconds (IGNORED - not written to database)
+    
+    Returns:
+        True (always successful for compatibility)
+    """
+    logger.debug(f"log_intervention_duration called for {public_id} (no-op - duration no longer tracked)")
+    return True
 
 
 def update_mood_rating(public_id: str, pre_rating: Optional[int] = None, post_rating: Optional[int] = None) -> bool:
@@ -690,7 +749,7 @@ def query_recent_activity_logs(
     
     Args:
         user_id: User ID to filter logs
-        activity_type: Optional filter by intervention type ('journal', 'gratitude', 'todo', 'meditation', 'quote')
+        activity_type: Optional filter by intervention type ('Support Chat', 'Journaling', 'Meditation with Music', 'Daily Quote', 'Gratitude')
         emotional_log_id: Optional filter by emotional_log_id (None for command-triggered, int for emotion-triggered)
         limit: Maximum number of records to return
         days_back: Number of days to look back from current time

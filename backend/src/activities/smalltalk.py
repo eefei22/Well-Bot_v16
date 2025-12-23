@@ -32,9 +32,8 @@ from src.components import (
     normalize_text
 )
 from src.utils.config_loader import get_deepseek_config
-from src.utils.config_resolver import get_global_config_for_user, get_language_config
+from src.utils.config_resolver import get_global_config_for_user, get_language_config, resolve_language
 from src.supabase.auth import get_current_user_id
-from src.supabase.database import get_user_language
 from src.components import UserContextInjector
 
 logger = logging.getLogger(__name__)
@@ -131,13 +130,33 @@ class SmallTalkActivity:
             # Store audio config for callback methods
             self.audio_config = audio_config
             
-            # Get user language for system prompt
-            user_lang = get_user_language(self.user_id) or 'en'
-            language_name = LANGUAGE_NAMES.get(user_lang, 'English')
+            # Get user language for system prompt - use resolve_language to get normalized code
+            user_lang_code = resolve_language(self.user_id)  # Returns 'en', 'cn', or 'bm'
+            language_name = LANGUAGE_NAMES.get(user_lang_code, 'English')
             
-            # Build system prompt with language instruction
+            # Build system prompt with STRONG language instruction at the beginning
             base_system_prompt = self.smalltalk_config.get("system_prompt", "You are a friendly assistant. Do not use emojis and always always ask follow up questions.")
-            system_prompt_with_language = f"{base_system_prompt}\n\nImportant: Always respond in {language_name}. This is the user's preferred language."
+            
+            # Create a much stronger language enforcement instruction
+            # Use explicit language names in the target language for better LLM understanding
+            lang_instructions = {
+                'cn': '中文',
+                'bm': 'Bahasa Melayu', 
+                'en': 'English'
+            }
+            target_lang_name = lang_instructions.get(user_lang_code, language_name)
+            
+            language_instruction = f"""CRITICAL LANGUAGE REQUIREMENT: You MUST respond ONLY in {language_name} ({target_lang_name}). 
+- The user's preferred language is {language_name} (language code: {user_lang_code})
+- ALL your responses must be in {language_name} - never use English or any other language
+- If the user writes in {language_name}, respond in {language_name}
+- If the user writes in English, still respond in {language_name}
+- This is non-negotiable: every single response must be in {language_name}
+- Do NOT switch to English even if the user asks questions in English
+
+{base_system_prompt}"""
+            
+            system_prompt_with_language = language_instruction
             
             # Initialize ConversationSession
             logger.info("Initializing ConversationSession...")
@@ -317,11 +336,11 @@ class SmallTalkActivity:
         
         # Safety checks
         if not all([self.audio_manager, self.session_manager, self.llm_pipeline]):
-            logger.error("❌ Components not properly initialized - cannot start activity")
+            logger.error("Components not properly initialized - cannot start activity")
             return False
         
         try:
-            logger.info("🚀 Starting SmallTalk activity...")
+            logger.info("Starting SmallTalk activity...")
             self._active = True
             
             # Start session
@@ -372,7 +391,7 @@ class SmallTalkActivity:
                 on_timeout=self._handle_timeout
             )
             
-            logger.info("✅ SmallTalk activity started successfully")
+            logger.info("SmallTalk activity started successfully")
             return True
             
         except Exception as e:
@@ -397,11 +416,11 @@ class SmallTalkActivity:
         if self.session_manager:
             self.session_manager.stop_session()
         
-        logger.info("✅ SmallTalk activity stopped")
+        logger.info("SmallTalk activity stopped")
     
     def cleanup(self):
         """Complete cleanup of all resources including native libraries, cached resources, and dependencies"""
-        logger.info("🧹 Cleaning up SmallTalk activity resources...")
+        logger.info("Cleaning up SmallTalk activity resources...")
         
         # Stop if still active
         if self._active:
@@ -410,7 +429,7 @@ class SmallTalkActivity:
         # Cleanup LLM pipeline first (may have active connections/streams)
         if self.llm_pipeline:
             try:
-                logger.info("🧹 Cleaning up LLM pipeline...")
+                logger.info("Cleaning up LLM pipeline...")
                 # Close TTS client if it exists
                 if hasattr(self.llm_pipeline, 'tts') and self.llm_pipeline.tts:
                     if hasattr(self.llm_pipeline.tts, 'client'):
@@ -448,7 +467,7 @@ class SmallTalkActivity:
         # Cleanup audio manager (handles PyAudio streams)
         if self.audio_manager:
             try:
-                logger.info("🧹 Cleaning up audio manager...")
+                logger.info("Cleaning up audio manager...")
                 self.audio_manager.cleanup()
                 self.audio_manager = None
                 logger.info("✓ Audio manager cleaned up")
@@ -458,7 +477,7 @@ class SmallTalkActivity:
         # Cleanup STT service (Google Cloud Speech client)
         if self.stt_service:
             try:
-                logger.info("🧹 Cleaning up STT service...")
+                logger.info("Cleaning up STT service...")
                 # Close Google Cloud Speech client
                 if hasattr(self.stt_service, 'client') and self.stt_service.client:
                     try:
@@ -477,7 +496,7 @@ class SmallTalkActivity:
         if self.session_manager:
             try:
                 conversation_id = self.session_manager.get_conversation_id()
-                logger.info("🧹 Ending conversation in database...")
+                logger.info("Ending conversation in database...")
                 self.session_manager.end_conversation()
                 self.session_manager = None
                 logger.info("✓ Session manager cleaned up")
@@ -514,7 +533,7 @@ class SmallTalkActivity:
         try:
             from src.utils.config_resolver import _resolver
             if hasattr(_resolver, 'clear_cache'):
-                logger.info("🧹 Clearing config caches...")
+                logger.info("Clearing config caches...")
                 _resolver.clear_cache()
                 logger.debug("Config caches cleared")
         except Exception as e:
@@ -522,7 +541,7 @@ class SmallTalkActivity:
         
         # Cleanup temporary files (if any were created)
         try:
-            logger.info("🧹 Checking for temporary files...")
+            logger.info("Checking for temporary files...")
             # Check for temporary Google Cloud credentials file
             # Note: This is a best-effort cleanup - the file may have been cleaned up already
             temp_dir = tempfile.gettempdir()
@@ -534,7 +553,7 @@ class SmallTalkActivity:
         
         # Force garbage collection to help release native library resources
         try:
-            logger.info("🧹 Running garbage collection...")
+            logger.info("Running garbage collection...")
             collected = gc.collect()
             logger.debug(f"Garbage collection collected {collected} objects")
         except Exception as e:
@@ -543,7 +562,7 @@ class SmallTalkActivity:
         # Reset initialization state
         self._initialized = False
         
-        logger.info("✅ SmallTalk activity cleanup completed")
+        logger.info("SmallTalk activity cleanup completed")
     
     def _speak(self, text: str, is_nudge: bool = False):
         """Speak text using TTS
@@ -580,7 +599,7 @@ class SmallTalkActivity:
     
     def reinitialize(self) -> bool:
         """Re-initialize the activity for subsequent runs"""
-        logger.info("🔄 Re-initializing SmallTalk activity...")
+        logger.info("Re-initializing SmallTalk activity...")
         
         # Reset state
         self._active = False
@@ -600,11 +619,11 @@ class SmallTalkActivity:
         Returns:
             True if activity completed successfully, False otherwise
         """
-        logger.info("🎬 SmallTalkActivity.run() - Starting activity execution")
+        logger.info("SmallTalkActivity.run() - Starting activity execution")
         try:
             # Start the activity
             if not self.start():
-                logger.error("❌ SmallTalkActivity.run() - Failed to start activity")
+                logger.error("SmallTalkActivity.run() - Failed to start activity")
                 return False
             
             # Run conversation loop
@@ -626,7 +645,7 @@ class SmallTalkActivity:
     
     def _conversation_loop(self) -> bool:
         """Main conversation loop"""
-        logger.info("💬 Starting conversation loop...")
+        logger.info("Starting conversation loop...")
         
         try:
             while self.session_manager.is_active() and self._active:
@@ -789,7 +808,7 @@ class SmallTalkActivity:
                         logger.info("Skipping context processor notification - turn count < 4")
                     break
             
-            logger.info("✅ Conversation loop completed successfully")
+            logger.info("Conversation loop completed successfully")
             return True
             
         except Exception as e:
@@ -798,7 +817,7 @@ class SmallTalkActivity:
     
     def _handle_nudge(self):
         """Handle silence nudge callback"""
-        logger.info("🔔 Handling silence nudge...")
+        logger.info("Handling silence nudge...")
         
         try:
             use_audio_files = self.global_smalltalk_config.get("use_audio_files", False)
@@ -824,14 +843,14 @@ class SmallTalkActivity:
             # Speak the nudge prompt (with delays to prevent STT pickup)
             logger.info(f"Speaking nudge prompt...")
             self._speak(nudge_prompt, is_nudge=True)
-            logger.info("✅ Nudge prompt spoken successfully")
+            logger.info("Nudge prompt spoken successfully")
             
         except Exception as e:
-            logger.error(f"❌ Error in _handle_nudge: {e}", exc_info=True)
+            logger.error(f"Error in _handle_nudge: {e}", exc_info=True)
     
     def _handle_timeout(self):
         """Handle silence timeout callback"""
-        logger.info("⏰ Handling silence timeout...")
+        logger.info("Handling silence timeout...")
         
         try:
             use_audio_files = self.global_smalltalk_config.get("use_audio_files", False)
@@ -857,10 +876,10 @@ class SmallTalkActivity:
             # Speak the timeout prompt
             logger.info(f"Speaking timeout prompt...")
             self._speak(timeout_prompt)
-            logger.info("✅ Timeout prompt spoken successfully")
+            logger.info("Timeout prompt spoken successfully")
             
         except Exception as e:
-            logger.error(f"❌ Error in _handle_timeout: {e}", exc_info=True)
+            logger.error(f"Error in _handle_timeout: {e}", exc_info=True)
         finally:
             # Always stop the activity, even if TTS fails
             logger.info("Stopping activity due to timeout...")

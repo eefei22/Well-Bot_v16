@@ -1,8 +1,9 @@
 """
 Idle Mode Activity
 
-This activity handles wakeword detection and intent recognition when the system is idle.
-It continuously listens for wake words, processes user speech, and routes to appropriate activities.
+This activity handles wakeword detection and emotion monitoring when the system is idle.
+It continuously listens for wake words and manages emotion monitoring lifecycle.
+When wake word is detected, it signals the orchestrator to start wake_mode for intent recognition.
 """
 
 import os
@@ -10,18 +11,8 @@ import sys
 import threading
 import time
 import logging
-import subprocess
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any, Union
-
-# For playing wakeword audio - use pydub as primary, PowerShell as fallback
-try:
-    from pydub import AudioSegment
-    from pydub.playback import play
-    PYDUB_AVAILABLE = True
-except ImportError:
-    PYDUB_AVAILABLE = False
-    logging.warning("pydub not available - will use PowerShell fallback for audio")
 
 # Add the backend directory to the path to import modules
 backend_dir = Path(__file__).parent.parent.parent
@@ -29,14 +20,11 @@ sys.path.append(str(backend_dir))
 
 # Import components (use absolute imports like other activities)
 from src.components.wakeword import WakeWordDetector, OpenWakeWordDetector, create_wake_word_detector
-from src.components.mic_stream import MicStream
-from src.components.tts import GoogleTTSClient
-from src.components.stt import GoogleSTTService
-from src.components.keyword_intent_matcher import KeywordIntentMatcher
+from src.components.shared_audio_manager import SharedAudioManager
 from src.utils.config_loader import PORCUPINE_ACCESS_KEY
 from src.utils.config_resolver import get_global_config_for_user, get_language_config
-from src.utils.intervention_record import InterventionRecordManager
 from src.utils.intervention_poller import InterventionPoller
+from src.activities.emotion_monitoring import EmotionMonitoringActivity
 from src.supabase.auth import get_current_user_id
 
 logger = logging.getLogger(__name__)
@@ -46,17 +34,17 @@ class IdleModeActivity:
     """
     Idle Mode Activity
     
-    Handles wakeword detection and intent recognition when the system is idle.
-    This is the default activity that runs continuously until a wake word is detected
-    and an intent is recognized, at which point it exits to allow main.py to route
-    to the appropriate activity.
+    Handles wakeword detection and emotion monitoring coordination when the system is idle.
+    This is the default activity that runs continuously until a wake word is detected,
+    at which point it stops emotion monitoring and signals the orchestrator to start wake_mode.
     """
     
     def __init__(
         self,
         backend_dir: Path,
         user_id: Optional[str] = None,
-        on_intent_detected: Optional[Callable[[str, Dict[str, Any]], None]] = None
+        on_wake_detected: Optional[Callable[[], None]] = None,
+        on_intervention_triggered: Optional[Callable[[], None]] = None
     ):
         """
         Initialize the Idle Mode Activity
@@ -64,50 +52,40 @@ class IdleModeActivity:
         Args:
             backend_dir: Path to the backend directory
             user_id: User ID (optional, will be resolved if not provided)
-            on_intent_detected: Callback function called when intent is detected
-                                Signature: (transcript: str, intent_result: dict) -> None
+            on_wake_detected: Callback function called when wake word is detected
+            on_intervention_triggered: Callback function called when intervention is triggered
         """
         self.backend_dir = backend_dir
         self.user_id = user_id if user_id is not None else get_current_user_id()
-        self.on_intent_detected = on_intent_detected
+        self.on_wake_detected = on_wake_detected
+        self.on_intervention_triggered = on_intervention_triggered
         
         # Components (initialized in initialize())
-        # Can be either WakeWordDetector (Porcupine) or OpenWakeWordDetector (fallback)
         self.wakeword_detector: Optional[Union[WakeWordDetector, OpenWakeWordDetector]] = None
-        self.stt_service: Optional[GoogleSTTService] = None
-        self.tts_service: Optional[GoogleTTSClient] = None
-        self.intent_matcher: Optional[KeywordIntentMatcher] = None
         self.intervention_poller: Optional[InterventionPoller] = None
+        self.emotion_monitoring_activity: Optional[EmotionMonitoringActivity] = None
+        self._emotion_monitoring_thread: Optional[threading.Thread] = None
         
         # Configs (loaded in initialize())
         self.global_config: Optional[dict] = None
         self.language_config: Optional[dict] = None
-        self.wakeword_audio_path: Optional[str] = None
         
         # Activity state
         self._active = False
         self._initialized = False
         
         # Wakeword detection state
-        self.stt_active = False
         self._lock = threading.Lock()
-        self._stt_thread: Optional[threading.Thread] = None
-        self._current_mic: Optional[MicStream] = None
+        self._wakeword_audio_generator = None
         
         # Wake word debouncing to prevent rapid multiple triggers
         self._last_wake_time = 0.0
         self._wake_debounce_seconds = 2.0  # Ignore wake words within 2 seconds of last detection
         
-        # Silence monitoring
-        self._silence_timer: Optional[threading.Timer] = None
-        self._silence_lock = threading.Lock()
-        
-        # Intent detection flag (to exit run() after intent detected)
-        self._intent_detected = threading.Event()
-        self._timeout_occurred = threading.Event()  # Flag for timeout (no intent)
-        self._intervention_triggered = threading.Event()  # Flag for intervention trigger
-        self._detected_transcript: Optional[str] = None
-        self._detected_intent: Optional[Dict[str, Any]] = None
+        # Wake word/intervention detection flags
+        self._wake_detected = threading.Event()
+        self._intervention_triggered_flag = threading.Event()
+        self._last_was_intervention = False  # Track if last trigger was intervention
         
         logger.info(f"IdleModeActivity initialized for user {self.user_id}")
     
@@ -121,42 +99,6 @@ class IdleModeActivity:
             logger.info(f"Loading configs for user {self.user_id}")
             self.global_config = get_global_config_for_user(self.user_id)
             self.language_config = get_language_config(self.user_id)
-            
-            # Get wakeword audio path
-            self.wakeword_audio_path = self.language_config["audio_paths"].get("wokeword_audio_path")
-            logger.info(f"Wakeword audio path loaded: {self.wakeword_audio_path}")
-            
-            # Initialize TTS service for wakeword responses
-            try:
-                from google.cloud import texttospeech
-                self.tts_service = GoogleTTSClient(
-                    voice_name=self.global_config["language_codes"]["tts_voice_name"],
-                    language_code=self.global_config["language_codes"]["tts_language_code"],
-                    audio_encoding=texttospeech.AudioEncoding.LINEAR16,
-                    sample_rate_hertz=24000,
-                    num_channels=1,
-                    sample_width_bytes=2
-                )
-                logger.info("✓ TTS service initialized")
-            except Exception as e:
-                logger.warning(f"Failed to initialize TTS service: {e}")
-                self.tts_service = None
-            
-            # Initialize STT service and keyword intent matcher
-            try:
-                # Initialize STT service
-                stt_language = self.global_config["language_codes"]["stt_language_code"]
-                self.stt_service = GoogleSTTService(language=stt_language, sample_rate=16000)
-                logger.info(f"✓ STT service initialized (language: {stt_language})")
-                
-                # Initialize keyword intent matcher (uses user language preference)
-                self.intent_matcher = KeywordIntentMatcher(backend_dir=self.backend_dir, user_id=self.user_id)
-                logger.info(f"✓ Keyword intent matcher initialized")
-            except Exception as e:
-                logger.error(f"Failed to initialize STT service or keyword matcher: {e}", exc_info=True)
-                self.stt_service = None
-                self.intent_matcher = None
-                return False
             
             # Initialize wakeword detector (with automatic fallback to OpenWakeWord)
             try:
@@ -193,8 +135,22 @@ class IdleModeActivity:
                 logger.warning(f"Failed to initialize intervention poller: {e}", exc_info=True)
                 self.intervention_poller = None
             
+            # Initialize emotion monitoring activity
+            try:
+                self.emotion_monitoring_activity = EmotionMonitoringActivity(
+                    backend_dir=self.backend_dir,
+                    user_id=self.user_id
+                )
+                if not self.emotion_monitoring_activity.initialize():
+                    logger.error("Failed to initialize emotion monitoring activity")
+                    return False
+                logger.info("✓ Emotion monitoring activity initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize emotion monitoring activity: {e}", exc_info=True)
+                return False
+            
             self._initialized = True
-            logger.info("✅ Idle Mode activity initialized successfully")
+            logger.info("Idle Mode activity initialized successfully")
             return True
             
         except Exception as e:
@@ -202,7 +158,7 @@ class IdleModeActivity:
             return False
     
     def start(self) -> bool:
-        """Start the idle mode activity (wakeword detection)"""
+        """Start the idle mode activity (wakeword detection and emotion monitoring)"""
         if not self._initialized:
             logger.error("Cannot start: activity not initialized")
             return False
@@ -219,7 +175,19 @@ class IdleModeActivity:
                 logger.error("Wakeword detector was not initialized during creation - this should not happen")
                 raise RuntimeError("Wakeword detector not initialized")
             
-            self.wakeword_detector.start(self._on_wake)
+            # Subscribe to SharedAudioManager for wake word detection
+            audio_manager = SharedAudioManager.get_instance()
+            self._wakeword_audio_generator = audio_manager.subscribe(
+                subscriber_id="idle_mode_wakeword",
+                sample_rate=16000,
+                chunk_size=1600
+            )
+            
+            # Start wake word detector with subscription
+            self.wakeword_detector.start_with_subscription(
+                self._wakeword_audio_generator,
+                self._on_wake
+            )
             
             # Start intervention poller
             if self.intervention_poller:
@@ -229,8 +197,31 @@ class IdleModeActivity:
                 except Exception as e:
                     logger.warning(f"Failed to start intervention poller: {e}")
             
+            # Start emotion monitoring activity
+            if self.emotion_monitoring_activity:
+                try:
+                    if self.emotion_monitoring_activity.start():
+                        # Start emotion monitoring in a thread
+                        def run_emotion_monitoring():
+                            try:
+                                self.emotion_monitoring_activity.run()
+                            except Exception as e:
+                                logger.error(f"Error running emotion monitoring: {e}", exc_info=True)
+                        
+                        self._emotion_monitoring_thread = threading.Thread(
+                            target=run_emotion_monitoring,
+                            daemon=True,
+                            name="EmotionMonitoring"
+                        )
+                        self._emotion_monitoring_thread.start()
+                        logger.info("✓ Emotion monitoring started")
+                    else:
+                        logger.warning("Failed to start emotion monitoring")
+                except Exception as e:
+                    logger.warning(f"Error starting emotion monitoring: {e}", exc_info=True)
+            
             self._active = True
-            logger.info("✅ Idle mode active: listening for wake word")
+            logger.info("Idle mode active: listening for wake word and monitoring emotions")
             return True
         except Exception as e:
             logger.error(f"Failed to start idle mode: {e}", exc_info=True)
@@ -245,6 +236,30 @@ class IdleModeActivity:
         
         logger.info("Stopping idle mode activity...")
         
+        # Mark as inactive FIRST
+        self._active = False
+        
+        # Stop emotion monitoring
+        if self.emotion_monitoring_activity:
+            try:
+                self.emotion_monitoring_activity.stop()
+                logger.info("✓ Emotion monitoring stopped")
+            except Exception as e:
+                logger.warning(f"Error stopping emotion monitoring: {e}")
+        
+        # Wait for emotion monitoring thread to finish
+        if self._emotion_monitoring_thread and self._emotion_monitoring_thread.is_alive():
+            current_thread = threading.current_thread()
+            if self._emotion_monitoring_thread is not current_thread:
+                logger.info("Waiting for emotion monitoring thread to finish...")
+                self._emotion_monitoring_thread.join(timeout=2.0)
+                if self._emotion_monitoring_thread.is_alive():
+                    logger.warning("Emotion monitoring thread did not finish within timeout")
+            else:
+                logger.debug("Emotion monitoring thread is current thread - skipping join")
+        
+        self._emotion_monitoring_thread = None
+        
         # Stop intervention poller
         if self.intervention_poller:
             try:
@@ -253,12 +268,6 @@ class IdleModeActivity:
             except Exception as e:
                 logger.warning(f"Error stopping intervention poller: {e}")
         
-        # Mark as inactive FIRST to prevent callbacks from stale STT sessions
-        self._active = False
-        
-        # Stop silence monitoring
-        self._stop_silence_monitoring()
-        
         # Stop wakeword detector
         if self.wakeword_detector:
             try:
@@ -266,174 +275,109 @@ class IdleModeActivity:
             except Exception as e:
                 logger.warning(f"Error stopping wakeword detector: {e}")
         
-        # Stop STT session immediately and forcefully
-        with self._lock:
-            if self._current_mic and self._current_mic.is_running():
-                logger.info("Stopping mic during idle mode stop")
-                self._current_mic.stop()
-                self._current_mic = None
-            # Mark STT as inactive to prevent new wake word processing
-            self.stt_active = False
+        # Unsubscribe from SharedAudioManager
+        if self._wakeword_audio_generator:
+            try:
+                audio_manager = SharedAudioManager.get_instance()
+                audio_manager.unsubscribe("idle_mode_wakeword")
+                self._wakeword_audio_generator = None
+            except Exception as e:
+                logger.warning(f"Error unsubscribing from SharedAudioManager: {e}")
         
-        # Wait for STT thread to complete if it's running
-        # Don't try to join if we're in the STT thread itself (would cause "cannot join current thread" error)
-        if self._stt_thread and self._stt_thread.is_alive():
-            current_thread = threading.current_thread()
-            if self._stt_thread is not current_thread:
-                logger.info("Waiting for intent recognition session to complete...")
-                self._stt_thread.join(timeout=1.0)  # Reduced timeout for faster cleanup
-                if self._stt_thread.is_alive():
-                    logger.warning("STT thread did not complete within timeout, continuing anyway")
-            else:
-                logger.debug("STT thread is current thread - skipping join to avoid deadlock")
+        # Clear flags
+        self._wake_detected.clear()
+        self._intervention_triggered_flag.clear()
+        self._last_was_intervention = False
         
-        # Ensure mic is cleared and stopped
-        with self._lock:
-            if self._current_mic:
-                try:
-                    if self._current_mic.is_running():
-                        self._current_mic.stop()
-                except:
-                    pass
-                self._current_mic = None
-            # Reset STT active flag
-            self.stt_active = False
-        
-        # Clear any intent flags to prevent stale intents from being detected on restart
-        self._intent_detected.clear()
-        self._detected_intent = None
-        self._detected_transcript = None
-        
-        logger.info("✅ Idle mode stopped")
+        logger.info("Idle mode stopped")
     
     def _on_intervention_triggered(self):
         """Callback when intervention trigger is detected from poller"""
-        logger.info("🎯 Intervention trigger detected - preparing to launch activity suggestion")
-        logger.info(f"Current state: _active={self._active}, _intervention_triggered.is_set()={self._intervention_triggered.is_set()}")
+        logger.info("Intervention trigger detected")
         
-        # Stop wakeword detection
-        if self.wakeword_detector:
+        # Stop emotion monitoring immediately (non-blocking - don't wait for it to finish)
+        if self.emotion_monitoring_activity:
             try:
-                self.wakeword_detector.stop()
+                # Set running flag to False immediately to interrupt ongoing operations
+                self.emotion_monitoring_activity._running = False
+                # Call stop() in background thread so we don't block
+                def stop_emotion_monitoring():
+                    try:
+                        self.emotion_monitoring_activity.stop()
+                        logger.info("✓ Emotion monitoring stopped (intervention triggered)")
+                    except Exception as e:
+                        logger.warning(f"Error stopping emotion monitoring: {e}")
+                threading.Thread(target=stop_emotion_monitoring, daemon=True).start()
             except Exception as e:
-                logger.warning(f"Error stopping wakeword detector: {e}")
+                logger.warning(f"Error stopping emotion monitoring: {e}")
         
-        # Load intervention prompt from language config
-        try:
-            activity_suggestion_config = self.language_config.get("activity_suggestion", {})
-            intervention_prompt = activity_suggestion_config.get(
-                "intervention_trigger_prompt",
-                "I'm seeing that you're having a good day would you like to do an activity with me?"
-            )
-        except Exception as e:
-            logger.warning(f"Failed to load intervention prompt from config: {e}")
-            intervention_prompt = "I'm seeing that you're having a good day would you like to do an activity with me?"
+        # Set flag to signal orchestrator IMMEDIATELY (don't wait for emotion monitoring)
+        self._intervention_triggered_flag.set()
+        self._last_was_intervention = True  # Mark that this was intervention
         
-        logger.info(f"Speaking intervention prompt: {intervention_prompt}")
-        self._speak(intervention_prompt)
+        # Call callback if provided (this will trigger wake_mode start immediately)
+        if self.on_intervention_triggered:
+            try:
+                self.on_intervention_triggered()
+            except Exception as e:
+                logger.error(f"Error invoking intervention callback: {e}")
         
-        # Set flag to exit idle_mode and route to activity suggestion
-        self._intervention_triggered.set()
-        logger.info("✅ Intervention trigger flag set - will route to activity suggestion")
-        logger.info(f"After setting flag: _active={self._active}, _intervention_triggered.is_set()={self._intervention_triggered.is_set()}")
+        logger.info("Intervention trigger flag set - orchestrator will start wake_mode immediately")
     
     def run(self) -> bool:
         """
         Run the idle mode activity
         
         Returns:
-            True if intent was detected or intervention triggered (activity should exit to allow routing)
+            True if wake word detected or intervention triggered (activity should exit to allow wake_mode)
             False on error or if activity was stopped
         """
-        logger.info("🎬 IdleModeActivity.run() - Starting idle mode execution")
+        logger.info("IdleModeActivity.run() - Starting idle mode execution")
         
         try:
-            # Clear any stale state before starting (in case of restart)
-            # This ensures we start with a clean slate
-            self._intent_detected.clear()
-            self._timeout_occurred.clear()
-            self._detected_intent = None
-            self._detected_transcript = None
-            # Note: We don't clear _intervention_triggered here because it might be set
-            # by the poller callback before we enter the wait loop
+            # Clear any stale state before starting
+            self._wake_detected.clear()
+            self._intervention_triggered_flag.clear()
             
             # Start the activity
             if not self.start():
-                logger.error("❌ Failed to start idle mode")
+                logger.error("Failed to start idle mode")
                 return False
             
             # Check if intervention was already triggered before we entered the wait loop
-            # This handles the case where the poller callback fired between reinitialize() and run()
-            if self._intervention_triggered.is_set():
-                logger.info("✅ Intervention already triggered (detected before wait loop) - exiting idle mode to route to activity suggestion")
-                # Clear the intervention trigger flag to prevent duplicate handling
-                self._intervention_triggered.clear()
-                # Stop the activity (poller will be stopped)
+            if self._intervention_triggered_flag.is_set():
+                logger.info("Intervention already triggered (detected before wait loop)")
+                self._intervention_triggered_flag.clear()
                 self.stop()
-                # Set intent to "activity_suggestion" so orchestrator routes correctly
-                self._detected_intent = {"intent": "activity_suggestion", "confidence": 1.0}
-                self._detected_transcript = ""
-                self._intent_detected.set()
                 return True
             
-            # Wait for intent to be detected, intervention trigger, or activity to be stopped
-            logger.info("Waiting for wake word detection, intent recognition, or intervention trigger...")
+            # Wait for wake word detection or intervention trigger
+            logger.info("Waiting for wake word detection or intervention trigger...")
             
-            # Wait for intent detection event, intervention trigger, or timeout
-            while self._active and not self._intent_detected.is_set() and not self._intervention_triggered.is_set() and not self._timeout_occurred.is_set():
-                time.sleep(0.1)  # Small sleep to avoid busy waiting
+            while self._active and not self._wake_detected.is_set() and not self._intervention_triggered_flag.is_set():
+                time.sleep(0.01)  # Very small sleep for minimal latency (10ms)
+            
+            # Check if wake word was detected
+            if self._wake_detected.is_set():
+                logger.info("Wake word detected - exiting idle mode to allow wake_mode")
+                self.stop()
+                return True
             
             # Check if intervention was triggered
-            if self._intervention_triggered.is_set():
-                logger.info("✅ Intervention triggered - exiting idle mode to route to activity suggestion")
-                # Clear the intervention trigger flag to prevent duplicate handling
-                self._intervention_triggered.clear()
-                # Stop the activity (poller will be stopped)
-                self.stop()
-                # Set intent to "activity_suggestion" so orchestrator routes correctly
-                self._detected_intent = {"intent": "activity_suggestion", "confidence": 1.0}
-                self._detected_transcript = ""
-                self._intent_detected.set()
-                return True
-            # Check if intent was detected
-            elif self._intent_detected.is_set():
-                logger.info("✅ Intent detected - exiting idle mode to allow routing")
-                # Stop the activity
+            if self._intervention_triggered_flag.is_set():
+                logger.info("Intervention triggered - exiting idle mode to allow wake_mode")
+                self._intervention_triggered_flag.clear()
                 self.stop()
                 return True
-            elif self._timeout_occurred.is_set():
-                # Timeout occurred - no intent detected, just clean up and restart
-                logger.info("⏰ Timeout occurred - no intent detected, cleaning up to restart idle mode")
-                # Stop the activity
-                self.stop()
-                return False
-            else:
-                # Activity was stopped externally
-                logger.info("Idle mode stopped externally")
-                return False
+            
+            # Activity was stopped externally
+            logger.info("Idle mode stopped externally")
+            return False
                 
         except Exception as e:
             logger.error(f"Error running idle mode activity: {e}", exc_info=True)
             self.stop()
             return False
-    
-    def get_detected_intent(self) -> Optional[Dict[str, Any]]:
-        """
-        Get the detected intent and transcript.
-        
-        Returns:
-            Dictionary with 'intent' and 'confidence' keys, or None if no intent detected
-        """
-        return self._detected_intent
-    
-    def get_detected_transcript(self) -> Optional[str]:
-        """
-        Get the detected transcript.
-        
-        Returns:
-            Transcript string, or None if no transcript available
-        """
-        return self._detected_transcript
     
     def cleanup(self):
         """Clean up all resources"""
@@ -447,14 +391,19 @@ class IdleModeActivity:
                 except Exception as e:
                     logger.warning(f"Error cleaning up wakeword detector: {e}")
             
-            # STT service, TTS service, and keyword matcher don't need explicit cleanup
-            logger.info("✅ Idle mode cleanup completed")
+            if self.emotion_monitoring_activity:
+                try:
+                    self.emotion_monitoring_activity.cleanup()
+                except Exception as e:
+                    logger.warning(f"Error cleaning up emotion monitoring: {e}")
+            
+            logger.info("Idle mode cleanup completed")
         except Exception as e:
             logger.error(f"Error during idle mode cleanup: {e}", exc_info=True)
     
     def reinitialize(self) -> bool:
         """Re-initialize the activity for subsequent runs"""
-        logger.info("🔄 Re-initializing Idle Mode activity...")
+        logger.info("Re-initializing Idle Mode activity...")
         
         # Cleanup existing wakeword detector before resetting state
         if self.wakeword_detector:
@@ -466,16 +415,22 @@ class IdleModeActivity:
             finally:
                 self.wakeword_detector = None
         
+        # Cleanup emotion monitoring
+        if self.emotion_monitoring_activity:
+            try:
+                self.emotion_monitoring_activity.cleanup()
+            except Exception as e:
+                logger.warning(f"Error cleaning up emotion monitoring during reinitialize: {e}")
+            finally:
+                self.emotion_monitoring_activity = None
+        
         # Reset state
         self._active = False
         self._initialized = False
-        self._intent_detected.clear()
-        self._timeout_occurred.clear()
-        self._intervention_triggered.clear()
-        self._detected_transcript = None
-        self._detected_intent = None
-        self._last_wake_time = 0.0  # Reset wake word debounce timer
-        self.stt_active = False  # Reset STT active flag
+        self._wake_detected.clear()
+        self._intervention_triggered_flag.clear()
+        self._last_was_intervention = False
+        self._last_wake_time = 0.0
         
         # Re-initialize components
         return self.initialize()
@@ -484,414 +439,51 @@ class IdleModeActivity:
         """Check if the activity is currently active"""
         return self._active and self._initialized
     
-    def _play_audio_file(self, audio_path: str) -> bool:
-        """
-        Play an audio file using the best available method.
-        Returns True if successful, False otherwise.
-        """
-        if not os.path.exists(audio_path):
-            logger.error(f"Audio file not found: {audio_path}")
-            return False
-
-        # Method 1: Try pydub (most reliable)
-        if PYDUB_AVAILABLE:
-            try:
-                logger.debug(f"Playing audio with pydub: {audio_path}")
-                audio = AudioSegment.from_wav(audio_path)
-                play(audio)
-                logger.debug("Audio played successfully with pydub")
-                return True
-            except Exception as e:
-                logger.warning(f"pydub playback failed: {e}, trying fallback")
-
-        # Method 2: Try PowerShell (Windows-specific fallback)
-        if sys.platform == "win32":
-            try:
-                logger.debug(f"Playing audio with PowerShell: {audio_path}")
-                ps_cmd = f'powershell -c "(New-Object Media.SoundPlayer \'{audio_path}\').PlaySync()"'
-                result = subprocess.run(ps_cmd, shell=True, capture_output=True, text=True, timeout=10)
-                
-                if result.returncode == 0:
-                    logger.debug("Audio played successfully with PowerShell")
-                    return True
-                else:
-                    logger.warning(f"PowerShell playback failed: {result.stderr}")
-            except Exception as e:
-                logger.warning(f"PowerShell playback error: {e}")
-
-        logger.error(f"All audio playback methods failed for: {audio_path}")
-        return False
-
-    def _speak(self, text: str):
-        """Speak text using TTS with microphone muting"""
-        if not self.tts_service:
-            logger.warning("TTS service not available")
-            return
-        
-        # Mute the mic before speaking to prevent TTS feedback
-        with self._lock:
-            if self._current_mic and self._current_mic.is_running():
-                logger.debug("Muting microphone before TTS")
-                self._current_mic.mute()
-        
-        try:
-            def text_gen():
-                yield text
-            
-            # Generate PCM chunks
-            pcm_chunks = self.tts_service.stream_synthesize(text_gen())
-            
-            # Play PCM chunks using PyAudio
-            import pyaudio
-            pa = pyaudio.PyAudio()
-            stream = pa.open(
-                format=pyaudio.paInt16,
-                channels=1,
-                rate=24000,
-                output=True
-            )
-            
-            for chunk in pcm_chunks:
-                stream.write(chunk)
-            
-            stream.stop_stream()
-            stream.close()
-            pa.terminate()
-            
-            logger.info(f"TTS played: {text[:50]}...")
-        except Exception as e:
-            logger.error(f"TTS error: {e}")
-        finally:
-            # Unmute the mic after speaking (if it's still running)
-            with self._lock:
-                if self._current_mic and self._current_mic.is_running():
-                    logger.debug("Unmuting microphone after TTS")
-                    self._current_mic.unmute()
-
+    def was_last_trigger_intervention(self) -> bool:
+        """Check if the last trigger was intervention (vs wake word)"""
+        return self._last_was_intervention
+    
     def _on_wake(self):
         """Callback when wake word is detected"""
         current_time = time.time()
         
-        # Atomic debounce check and state update to prevent race conditions
+        # Atomic debounce check to prevent race conditions
         with self._lock:
             # Debounce: ignore wake words detected too quickly after the last one
             if current_time - self._last_wake_time < self._wake_debounce_seconds:
                 logger.debug(f"Ignoring wake word detected too soon (debounce: {self._wake_debounce_seconds}s)")
                 return
             
-            # Check if STT is already active
-            if self.stt_active:
-                logger.warning("Intent recognition already active after wakeword – ignoring this wake event")
-                return
-            
-            # Update state atomically: mark STT as active and update last wake time
-            self.stt_active = True
+            # Update last wake time
             self._last_wake_time = current_time
         
         logger.info("Wake word detected")
-
-        # Load wakeword response config
-        wakeword_config = self.language_config.get("wakeword_responses", {})
-        use_audio_files = self.global_config["wakeword"].get("use_audio_files", False)
         
-        # Play feedback audio if enabled
-        if use_audio_files and self.wakeword_audio_path:
+        # Stop emotion monitoring immediately (non-blocking - don't wait for it to finish)
+        if self.emotion_monitoring_activity:
             try:
-                logger.info(f"Playing wakeword feedback audio: {self.wakeword_audio_path}")
-                success = self._play_audio_file(self.wakeword_audio_path)
-                if success:
-                    logger.info("Wakeword feedback audio played successfully")
-                else:
-                    logger.error("Failed to play wakeword feedback audio")
+                # Set running flag to False immediately to interrupt ongoing operations
+                self.emotion_monitoring_activity._running = False
+                # Call stop() in background thread so we don't block
+                def stop_emotion_monitoring():
+                    try:
+                        self.emotion_monitoring_activity.stop()
+                        logger.info("✓ Emotion monitoring stopped (wake word detected)")
+                    except Exception as e:
+                        logger.warning(f"Error stopping emotion monitoring: {e}")
+                threading.Thread(target=stop_emotion_monitoring, daemon=True).start()
             except Exception as e:
-                logger.error(f"Error playing wakeword audio: {e}")
-        else:
-            logger.debug("No wakeword feedback audio configured or audio files disabled")
-
-        # TTS prompt from config
-        try:
-            prompts = wakeword_config.get("prompts", {})
-            wakeword_prompt = prompts.get("wakeword_detected", "Hey, I heard you called me. What can I help you with?")
-        except Exception as e:
-            logger.warning(f"Failed to load wakeword detected prompt from config: {e}")
-            wakeword_prompt = "Hey, I heard you called me. What can I help you with?"
+                logger.warning(f"Error stopping emotion monitoring: {e}")
         
-        # Speak the prompt (this will block until TTS finishes)
-        logger.info(f"Speaking wakeword prompt: {wakeword_prompt}")
-        self._speak(wakeword_prompt)
-        logger.info("Wakeword prompt finished, starting keyword intent recognition")
-
-        # Start silence monitoring after wake word detection
-        self._start_silence_monitoring()
-
-        # Launch STT-based keyword intent recognition thread AFTER TTS completes
-        logger.info("Launching keyword intent recognition session")
-        self._stt_thread = threading.Thread(target=self._run_keyword_intent, daemon=True)
-        self._stt_thread.start()
-
-    def _run_keyword_intent(self):
-        """Process audio with STT and match against keywords for intent recognition."""
-        if not self.stt_service or not self.intent_matcher:
-            logger.error("STT service or keyword matcher not initialized, cannot process")
-            with self._lock:
-                self.stt_active = False
-            return
+        # Set flag to signal orchestrator IMMEDIATELY (don't wait for emotion monitoring)
+        self._wake_detected.set()
+        self._last_was_intervention = False  # Mark that this was wake word, not intervention
         
-        logger.info("Keyword intent recognition session started")
-        
-        # Check if activity is still active before starting (prevent stale sessions)
-        if not self._active:
-            logger.debug("Idle mode no longer active, aborting STT session")
-            with self._lock:
-                self.stt_active = False
-            return
-        
-        # Use standard STT parameters (16kHz)
-        mic = MicStream(rate=16000, chunk_size=1600)  # 100ms chunks at 16kHz
-        
-        # Store mic reference for muting during TTS
-        with self._lock:
-            self._current_mic = mic
-        
-        intent_result: Optional[dict] = None
-        transcript: Optional[str] = None
-
-        try:
-            mic.start()
-            logger.info("Microphone active, awaiting speech for keyword matching")
-            
-            # Capture transcript using STT
-            def on_transcript(text: str, is_final: bool):
-                nonlocal transcript
-                if is_final and text:
-                    transcript = text
-                    # Stop mic immediately when we get final transcript
-                    mic.stop()
-                    # Reset silence timer on transcript
-                    self._stop_silence_monitoring()
-            
-            # Run STT - no timeout check here since silence monitoring handles it
+        # Call callback if provided (this will trigger wake_mode start immediately)
+        if self.on_wake_detected:
             try:
-                self.stt_service.stream_recognize(
-                    mic.generator(),
-                    on_transcript,
-                    interim_results=True,
-                    single_utterance=True  # Stop after first final result
-                )
+                self.on_wake_detected()
             except Exception as e:
-                logger.error(f"STT error during keyword matching: {e}")
-            
-            # Ensure mic is stopped
-            if mic.is_running():
-                logger.debug("Stopping mic before processing transcript")
-                mic.stop()
-            
-            # Only proceed with intent recognition if transcript has at least one word
-            # AND activity is still active (prevent processing stale transcripts)
-            if transcript and transcript.strip() and self._active:
-                # Check if transcript has at least one word (not just whitespace)
-                words = transcript.strip().split()
-                if len(words) > 0:
-                    logger.info(f"[IdleMode] Transcript received: '{transcript}'")
-                    intent_result = self.intent_matcher.match_intent(transcript)
-                    if intent_result:
-                        logger.info(f"[IdleMode] Intent detected: {intent_result.get('intent')}")
-                    else:
-                        logger.info("[IdleMode] No intent matched from transcript")
-                        # If no intent matched, set unknown
-                        intent_result = {"intent": "unknown", "confidence": 0.0}
-                        logger.info("[IdleMode] No intent understood, defaulting to unknown")
-                    
-                    # Double-check activity is still active before proceeding
-                    if not self._active:
-                        logger.debug("Idle mode stopped during intent processing, aborting callback")
-                        return
-                    
-                    # Store results and signal intent detection
-                    self._detected_transcript = transcript
-                    self._detected_intent = intent_result
-                    
-                    # If intent is unknown, check if we should trigger intervention and speak prompt
-                    if intent_result.get("intent") == "unknown":
-                        try:
-                            record_path = self.backend_dir / "config" / "intervention_record.json"
-                            record_manager = InterventionRecordManager(record_path)
-                            record = record_manager.load_record()
-                            
-                            decision = record.get("latest_decision", {}) if record else {}
-                            trigger_intervention = decision.get("trigger_intervention", False)
-                            
-                            if trigger_intervention:
-                                # Load and speak the unknown intent prompt
-                                activity_suggestion_config = self.language_config.get("activity_suggestion", {})
-                                unknown_intent_prompt = activity_suggestion_config.get(
-                                    "unknown_intent_prompt",
-                                    "I didn't quite catch that, but let me suggest something for you"
-                                )
-                                logger.info(f"Speaking unknown intent prompt: {unknown_intent_prompt}")
-                                self._speak(unknown_intent_prompt)
-                        except Exception as e:
-                            logger.warning(f"Failed to check trigger_intervention or speak prompt: {e}")
-                    
-                    # Final check: ensure activity is still active before signaling intent
-                    if not self._active:
-                        logger.debug("Idle mode stopped before signaling intent, aborting")
-                        return
-                    
-                    # Signal that intent was detected (this will cause run() to exit)
-                    # Do this BEFORE invoking callback to prevent race conditions
-                    self._intent_detected.set()
-                    
-                    # Invoke callback if provided (only if activity is still active)
-                    # Check if activity is active to prevent stale callbacks from completing STT sessions
-                    if self.on_intent_detected and self._active:
-                        try:
-                            self.on_intent_detected(self._detected_transcript, self._detected_intent)
-                        except Exception as e:
-                            logger.error(f"Error invoking intent detected callback: {e}")
-                    elif self.on_intent_detected and not self._active:
-                        logger.debug("Skipping callback invocation - idle mode is no longer active (likely stopped)")
-                else:
-                    logger.info("[IdleMode] Transcript is empty or whitespace only - skipping intent recognition")
-            elif transcript and transcript.strip() and not self._active:
-                logger.debug("Transcript received but idle mode is no longer active, ignoring")
-            else:
-                logger.info("[IdleMode] No transcript received - skipping intent recognition")
-            
-        except Exception as e:
-            logger.error(f"Error during keyword intent recognition: {e}", exc_info=True)
-        finally:
-            # Ensure mic is stopped and cleared
-            if mic.is_running():
-                mic.stop()
-            with self._lock:
-                self._current_mic = None
-                self.stt_active = False
-            logger.info("Keyword intent recognition session ended")
-
-    def _start_silence_monitoring(self):
-        """Start monitoring silence after wake word detection"""
-        with self._silence_lock:
-            if self._silence_timer:
-                self._silence_timer.cancel()
-            
-            # Use silence_timeout_seconds for the initial nudge timer
-            silence_timeout = self.global_config["wakeword"]["silence_timeout_seconds"]
-            self._silence_timer = threading.Timer(silence_timeout, self._handle_nudge)
-            self._silence_timer.daemon = True
-            self._silence_timer.start()
-            logger.info(f"Started silence monitoring - nudge in {silence_timeout}s")
-
-    def _handle_nudge(self):
-        """Handle nudge when user is silent after wake word"""
-        logger.info("User silent after wake word, playing nudge")
+                logger.error(f"Error invoking wake detected callback: {e}")
         
-        # Stop STT session to mute microphone before playing audio
-        self._stop_stt_session()
-        
-        # Load user-specific config
-        wakeword_config = self.language_config.get("wakeword_responses", {})
-        use_audio_files = self.global_config["wakeword"].get("use_audio_files", False)
-        
-        # Play nudge audio if enabled
-        if use_audio_files:
-            nudge_audio_path = self.backend_dir / self.language_config["audio_paths"]["nudge_audio_path"]
-            if nudge_audio_path.exists():
-                self._play_audio_file(str(nudge_audio_path))
-        
-        # TTS prompt from config
-        try:
-            prompts = wakeword_config.get("prompts", {})
-            nudge_prompt = prompts.get("nudge", "I'm listening. What would you like to do?")
-        except Exception as e:
-            logger.warning(f"Failed to load nudge prompt from config: {e}")
-            nudge_prompt = "I'm listening. What would you like to do?"
-        
-        self._speak(nudge_prompt)
-        
-        # After nudge TTS finishes, restart STT session to continue listening for speech
-        # This replicates the same flow as after wake word detection
-        logger.info("Restarting STT session after nudge to continue listening for speech")
-        
-        # Check if STT thread is still running (it should have been stopped by _stop_stt_session)
-        # If it's still running, wait for it to finish
-        # Don't try to join if we're in the STT thread itself (would cause "cannot join current thread" error)
-        if self._stt_thread and self._stt_thread.is_alive():
-            current_thread = threading.current_thread()
-            if self._stt_thread is not current_thread:
-                logger.info("Waiting for previous STT thread to finish...")
-                self._stt_thread.join(timeout=1.0)
-                if self._stt_thread.is_alive():
-                    logger.warning("Previous STT thread did not finish within timeout")
-            else:
-                logger.debug("STT thread is current thread - skipping join to avoid deadlock")
-        
-        # Reset stt_active flag
-        with self._lock:
-            self.stt_active = True
-        
-        # Launch new STT-based keyword intent recognition thread
-        logger.info("Launching keyword intent recognition session after nudge")
-        self._stt_thread = threading.Thread(target=self._run_keyword_intent, daemon=True)
-        self._stt_thread.start()
-        
-        # Start final timeout timer
-        # This timer runs AFTER the nudge, so use nudge_timeout_seconds directly
-        with self._silence_lock:
-            nudge_timeout = self.global_config["wakeword"]["nudge_timeout_seconds"]
-            self._silence_timer = threading.Timer(nudge_timeout, self._handle_timeout)
-            self._silence_timer.daemon = True
-            self._silence_timer.start()
-            logger.info(f"Started final timeout timer - timeout in {nudge_timeout}s")
-
-    def _handle_timeout(self):
-        """Handle final timeout after wake word with no user speech"""
-        logger.info("User timeout after wake word, playing termination and restarting")
-        
-        # Stop STT session to mute microphone before playing audio
-        self._stop_stt_session()
-        
-        # Load user-specific config
-        wakeword_config = self.language_config.get("wakeword_responses", {})
-        use_audio_files = self.global_config["wakeword"].get("use_audio_files", False)
-        
-        # Play termination audio if enabled
-        if use_audio_files:
-            termination_audio_path = self.backend_dir / self.language_config["audio_paths"]["termination_audio_path"]
-            if termination_audio_path.exists():
-                self._play_audio_file(str(termination_audio_path))
-        
-        # TTS prompt from config
-        try:
-            prompts = wakeword_config.get("prompts", {})
-            timeout_prompt = prompts.get("timeout", "I'll be here when you need me. Just say my name.")
-        except Exception as e:
-            logger.warning(f"Failed to load timeout prompt from config: {e}")
-            timeout_prompt = "I'll be here when you need me. Just say my name."
-        
-        self._speak(timeout_prompt)
-        
-        # Signal timeout occurred (no intent detected) - this will cause run() to return False
-        # and main.py will restart idle_mode to return to wakeword listening
-        self._timeout_occurred.set()
-        logger.info("Timeout detected - no intent detected, will restart idle mode")
-
-    def _stop_silence_monitoring(self):
-        """Stop silence monitoring"""
-        with self._silence_lock:
-            if self._silence_timer:
-                self._silence_timer.cancel()
-                self._silence_timer = None
-                logger.info("Stopped silence monitoring")
-
-    def _stop_stt_session(self):
-        """Stop the current STT session and microphone to prevent TTS pickup"""
-        try:
-            # Stop the mic immediately to prevent picking up TTS
-            with self._lock:
-                if self._current_mic and self._current_mic.is_running():
-                    logger.debug("Stopping mic in STT session to prevent TTS pickup")
-                    self._current_mic.stop()
-                    self._current_mic = None
-        except Exception as e:
-            logger.warning(f"Failed to stop STT session: {e}")
+        logger.info("Wake word flag set - orchestrator will start wake_mode immediately")

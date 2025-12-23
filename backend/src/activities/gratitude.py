@@ -176,7 +176,7 @@ class GratitudeActivity:
                 
                 # Check for termination phrase first - if found, stop and exclude it
                 if self.termination_detector.is_termination_phrase(text, active=self._active):
-                    logger.info(f"✅ Termination phrase detected in final: '{text}' - stopping recording")
+                    logger.info(f"Termination phrase detected in final: '{text}' - stopping recording")
                     self._termination_detected = True
                     mic.stop()
                     return  # Stop recording, use whatever content we already have
@@ -358,7 +358,7 @@ class GratitudeActivity:
 
     def cleanup(self):
         """Complete cleanup of all resources including native libraries, cached resources, and dependencies"""
-        logger.info("🧹 Cleaning up Gratitude activity resources...")
+        logger.info("Cleaning up Gratitude activity resources...")
         
         # Stop if still active
         if self._active:
@@ -367,7 +367,7 @@ class GratitudeActivity:
         # Cleanup audio manager (handles PyAudio streams)
         if self.audio_manager:
             try:
-                logger.info("🧹 Cleaning up audio manager...")
+                logger.info("Cleaning up audio manager...")
                 self.audio_manager.cleanup()
                 self.audio_manager = None
                 logger.info("✓ Audio manager cleaned up")
@@ -377,7 +377,7 @@ class GratitudeActivity:
         # Cleanup STT service (Google Cloud Speech client)
         if self.stt_service:
             try:
-                logger.info("🧹 Cleaning up STT service...")
+                logger.info("Cleaning up STT service...")
                 # Close Google Cloud Speech client
                 if hasattr(self.stt_service, 'client') and self.stt_service.client:
                     try:
@@ -394,7 +394,7 @@ class GratitudeActivity:
         # Cleanup TTS service (Google Cloud TTS client)
         if self.tts:
             try:
-                logger.info("🧹 Cleaning up TTS service...")
+                logger.info("Cleaning up TTS service...")
                 # Close Google Cloud TTS client
                 if hasattr(self.tts, 'client') and self.tts.client:
                     try:
@@ -410,7 +410,7 @@ class GratitudeActivity:
         # Cleanup termination detector
         if self.termination_detector:
             try:
-                logger.info("🧹 Cleaning up termination detector...")
+                logger.info("Cleaning up termination detector...")
                 self.termination_detector = None
                 logger.debug("Termination detector cleaned up")
             except Exception as e:
@@ -420,7 +420,7 @@ class GratitudeActivity:
         try:
             from src.utils.config_resolver import _resolver
             if hasattr(_resolver, 'clear_cache'):
-                logger.info("🧹 Clearing config caches...")
+                logger.info("Clearing config caches...")
                 _resolver.clear_cache()
                 logger.debug("Config caches cleared")
         except Exception as e:
@@ -428,7 +428,7 @@ class GratitudeActivity:
         
         # Cleanup temporary files (if any were created)
         try:
-            logger.info("🧹 Checking for temporary files...")
+            logger.info("Checking for temporary files...")
             # Check for temporary Google Cloud credentials file
             # Note: This is a best-effort cleanup - the file may have been cleaned up already
             temp_dir = tempfile.gettempdir()
@@ -440,7 +440,7 @@ class GratitudeActivity:
         
         # Force garbage collection to help release native library resources
         try:
-            logger.info("🧹 Running garbage collection...")
+            logger.info("Running garbage collection...")
             collected = gc.collect()
             logger.debug(f"Garbage collection collected {collected} objects")
         except Exception as e:
@@ -449,7 +449,7 @@ class GratitudeActivity:
         # Reset initialization state
         self._initialized = False
         
-        logger.info("✅ Gratitude activity cleanup completed")
+        logger.info("Gratitude activity cleanup completed")
 
     def is_active(self) -> bool:
         return bool(self._active)

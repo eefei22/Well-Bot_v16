@@ -203,7 +203,7 @@ if __name__ == "__main__":
         def on_transcript(text: str, is_final: bool):
             """Callback function for transcript results."""
             if is_final:
-                print(f"🎯 Final: {text}")
+                print(f"Final: {text}")
             else:
                 print(f"⏳ Interim: {text}", end="\r")
         
