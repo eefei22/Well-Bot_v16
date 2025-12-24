@@ -44,7 +44,9 @@ class IdleModeActivity:
         backend_dir: Path,
         user_id: Optional[str] = None,
         on_wake_detected: Optional[Callable[[], None]] = None,
-        on_intervention_triggered: Optional[Callable[[], None]] = None
+        on_intervention_triggered: Optional[Callable[[], None]] = None,
+        ui_interface=None,
+        servo_controller=None,
     ):
         """
         Initialize the Idle Mode Activity
@@ -54,11 +56,15 @@ class IdleModeActivity:
             user_id: User ID (optional, will be resolved if not provided)
             on_wake_detected: Callback function called when wake word is detected
             on_intervention_triggered: Callback function called when intervention is triggered
+            ui_interface: UI interface for visual feedback (optional)
+            servo_controller: Servo controller for gesture feedback (optional)
         """
         self.backend_dir = backend_dir
         self.user_id = user_id if user_id is not None else get_current_user_id()
         self.on_wake_detected = on_wake_detected
         self.on_intervention_triggered = on_intervention_triggered
+        self.ui_interface = ui_interface
+        self.servo_controller = servo_controller
         
         # Components (initialized in initialize())
         self.wakeword_detector: Optional[Union[WakeWordDetector, OpenWakeWordDetector]] = None
@@ -102,7 +108,7 @@ class IdleModeActivity:
             
             # Initialize wakeword detector (with automatic fallback to OpenWakeWord)
             try:
-                wakeword_model_path = self.backend_dir / "config" / "WakeWord" / "WellBot_WakeWordModel.ppn"
+                wakeword_model_path = self.backend_dir / "config" / "WakeWord" / "WellBot_WakeWordModel_ARM2.ppn"
                 self.wakeword_detector = create_wake_word_detector(
                     PORCUPINE_ACCESS_KEY, 
                     str(wakeword_model_path),
@@ -449,7 +455,6 @@ class IdleModeActivity:
         
         # Atomic debounce check to prevent race conditions
         with self._lock:
-            # Debounce: ignore wake words detected too quickly after the last one
             if current_time - self._last_wake_time < self._wake_debounce_seconds:
                 logger.debug(f"Ignoring wake word detected too soon (debounce: {self._wake_debounce_seconds}s)")
                 return
@@ -458,6 +463,18 @@ class IdleModeActivity:
             self._last_wake_time = current_time
         
         logger.info("Wake word detected")
+
+        # Minimal wake reaction before handoff to wake mode
+        if self.ui_interface:
+            try:
+                self.ui_interface.update_mic_status("listening")
+            except Exception:
+                pass
+        if self.servo_controller:
+            try:
+                self.servo_controller.trigger_wave()
+            except Exception as e:
+                logger.warning(f"Failed to trigger servo gesture: {e}")
         
         # Stop emotion monitoring immediately (non-blocking - don't wait for it to finish)
         if self.emotion_monitoring_activity:

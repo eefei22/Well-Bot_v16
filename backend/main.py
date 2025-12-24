@@ -38,10 +38,13 @@ from src.utils.config_resolver import get_global_config_for_user, resolve_langua
 from src.supabase.auth import get_current_user_id, resolve_user_from_device_id
 from src.supabase.database import log_activity_start, log_activity_end, save_user_context_to_local, update_mood_rating
 from src.components.activity_logger import prompt_mood_rating_before_activity, prompt_mood_rating_after_activity
+from src.components.servo_controller import ServoController
 
 # GUI imports
 from src.components.ui_interface import UIInterface, NoOpUIInterface
 from src.gui import start_gui
+# Preloader helper (loads PIL frames into memory before GUI thread starts)
+from src.gui.face_animation_window import preload_gif_data
 from src.utils.config_loader import DEVICE_ID, load_language_config
 from src.components.tts import GoogleTTSClient
 from google.cloud import texttospeech
@@ -76,6 +79,13 @@ class WellBotOrchestrator:
         self.backend_dir = backend_dir
         self.wakeword_model_path  = self.backend_dir / "config" / "WakeWord" / "WellBot_WakeWordModel.ppn"
         
+        try:
+            self.servo_controller = ServoController()
+            logger.info("✓ Servo controller loaded (On-Demand mode)")
+        except Exception as e:
+            logger.warning(f"Could not load servo controller: {e}")
+            self.servo_controller = None
+
         # Resolve user from device_id at startup
         if not DEVICE_ID:
             # Load English config for error message (default)
@@ -86,6 +96,47 @@ class WellBotOrchestrator:
                 
                 # Speak error message via TTS
                 logger.error("DEVICE_ID environment variable is not set")
+                # Initialize a minimal UI so the face GUI can load frames and display
+                # before we play the startup TTS. This improves UX so the user sees
+                # the face immediately while the startup message is spoken.
+                try:
+                    self.ui_interface = UIInterface()
+
+                    # Build GIF paths and preload into memory to avoid GUI lag
+                    backend_assets = self.backend_dir / "assets" / "GUI"
+                    gif_files = {
+                        "idle": str((backend_assets / "gui_idleing.gif") if (backend_assets / "gui_idleing.gif").exists() else (backend_assets / "gui_idleing.gif")),
+                        "listening": str((backend_assets / "gui_listening.gif") if (backend_assets / "gui_listening.gif").exists() else (backend_assets / "gui_listening.gif")),
+                        "speaking": str((backend_assets / "gui_speaking.gif") if (backend_assets / "gui_speaking.gif").exists() else (backend_assets / "gui_speaking.gif")),
+                        "loading": str(backend_assets / "gui_loading.gif"),
+                        "journaling": str(backend_assets / "gui_journaling.gif"),
+                        "meditating": str(backend_assets / "gui_meditating.gif"),
+                        "gratitude": str(backend_assets / "gui_gratitude.gif"),
+                    }
+
+                    try:
+                        preloaded = preload_gif_data(gif_files)
+                    except Exception as e:
+                        logger.warning(f"Preloading GIFs failed: {e}")
+                        preloaded = {}
+
+                    # Start GUI and pass preloaded frames (if any)
+                    self._gui_window = start_gui(self.ui_interface, preloaded if preloaded else None, update_interval_ms=100, wait_for_ready_seconds=2.0)
+                    if self._gui_window:
+                        # Wait until the window reports first frame rendered (max 5s)
+                        try:
+                            if getattr(self._gui_window, 'wait_until_ready', None):
+                                if self._gui_window.wait_until_ready(timeout=5.0):
+                                    logger.info("✓ GUI frames loaded and first frame displayed")
+                                else:
+                                    logger.warning("GUI did not signal readiness within timeout; proceeding to speak")
+                        except Exception:
+                            logger.debug("GUI readiness check failed - continuing")
+                    else:
+                        logger.warning("GUI window not ready yet; continuing to speak startup message")
+                except Exception as ui_err:
+                    logger.warning(f"Failed to start GUI before startup TTS: {ui_err}")
+
                 self._speak_startup_message(error_message, language='en')
                 logger.error(error_message)
             except Exception as tts_error:
@@ -288,17 +339,30 @@ class WellBotOrchestrator:
             logger.info(f"Resolved language '{user_lang}' for user {self.user_id}")
             
             self.global_config = get_global_config_for_user(self.user_id)
-            logger.info(f"Loaded global config for user")
+            logger.info("Loaded global config for user")
+            
+            # 1) Initialize UI interface ONCE so everyone shares the same instance
+            self._initialize_ui()
+            logger.info(
+                f"Orchestrator UI interface: {type(self.ui_interface).__name__} "
+                f"(id={id(self.ui_interface)})"
+            )
 
+            # 2) Initialize Idle Mode with BOTH ui_interface AND servo_controller
             logger.info("Initializing Idle Mode activity (wakeword detection)…")
+            
             self.idle_mode_activity = IdleModeActivity(
                 backend_dir=self.backend_dir,
                 user_id=self.user_id,
                 on_wake_detected=self._on_wake_detected,
-                on_intervention_triggered=self._on_intervention_triggered
+                on_intervention_triggered=self._on_intervention_triggered,
+                ui_interface=self.ui_interface,
+                servo_controller=self.servo_controller 
             )
+            
             if not self.idle_mode_activity.initialize():
                 raise RuntimeError("Failed to initialize Idle Mode activity")
+            
             logger.info("✓ Idle Mode activity initialized")
 
             # Initialize Wake Mode activity
@@ -311,28 +375,33 @@ class WellBotOrchestrator:
             if not self.wake_mode_activity.initialize():
                 raise RuntimeError("Failed to initialize Wake Mode activity")
             logger.info("✓ Wake Mode activity initialized")
-
-            # Initialize UI interface
-            self._initialize_ui()
-            
-            # Activities are lazy-loaded - only initialize when needed
-            # This reduces memory footprint when idle_mode is running
-            
             return True
+        
         except Exception as e:
             logger.error(f"Component initialization failed: {e}", exc_info=True)
             return False
 
+
     def _initialize_ui(self):
         """Initialize UI interface based on configuration."""
         try:
-            gui_config = self.global_config.get("gui", {})
+            config = self.global_config or {}
+            gui_config = config.get("gui", {})
             gui_enabled = gui_config.get("enabled", False)
             
             if gui_enabled:
-                logger.info("Initializing UI interface for GUI...")
-                self.ui_interface = UIInterface()
-                logger.info("✓ UI interface initialized")
+                # Reuse existing UIInterface if already created
+                if isinstance(self.ui_interface, UIInterface):
+                    logger.info(
+                        f"UI interface already initialized, reusing existing instance "
+                        f"(id={id(self.ui_interface)})"
+                    )
+                else:
+                    logger.info("Initializing UI interface for GUI...")
+                    self.ui_interface = UIInterface()
+                    logger.info(
+                        f"✓ UI interface initialized (id={id(self.ui_interface)})"
+                    )
             else:
                 logger.info("GUI disabled - using NoOp UI interface")
                 self.ui_interface = NoOpUIInterface()
@@ -341,20 +410,68 @@ class WellBotOrchestrator:
             logger.warning("Falling back to NoOp UI interface")
             self.ui_interface = NoOpUIInterface()
 
+          
+
     def _start_gui_if_enabled(self):
-        """Start GUI window if enabled in configuration."""
+        """
+        Start GUI window if enabled in configuration, preload assets, 
+        and wait for the window to be ready.
+        """
         try:
             gui_config = self.global_config.get("gui", {})
             gui_enabled = gui_config.get("enabled", False)
             update_interval_ms = gui_config.get("update_interval_ms", 100)
             
             if gui_enabled and self.ui_interface and not isinstance(self.ui_interface, NoOpUIInterface):
-                logger.info("Starting GUI window...")
-                self._gui_window = start_gui(self.ui_interface, update_interval_ms)
+                logger.info("🖥️  Initializing GUI...")
+
+                # 1. Define GIF paths
+                backend_assets = self.backend_dir / "assets" / "GUI"
+                gif_files = {
+                    "idle": str((backend_assets / "gui_idleing.gif") if (backend_assets / "gui_idleing.gif").exists() else (backend_assets / "gui_idleing.gif")),
+                    "listening": str((backend_assets / "gui_listening.gif") if (backend_assets / "gui_listening.gif").exists() else (backend_assets / "gui_listening.gif")),
+                    "speaking": str((backend_assets / "gui_speaking.gif") if (backend_assets / "gui_speaking.gif").exists() else (backend_assets / "gui_speaking.gif")),
+                    "loading": str(backend_assets / "gui_loading.gif"),
+                    "journaling": str(backend_assets / "gui_journaling.gif"),
+                    "meditating": str(backend_assets / "gui_meditating.gif"),
+                    "gratitude": str(backend_assets / "gui_gratitude.gif"),
+                }
+
+                # 2. Preload assets (prevents white screen/lag)
+                preloaded = {}
+                try:
+                    logger.info("⏳ Preloading GUI assets...")
+                    preloaded = preload_gif_data(gif_files)
+                except Exception as e:
+                    logger.warning(f"Preloading GIFs failed: {e}")
+
+                # 3. Start the GUI Window
+                logger.info("🚀 Launching Face Animation Window...")
+                self._gui_window = start_gui(
+                    self.ui_interface, 
+                    preloaded if preloaded else None, 
+                    update_interval_ms=update_interval_ms,
+                    wait_for_ready_seconds=5.0 
+                )
+
+                # 4. Critical: Wait for the window to actually render the first frame
                 if self._gui_window:
-                    logger.info("✓ GUI window started")
+                    logger.info("⏳ Waiting for GUI to render first frame...")
+                    try:
+                        # Check if the window has the wait method (it should based on your previous code)
+                        if hasattr(self._gui_window, 'wait_until_ready'):
+                            is_ready = self._gui_window.wait_until_ready(timeout=15.0)
+                            if is_ready:
+                                logger.info("✓ GUI is ready and visible")
+                            else:
+                                logger.warning("GUI started but timed out waiting for readiness")
+                        else:
+                            # Fallback if method missing
+                            time.sleep(1.0) 
+                    except Exception as e:
+                        logger.warning(f"Error waiting for GUI readiness: {e}")
                 else:
-                    logger.warning("GUI window failed to start, continuing without GUI")
+                    logger.warning("GUI window failed to start object, continuing without GUI")
             else:
                 logger.debug("GUI not enabled or NoOp interface in use")
         except Exception as e:
@@ -840,7 +957,7 @@ class WellBotOrchestrator:
         if self.journal_activity is None:
             from src.activities.journal import JournalActivity
             logger.info("Lazy loading Journal activity...")
-            self.journal_activity = JournalActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+            self.journal_activity = JournalActivity(backend_dir=self.backend_dir, user_id=self.user_id, ui_interface=self.ui_interface)
             if not self.journal_activity.initialize():
                 logger.error("Failed to initialize Journal activity")
                 # Notify user that activity is unavailable
@@ -956,7 +1073,7 @@ class WellBotOrchestrator:
         if self.spiritual_quote_activity is None:
             from src.activities.spiritual_quote import SpiritualQuoteActivity
             logger.info("Lazy loading Spiritual Quote activity...")
-            self.spiritual_quote_activity = SpiritualQuoteActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+            self.spiritual_quote_activity = SpiritualQuoteActivity(backend_dir=self.backend_dir, user_id=self.user_id, ui_interface=self.ui_interface)
             if not self.spiritual_quote_activity.initialize():
                 logger.error("Failed to initialize Spiritual Quote activity")
                 # Notify user that activity is unavailable
@@ -1023,7 +1140,7 @@ class WellBotOrchestrator:
                 
                 # Re-initialize for next run
                 try:
-                    self.spiritual_quote_activity = SpiritualQuoteActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+                    self.spiritual_quote_activity = SpiritualQuoteActivity(backend_dir=self.backend_dir, user_id=self.user_id, ui_interface=self.ui_interface)
                     self.spiritual_quote_activity.initialize()
                 except Exception:
                     pass
@@ -1058,7 +1175,7 @@ class WellBotOrchestrator:
         if self.gratitude_activity is None:
             from src.activities.gratitude import GratitudeActivity
             logger.info("Lazy loading Gratitude activity...")
-            self.gratitude_activity = GratitudeActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+            self.gratitude_activity = GratitudeActivity(backend_dir=self.backend_dir, user_id=self.user_id, ui_interface=self.ui_interface)
             if not self.gratitude_activity.initialize():
                 logger.error("Failed to initialize Gratitude activity")
                 # Notify user that activity is unavailable
@@ -1125,7 +1242,7 @@ class WellBotOrchestrator:
                 
                 # Re-initialize for next run
                 try:
-                    self.gratitude_activity = GratitudeActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+                    self.gratitude_activity = GratitudeActivity(backend_dir=self.backend_dir, user_id=self.user_id, ui_interface=self.ui_interface)
                     self.gratitude_activity.initialize()
                 except Exception:
                     pass
@@ -1160,7 +1277,7 @@ class WellBotOrchestrator:
         if self.meditation_activity is None:
             from src.activities.meditation import MeditationActivity
             logger.info("Lazy loading Meditation activity...")
-            self.meditation_activity = MeditationActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+            self.meditation_activity = MeditationActivity(backend_dir=self.backend_dir, user_id=self.user_id, ui_interface=self.ui_interface)
             if not self.meditation_activity.initialize():
                 logger.error("Failed to initialize Meditation activity")
                 # Notify user that activity is unavailable
@@ -1228,7 +1345,7 @@ class WellBotOrchestrator:
                 
                 # Re-initialize for next run
                 try:
-                    self.meditation_activity = MeditationActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+                    self.meditation_activity = MeditationActivity(backend_dir=self.backend_dir, user_id=self.user_id, ui_interface=self.ui_interface)
                     self.meditation_activity.initialize()
                 except Exception:
                     pass
@@ -1263,7 +1380,7 @@ class WellBotOrchestrator:
         if self.activity_suggestion_activity is None:
             from src.activities.activity_suggestion import ActivitySuggestionActivity
             logger.info("Lazy loading Activity Suggestion activity...")
-            self.activity_suggestion_activity = ActivitySuggestionActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+            self.activity_suggestion_activity = ActivitySuggestionActivity(backend_dir=self.backend_dir, user_id=self.user_id, ui_interface=self.ui_interface)
             if not self.activity_suggestion_activity.initialize():
                 logger.error("Failed to initialize Activity Suggestion activity")
                 return
@@ -1754,7 +1871,9 @@ class WellBotOrchestrator:
                             backend_dir=self.backend_dir,
                             user_id=self.user_id,
                             on_wake_detected=self._on_wake_detected,
-                            on_intervention_triggered=self._on_intervention_triggered
+                            on_intervention_triggered=self._on_intervention_triggered,
+                            ui_interface=self.ui_interface,
+                            servo_controller=self.servo_controller
                         )
                         if not self.idle_mode_activity.initialize():
                             raise RuntimeError("Failed to recreate idle mode activity")
@@ -1812,6 +1931,9 @@ class WellBotOrchestrator:
         if not self._initialize_components():
             logger.error("Component initialization failed")
             return False
+        
+        # Start GUI if enabled (and wait for it to be ready)
+        self._start_gui_if_enabled()
 
         # Speak startup success message before starting idle mode
         try:
@@ -1847,10 +1969,7 @@ class WellBotOrchestrator:
             
             with self._lock:
                 self.state = SystemState.LISTENING
-            
-            # Start GUI if enabled
-            self._start_gui_if_enabled()
-            
+
             logger.info("Idle mode started – system ready")
             logger.info("Say the wake word to activate the system")
             return True
@@ -1864,6 +1983,11 @@ class WellBotOrchestrator:
 
         with self._lock:
             self.state = SystemState.SHUTTING_DOWN
+
+        # Cleanup servo
+        if self.servo_controller:
+            self.servo_controller.cleanup()
+            logger.info("✅ Servo controller cleaned up")
 
         # Stop activity if active
         if self.current_activity == "smalltalk" and self.smalltalk_activity:

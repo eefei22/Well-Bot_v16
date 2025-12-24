@@ -1,5 +1,12 @@
 {
-  "latest_emotion_entry": null,
+  "latest_emotion_entry": {
+    "id": 11742,
+    "user_id": "8517c97f-66ef-4955-86ed-531013d33d3e",
+    "timestamp": "2025-12-07T10:06:16.479518",
+    "emotion_label": "Angry",
+    "confidence_score": 0.231,
+    "emotional_score": 23
+  },
   "latest_decision": {
     "trigger_intervention": true,
     "confidence_score": 0.731,
