@@ -177,11 +177,8 @@ class GratitudeActivity:
             if is_final:
                 logger.info(f"Final transcript: {text}")
                 if self.termination_detector.is_termination_phrase(text, active=self._active):
-<<<<<<< HEAD
                     logger.info(f"Termination phrase detected in final: '{text}' - stopping recording")
-=======
-                    logger.info(f"✅ Termination detected: '{text}'")
->>>>>>> friend/yj_gui
+
                     self._termination_detected = True
                     mic.stop()
                     return
