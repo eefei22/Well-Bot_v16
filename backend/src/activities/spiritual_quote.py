@@ -39,9 +39,10 @@ logger = logging.getLogger(__name__)
 
 
 class SpiritualQuoteActivity:
-    def __init__(self, backend_dir: Path, user_id: Optional[str] = None):
+    def __init__(self, backend_dir: Path, user_id: Optional[str] = None, ui_interface = None):
         self.backend_dir = backend_dir
         self.user_id = user_id or get_current_user_id()
+        self.ui_interface = ui_interface
 
         # Components
         self.stt_service: Optional[GoogleSTTService] = None
@@ -76,7 +77,7 @@ class SpiritualQuoteActivity:
             audio_config = {
                 "backend_dir": str(self.backend_dir),
             }
-            self.audio_manager = ConversationAudioManager(self.stt_service, mic_factory, audio_config)
+            self.audio_manager = ConversationAudioManager(self.stt_service, mic_factory, audio_config, ui_interface=self.ui_interface)
 
             # TTS client
             # Import texttospeech locally for AudioEncoding enum
@@ -118,6 +119,7 @@ class SpiritualQuoteActivity:
             self._active = True
             # 1) Fetch religion and quote
             religion = get_user_religion(self.user_id)
+            print(f"DEBUG: User Religion is: {religion}")
             quote = fetch_next_quote(self.user_id, religion)
             if not quote:
                 logger.info("No quote available; informing user")
@@ -143,7 +145,14 @@ class SpiritualQuoteActivity:
             seed = seed_tmpl.replace("{quote}", quote["text"])
             custom_start = quote_cfg.get("opener", "What are your thoughts on that quote?")
 
-            smalltalk = SmallTalkActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+            # Clear any explicit face state so GUI will resume mic/speaker-driven states
+            try:
+                if self.ui_interface:
+                    self.ui_interface.update_face_state(None)
+            except Exception:
+                logger.debug("Failed to clear UIInterface face_state before SmallTalk transition")
+
+            smalltalk = SmallTalkActivity(backend_dir=self.backend_dir, user_id=self.user_id, ui_interface=self.ui_interface)
             if not smalltalk.initialize():
                 logger.error("Failed to initialize SmallTalk for handoff")
                 return False

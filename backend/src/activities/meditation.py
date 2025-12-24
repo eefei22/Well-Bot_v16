@@ -39,9 +39,10 @@ logger = logging.getLogger(__name__)
 
 
 class MeditationActivity:
-    def __init__(self, backend_dir: Path, user_id: Optional[str] = None):
+    def __init__(self, backend_dir: Path, user_id: Optional[str] = None, ui_interface = None):
         self.backend_dir = backend_dir
         self.user_id = user_id or get_current_user_id()
+        self.ui_interface = ui_interface
 
         # Components
         self.audio_manager: Optional[ConversationAudioManager] = None
@@ -75,7 +76,7 @@ class MeditationActivity:
             self.meditation_config = self.language_config.get("meditation", {})
 
             # Initialize Rhino intent recognition for termination detection
-            context_path = self.backend_dir / "config" / "Intent" / "Well-Bot-Commands_en_windows_v3_0_0.rhn"
+            context_path = self.backend_dir / "config" / "Intent" / "Well-Bot-Commands_en_raspberry-pi_v3_0_0.rhn"
             try:
                 if not RHINO_ACCESS_KEY:
                     logger.error("RHINO_ACCESS_KEY not configured, cannot initialize Rhino")
@@ -113,7 +114,7 @@ class MeditationActivity:
             audio_config = {
                 "backend_dir": str(self.backend_dir),
             }
-            self.audio_manager = ConversationAudioManager(stt_service, mic_factory, audio_config)
+            self.audio_manager = ConversationAudioManager(stt_service, mic_factory, audio_config, ui_interface=self.ui_interface)
 
             # TTS client for speaking prompts
             from google.cloud import texttospeech
@@ -310,6 +311,12 @@ class MeditationActivity:
 
         try:
             self._active = True
+            # Inform GUI to switch to meditating face (if UI available)
+            try:
+                if self.ui_interface:
+                    self.ui_interface.update_face_state("meditating")
+            except Exception:
+                logger.debug("Failed to update UIInterface face_state to 'meditating'")
             
             # Get meditation file
             meditation_file = self._get_meditation_file_path()
@@ -405,7 +412,14 @@ class MeditationActivity:
             
             # Transition to SmallTalk with contextual prompts
             logger.info(f"Meditation cleanup complete. Transitioning to SmallTalk (completed={was_completed})...")
-            
+
+            # Clear meditating face so GUI can immediately derive next state
+            try:
+                if self.ui_interface:
+                    self.ui_interface.update_face_state(None)
+            except Exception:
+                logger.debug("Failed to clear UIInterface face_state before SmallTalk transition")
+
             if was_completed:
                 seed = self.meditation_config.get(
                     "seed_system_prompt_completed",
@@ -425,7 +439,8 @@ class MeditationActivity:
                     "I noticed you stopped the meditation. How are you feeling?"
                 )
 
-            smalltalk = SmallTalkActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+            # Pass through ui_interface so SmallTalk controls GUI mic/speaker status
+            smalltalk = SmallTalkActivity(backend_dir=self.backend_dir, user_id=self.user_id, ui_interface=self.ui_interface)
             if not smalltalk.initialize():
                 logger.error("Failed to initialize SmallTalk for handoff")
                 return False
@@ -449,6 +464,13 @@ class MeditationActivity:
             # Note: Completion tracking removed in new schema
             # Duration can be tracked via log_intervention_duration() if needed
             
+            # Clear explicit face state so GUI can derive next state
+            try:
+                if self.ui_interface:
+                    self.ui_interface.update_face_state(None)
+            except Exception:
+                logger.debug("Failed to clear UIInterface face_state during meditation cleanup")
+
             self._active = False
 
     def cleanup(self):
@@ -547,6 +569,26 @@ class MeditationActivity:
         self._initialized = False
         
         logger.info("Meditation activity cleanup completed")
+
+    def stop(self):
+        """Request a graceful stop/termination of the meditation activity.
+
+        This sets the internal termination flag, stops audio playback (if
+        the audio manager is available), and marks the activity as not active.
+        External callers (or the orchestrator) can use this to interrupt the
+        meditation programmatically.
+        """
+        logger.info("Stop requested for Meditation activity")
+        try:
+            self._termination_detected.set()
+            self._active = False
+            if self.audio_manager:
+                try:
+                    self.audio_manager.stop()
+                except Exception as e:
+                    logger.warning(f"Error stopping audio manager during stop(): {e}")
+        except Exception as e:
+            logger.error(f"Error while stopping meditation activity: {e}")
 
     def is_active(self) -> bool:
         return bool(self._active)
