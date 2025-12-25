@@ -1,6 +1,9 @@
 # backend/src/components/servo_controller.py
 
-import RPi.GPIO as GPIO
+try:
+    import RPi.GPIO as GPIO
+except ModuleNotFoundError:
+    GPIO = None
 import time
 import threading
 import logging
@@ -33,6 +36,10 @@ class ServoController:
         The actual wave logic running in a thread.
         It handles its own GPIO setup and teardown to ensure silence when idle.
         """
+        if GPIO is None:
+            logger.info("RPi.GPIO not available; skipping servo wave")
+            return
+
         self._is_moving = True
         pwm = None
         
@@ -90,6 +97,10 @@ class ServoController:
         Public method to start the wave. 
         Returns immediately (non-blocking).
         """
+        if GPIO is None:
+            logger.info("RPi.GPIO not available; skipping servo wave")
+            return
+
         if self._is_moving:
             logger.info("Servo already moving, skipping trigger")
             return
@@ -100,6 +111,9 @@ class ServoController:
 
     def cleanup(self):
         """Final cleanup on app exit."""
+        if GPIO is None:
+            return
+
         try:
             GPIO.cleanup()
         except:
