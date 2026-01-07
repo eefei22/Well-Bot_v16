@@ -37,7 +37,6 @@ from src.activities.wake_mode import WakeModeActivity
 from src.utils.config_resolver import get_global_config_for_user, resolve_language, get_language_config
 from src.supabase.auth import get_current_user_id, resolve_user_from_device_id
 from src.supabase.database import log_activity_start, log_activity_end, save_user_context_to_local, update_mood_rating
-from src.components.activity_logger import prompt_mood_rating_before_activity, prompt_mood_rating_after_activity
 from src.components.servo_controller import ServoController
 
 # GUI imports
@@ -478,7 +477,7 @@ class WellBotOrchestrator:
             logger.warning(f"Failed to start GUI: {e}")
             logger.warning("Continuing without GUI")
 
-    def _handle_intent_detected(self, transcript: str, intent_result: Dict[str, Any]):
+    def _handle_intent_detected(self, transcript: str, intent_result: Dict[str, Any], mood_rating: Optional[int]):
         """
         Callback when intent is detected by idle_mode activity.
         
@@ -510,161 +509,15 @@ class WellBotOrchestrator:
         confidence = intent_result.get('confidence', 0.0)
         logger.info(f"Intent: {intent} (confidence: {confidence:.3f})")
 
+        # Store mood rating for the next activity log write
+        self._pre_activity_mood_rating = mood_rating
+
         # Transition to activity state
         with self._lock:
             self.state = SystemState.ACTIVITY_ACTIVE
         
         # Release lock before calling _route_to_activity to avoid deadlock
         self._route_to_activity(intent, transcript)
-
-    def _prompt_pre_activity_mood_rating(self, intent: str) -> Optional[int]:
-        """
-        Prompt user for pre-activity mood rating.
-        
-        Args:
-            intent: Activity intent name
-            
-        Returns:
-            Mood rating (1-10) or None if skipped/timed out/error
-        """
-        try:
-            # Get activity instance and initialize if needed
-            activity = None
-            if intent == "smalltalk":
-                if self.smalltalk_activity is None:
-                    from src.activities.smalltalk import SmallTalkActivity
-                    self.smalltalk_activity = SmallTalkActivity(
-                        backend_dir=self.backend_dir,
-                        user_id=self.user_id,
-                        ui_interface=self.ui_interface
-                    )
-                    if not self.smalltalk_activity.initialize():
-                        logger.error("Failed to initialize SmallTalk activity for mood rating")
-                        return None
-                activity = self.smalltalk_activity
-            elif intent == "journaling":
-                if self.journal_activity is None:
-                    from src.activities.journal import JournalActivity
-                    self.journal_activity = JournalActivity(
-                        backend_dir=self.backend_dir,
-                        user_id=self.user_id
-                    )
-                    if not self.journal_activity.initialize():
-                        logger.error("Failed to initialize Journal activity for mood rating")
-                        return None
-                activity = self.journal_activity
-            elif intent == "meditation":
-                if self.meditation_activity is None:
-                    from src.activities.meditation import MeditationActivity
-                    self.meditation_activity = MeditationActivity(
-                        backend_dir=self.backend_dir,
-                        user_id=self.user_id
-                    )
-                    if not self.meditation_activity.initialize():
-                        logger.error("Failed to initialize Meditation activity for mood rating")
-                        return None
-                activity = self.meditation_activity
-            elif intent == "quote":
-                if self.spiritual_quote_activity is None:
-                    from src.activities.spiritual_quote import SpiritualQuoteActivity
-                    self.spiritual_quote_activity = SpiritualQuoteActivity(
-                        backend_dir=self.backend_dir,
-                        user_id=self.user_id
-                    )
-                    if not self.spiritual_quote_activity.initialize():
-                        logger.error("Failed to initialize SpiritualQuote activity for mood rating")
-                        return None
-                activity = self.spiritual_quote_activity
-            elif intent == "gratitude":
-                if self.gratitude_activity is None:
-                    from src.activities.gratitude import GratitudeActivity
-                    self.gratitude_activity = GratitudeActivity(
-                        backend_dir=self.backend_dir,
-                        user_id=self.user_id
-                    )
-                    if not self.gratitude_activity.initialize():
-                        logger.error("Failed to initialize Gratitude activity for mood rating")
-                        return None
-                activity = self.gratitude_activity
-            
-            if not activity:
-                logger.warning(f"No activity found for intent: {intent}")
-                return None
-            
-            # Get configs
-            language_config = get_language_config(self.user_id)
-            global_config = get_global_config_for_user(self.user_id)
-            timeout_seconds = global_config.get("mood_rating", {}).get("timeout_seconds", 10.0)
-            
-            # Get TTS, STT, and audio_manager from activity
-            tts_service = getattr(activity, 'tts_service', None)
-            stt_service = getattr(activity, 'stt_service', None)
-            audio_manager = getattr(activity, 'audio_manager', None)
-            
-            if not (tts_service and stt_service and audio_manager):
-                logger.warning(f"Activity {intent} missing required services for mood rating")
-                return None
-            
-            # Prompt for mood rating
-            return prompt_mood_rating_before_activity(
-                tts_service=tts_service,
-                stt_service=stt_service,
-                audio_manager=audio_manager,
-                language_config=language_config,
-                global_config=global_config,
-                timeout_seconds=timeout_seconds
-            )
-        except Exception as e:
-            logger.error(f"Error in _prompt_pre_activity_mood_rating: {e}", exc_info=True)
-            return None
-
-    def _prompt_post_activity_mood_rating(self, activity) -> Optional[int]:
-        """
-        Prompt user for post-activity mood rating.
-        
-        Args:
-            activity: Activity instance
-            
-        Returns:
-            Mood rating (1-10) or None if skipped/timed out/error
-        """
-        try:
-            if not activity:
-                return None
-            
-            # Get configs
-            language_config = get_language_config(self.user_id)
-            global_config = get_global_config_for_user(self.user_id)
-            
-            # Check if mood rating is enabled
-            mood_rating_enabled = global_config.get("mood_rating", {}).get("enabled", True)
-            if not mood_rating_enabled:
-                logger.debug("Mood rating is disabled, skipping post-activity prompt")
-                return None
-            
-            timeout_seconds = global_config.get("mood_rating", {}).get("timeout_seconds", 10.0)
-            
-            # Get TTS, STT, and audio_manager from activity
-            tts_service = getattr(activity, 'tts_service', None)
-            stt_service = getattr(activity, 'stt_service', None)
-            audio_manager = getattr(activity, 'audio_manager', None)
-            
-            if not (tts_service and stt_service and audio_manager):
-                logger.warning("Activity missing required services for mood rating")
-                return None
-            
-            # Prompt for mood rating
-            return prompt_mood_rating_after_activity(
-                tts_service=tts_service,
-                stt_service=stt_service,
-                audio_manager=audio_manager,
-                language_config=language_config,
-                global_config=global_config,
-                timeout_seconds=timeout_seconds
-            )
-        except Exception as e:
-            logger.error(f"Error in _prompt_post_activity_mood_rating: {e}", exc_info=True)
-            return None
 
     def _route_to_activity(self, intent: str, transcript: str, allow_nested_routing: bool = False):
         """Route the user to proper activity based on intent.
@@ -726,23 +579,18 @@ class WellBotOrchestrator:
                 emotional_log_id=None  # Command-triggered, not emotion-triggered
             )
             self._current_activity_log_id = public_id  # Keep variable name for backward compatibility
-            
-            # Prompt for pre-activity mood rating (if enabled)
+
+            # Update database with pre-activity mood rating (if available and enabled)
             try:
                 global_config = get_global_config_for_user(self.user_id)
                 mood_rating_enabled = global_config.get("mood_rating", {}).get("enabled", True)
-                if mood_rating_enabled:
-                    pre_rating = self._prompt_pre_activity_mood_rating(intent)
-                    self._pre_activity_mood_rating = pre_rating
-                    # Update database with pre-rating if provided
-                    if pre_rating is not None:
-                        update_mood_rating(public_id, pre_rating=pre_rating)
-                else:
-                    logger.debug("Mood rating is disabled, skipping pre-activity prompt")
-                    self._pre_activity_mood_rating = None
+                pre_rating = self._pre_activity_mood_rating if mood_rating_enabled else None
+                if pre_rating is not None:
+                    update_mood_rating(public_id, pre_rating=pre_rating)
+                elif not mood_rating_enabled:
+                    logger.debug("Mood rating is disabled, skipping pre-activity write")
             except Exception as e:
-                logger.error(f"Error prompting for pre-activity mood rating: {e}", exc_info=True)
-                # Non-blocking: continue even if mood rating fails
+                logger.error(f"Error writing pre-activity mood rating: {e}", exc_info=True)
         else:
             self._current_activity_log_id = None
             self._pre_activity_mood_rating = None
@@ -838,21 +686,6 @@ class WellBotOrchestrator:
                         log_activity_end(self._current_activity_log_id)
                 except Exception as e:
                     logger.error(f"Error logging activity end: {e}", exc_info=True)
-                
-                # Prompt for post-activity mood rating before cleanup
-                try:
-                    if self._current_activity_log_id:
-                        post_rating = self._prompt_post_activity_mood_rating(self.smalltalk_activity)
-                        if post_rating is not None or self._pre_activity_mood_rating is not None:
-                            # Update database with both pre and post ratings
-                            update_mood_rating(
-                                self._current_activity_log_id,
-                                pre_rating=self._pre_activity_mood_rating,
-                                post_rating=post_rating
-                            )
-                except Exception as e:
-                    logger.error(f"Error prompting for post-activity mood rating: {e}", exc_info=True)
-                    # Non-blocking: continue even if mood rating fails
                 
                 # Cleanup activity resources before restarting wakeword
                 logger.info("Cleaning up SmallTalk activity resources...")
@@ -1007,21 +840,6 @@ class WellBotOrchestrator:
                 except Exception as e:
                     logger.error(f"Error logging activity end: {e}", exc_info=True)
                 
-                # Prompt for post-activity mood rating before cleanup
-                try:
-                    if self._current_activity_log_id:
-                        post_rating = self._prompt_post_activity_mood_rating(self.journal_activity)
-                        if post_rating is not None or self._pre_activity_mood_rating is not None:
-                            # Update database with both pre and post ratings
-                            update_mood_rating(
-                                self._current_activity_log_id,
-                                pre_rating=self._pre_activity_mood_rating,
-                                post_rating=post_rating
-                            )
-                except Exception as e:
-                    logger.error(f"Error prompting for post-activity mood rating: {e}", exc_info=True)
-                    # Non-blocking: continue even if mood rating fails
-                
                 # Cleanup activity resources before restarting wakeword
                 logger.info("Cleaning up Journal activity resources...")
                 if self.journal_activity:
@@ -1119,21 +937,6 @@ class WellBotOrchestrator:
                 except Exception as e:
                     logger.error(f"Error logging activity end: {e}", exc_info=True)
                 
-                # Prompt for post-activity mood rating before cleanup
-                try:
-                    if self._current_activity_log_id:
-                        post_rating = self._prompt_post_activity_mood_rating(self.spiritual_quote_activity)
-                        if post_rating is not None or self._pre_activity_mood_rating is not None:
-                            # Update database with both pre and post ratings
-                            update_mood_rating(
-                                self._current_activity_log_id,
-                                pre_rating=self._pre_activity_mood_rating,
-                                post_rating=post_rating
-                            )
-                except Exception as e:
-                    logger.error(f"Error prompting for post-activity mood rating: {e}", exc_info=True)
-                    # Non-blocking: continue even if mood rating fails
-                
                 # Clear log ID and mood rating
                 self._current_activity_log_id = None
                 self._pre_activity_mood_rating = None
@@ -1220,21 +1023,6 @@ class WellBotOrchestrator:
                         log_activity_end(self._current_activity_log_id)
                 except Exception as e:
                     logger.error(f"Error logging activity end: {e}", exc_info=True)
-                
-                # Prompt for post-activity mood rating before cleanup
-                try:
-                    if self._current_activity_log_id:
-                        post_rating = self._prompt_post_activity_mood_rating(self.gratitude_activity)
-                        if post_rating is not None or self._pre_activity_mood_rating is not None:
-                            # Update database with both pre and post ratings
-                            update_mood_rating(
-                                self._current_activity_log_id,
-                                pre_rating=self._pre_activity_mood_rating,
-                                post_rating=post_rating
-                            )
-                except Exception as e:
-                    logger.error(f"Error prompting for post-activity mood rating: {e}", exc_info=True)
-                    # Non-blocking: continue even if mood rating fails
                 
                 # Clear log ID and mood rating
                 self._current_activity_log_id = None
@@ -1323,21 +1111,6 @@ class WellBotOrchestrator:
                         log_activity_end(self._current_activity_log_id)
                 except Exception as e:
                     logger.error(f"Error logging activity end: {e}", exc_info=True)
-                
-                # Prompt for post-activity mood rating before cleanup
-                try:
-                    if self._current_activity_log_id:
-                        post_rating = self._prompt_post_activity_mood_rating(self.meditation_activity)
-                        if post_rating is not None or self._pre_activity_mood_rating is not None:
-                            # Update database with both pre and post ratings
-                            update_mood_rating(
-                                self._current_activity_log_id,
-                                pre_rating=self._pre_activity_mood_rating,
-                                post_rating=post_rating
-                            )
-                except Exception as e:
-                    logger.error(f"Error prompting for post-activity mood rating: {e}", exc_info=True)
-                    # Non-blocking: continue even if mood rating fails
                 
                 # Clear log ID and mood rating
                 self._current_activity_log_id = None

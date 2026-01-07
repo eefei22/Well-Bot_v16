@@ -737,6 +737,38 @@ def update_mood_rating(public_id: str, pre_rating: Optional[int] = None, post_ra
         return False
 
 
+def has_pre_activity_mood_rating(public_id: str) -> bool:
+    """
+    Check if an intervention log has a pre-activity mood rating.
+    
+    Args:
+        public_id: Public ID (UUID string) from log_activity_start()
+    
+    Returns:
+        True if pre-activity mood rating exists (mood_rating[0] is not None), False otherwise.
+        Returns False if record doesn't exist or query fails.
+    """
+    try:
+        if not public_id:
+            return False
+        
+        # Query for mood_rating
+        res = sb.table("intervention_log").select("mood_rating").eq("public_id", public_id).limit(1).execute()
+        
+        if not res.data:
+            return False
+        
+        mood_rating = res.data[0].get("mood_rating")
+        if mood_rating and isinstance(mood_rating, list) and len(mood_rating) >= 1:
+            # Check if pre_rating (first element) exists and is not None
+            return mood_rating[0] is not None
+        
+        return False
+    except Exception as e:
+        logger.error(f"Failed to check pre-activity mood rating: {e}", exc_info=True)
+        return False
+
+
 def query_recent_activity_logs(
     user_id: str,
     activity_type: Optional[str] = None,
