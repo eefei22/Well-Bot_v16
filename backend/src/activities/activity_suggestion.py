@@ -29,9 +29,8 @@ from src.components import (
     KeywordIntentMatcher
 )
 from src.utils.config_loader import get_deepseek_config
-from src.utils.config_resolver import get_global_config_for_user, get_language_config
+from src.utils.config_resolver import get_global_config_for_user, get_language_config, resolve_language
 from src.supabase.auth import get_current_user_id
-from src.supabase.database import get_user_language
 from src.utils.intervention_record import InterventionRecordManager
 
 logger = logging.getLogger(__name__)
@@ -151,8 +150,8 @@ class ActivitySuggestionActivity:
             self.audio_config = audio_config
             
             # Get user language for system prompt
-            user_lang = get_user_language(self.user_id) or 'en'
-            language_name = LANGUAGE_NAMES.get(user_lang, 'English')
+            user_lang_code = resolve_language(self.user_id)  # Returns 'en', 'cn', or 'bm'
+            language_name = LANGUAGE_NAMES.get(user_lang_code, 'English')
             
             # Build system prompt with language instruction
             base_system_prompt = self.smalltalk_config.get("system_prompt", "You are a friendly assistant. Do not use emojis and always always ask follow up questions.")
@@ -443,7 +442,7 @@ class ActivitySuggestionActivity:
                 if intent_result:
                     intent_name = intent_result.get("intent")
                     if intent_name == "termination":
-                        logger.info("✅ Termination phrase detected - will return to idle mode")
+                        logger.info("Termination phrase detected - will return to idle mode")
                         self._termination_detected = True
                         return "__termination__"  # Special sentinel value for termination
                 
@@ -560,7 +559,7 @@ class ActivitySuggestionActivity:
     
     def _handle_nudge(self):
         """Handle silence nudge callback"""
-        logger.info("🔔 Handling silence nudge...")
+        logger.info("Handling silence nudge...")
         
         try:
             use_audio_files = self.global_smalltalk_config.get("use_audio_files", False)
@@ -586,11 +585,11 @@ class ActivitySuggestionActivity:
             # Speak the nudge prompt (with delays to prevent STT pickup)
             logger.info(f"Speaking nudge prompt...")
             self._speak(nudge_prompt, is_nudge=True)
-            logger.info("✅ Nudge prompt spoken successfully")
+            logger.info("Nudge prompt spoken successfully")
             
             # After nudge TTS finishes, restart listening for activity choice
             # This replicates the same flow as after the initial greeting
-            logger.info("🔄 Restarting listening for activity choice after nudge...")
+            logger.info("Restarting listening for activity choice after nudge...")
             self._nudge_occurred = True
             
             # Stop the current listening mic if it's still active
@@ -600,11 +599,11 @@ class ActivitySuggestionActivity:
                 self._listening_mic = None
             
         except Exception as e:
-            logger.error(f"❌ Error in _handle_nudge: {e}", exc_info=True)
+            logger.error(f"Error in _handle_nudge: {e}", exc_info=True)
     
     def _handle_timeout(self):
         """Handle silence timeout callback"""
-        logger.info("⏰ Handling silence timeout...")
+        logger.info("Handling silence timeout...")
         
         # Set timeout flag so run() knows not to route to smalltalk
         self._timeout_detected = True
@@ -642,10 +641,10 @@ class ActivitySuggestionActivity:
             # Speak the timeout prompt
             logger.info(f"Speaking timeout prompt...")
             self._speak(timeout_prompt)
-            logger.info("✅ Timeout prompt spoken successfully")
+            logger.info("Timeout prompt spoken successfully")
             
         except Exception as e:
-            logger.error(f"❌ Error in _handle_timeout: {e}", exc_info=True)
+            logger.error(f"Error in _handle_timeout: {e}", exc_info=True)
         finally:
             # Signal that timeout handler has finished (allows run() to proceed with cleanup)
             logger.info("Timeout handler finished - signaling completion")
@@ -663,13 +662,13 @@ class ActivitySuggestionActivity:
         
         # Safety checks
         if not all([self.audio_manager, self.session_manager, self.llm_pipeline]):
-            logger.error("❌ Components not properly initialized - cannot start activity")
+            logger.error("Components not properly initialized - cannot start activity")
             logger.error(f"  audio_manager: {self.audio_manager is not None}, session_manager: {self.session_manager is not None}, llm_pipeline: {self.llm_pipeline is not None}")
             return False
         
         # Check if keyword matcher is initialized (required for activity suggestion)
         if not self.intent_matcher:
-            logger.error("❌ Keyword intent matcher not initialized - cannot start activity")
+            logger.error("Keyword intent matcher not initialized - cannot start activity")
             # Speak error message and return False
             unavailable_msg = self.activity_suggestion_config.get(
                 "suggestions_unavailable",
@@ -679,7 +678,7 @@ class ActivitySuggestionActivity:
             return False
         
         try:
-            logger.info("🚀 Starting Activity Suggestion activity...")
+            logger.info("Starting Activity Suggestion activity...")
             self._active = True
             self._selected_activity = None
             self._conversation_context = []
@@ -689,7 +688,7 @@ class ActivitySuggestionActivity:
             conv_id = self.session_manager.start_session("Activity Suggestion")
             # Double-check llm_pipeline is not None before using it
             if self.llm_pipeline is None:
-                logger.error("❌ llm_pipeline is None - cannot set conversation_id")
+                logger.error("llm_pipeline is None - cannot set conversation_id")
                 self._active = False
                 return False
             self.llm_pipeline.conversation_id = conv_id
@@ -712,7 +711,7 @@ class ActivitySuggestionActivity:
                 on_timeout=self._handle_timeout
             )
             
-            logger.info("✅ Activity Suggestion activity started successfully")
+            logger.info("Activity Suggestion activity started successfully")
             return True
             
         except Exception as e:
@@ -746,11 +745,11 @@ class ActivitySuggestionActivity:
         if self.session_manager:
             self.session_manager.stop_session()
         
-        logger.info("✅ Activity Suggestion activity stopped")
+        logger.info("Activity Suggestion activity stopped")
     
     def cleanup(self):
         """Complete cleanup of all resources"""
-        logger.info("🧹 Cleaning up Activity Suggestion activity resources...")
+        logger.info("Cleaning up Activity Suggestion activity resources...")
         
         # Stop if still active
         if self._active:
@@ -759,7 +758,7 @@ class ActivitySuggestionActivity:
         # Cleanup LLM pipeline
         if self.llm_pipeline:
             try:
-                logger.info("🧹 Cleaning up LLM pipeline...")
+                logger.info("Cleaning up LLM pipeline...")
                 if hasattr(self.llm_pipeline, 'tts') and self.llm_pipeline.tts:
                     if hasattr(self.llm_pipeline.tts, 'client'):
                         try:
@@ -791,7 +790,7 @@ class ActivitySuggestionActivity:
         # Cleanup audio manager
         if self.audio_manager:
             try:
-                logger.info("🧹 Cleaning up audio manager...")
+                logger.info("Cleaning up audio manager...")
                 self.audio_manager.cleanup()
                 self.audio_manager = None
                 logger.info("✓ Audio manager cleaned up")
@@ -801,7 +800,7 @@ class ActivitySuggestionActivity:
         # Cleanup STT service
         if self.stt_service:
             try:
-                logger.info("🧹 Cleaning up STT service...")
+                logger.info("Cleaning up STT service...")
                 self.stt_service = None
                 logger.info("✓ STT service cleaned up")
             except Exception as e:
@@ -811,7 +810,7 @@ class ActivitySuggestionActivity:
         
         # Force garbage collection
         try:
-            logger.info("🧹 Running garbage collection...")
+            logger.info("Running garbage collection...")
             collected = gc.collect()
             logger.debug(f"Garbage collection collected {collected} objects")
         except Exception as e:
@@ -820,7 +819,7 @@ class ActivitySuggestionActivity:
         # Reset initialization state
         self._initialized = False
         
-        logger.info("✅ Activity Suggestion activity cleanup completed")
+        logger.info("Activity Suggestion activity cleanup completed")
     
     def _speak(self, text: str, is_nudge: bool = False):
         """Speak text using TTS"""
@@ -852,7 +851,7 @@ class ActivitySuggestionActivity:
     
     def reinitialize(self) -> bool:
         """Re-initialize the activity for subsequent runs"""
-        logger.info("🔄 Re-initializing Activity Suggestion activity...")
+        logger.info("Re-initializing Activity Suggestion activity...")
         
         # Reset state
         self._active = False
@@ -880,11 +879,11 @@ class ActivitySuggestionActivity:
         Returns:
             True if activity completed successfully, False otherwise
         """
-        logger.info("🎬 ActivitySuggestionActivity.run() - Starting activity execution")
+        logger.info("ActivitySuggestionActivity.run() - Starting activity execution")
         try:
             # Start the activity
             if not self.start():
-                logger.error("❌ ActivitySuggestionActivity.run() - Failed to start activity")
+                logger.error("ActivitySuggestionActivity.run() - Failed to start activity")
                 return False
             
             # Listen for user's activity choice in a loop (to handle nudge restarts)
@@ -895,12 +894,12 @@ class ActivitySuggestionActivity:
                 
                 # If we got a result, break out of the loop
                 if matched_activity:
-                    logger.info(f"✅ Activity matched: {matched_activity}")
+                    logger.info(f"Activity matched: {matched_activity}")
                     break
                 
                 # If nudge occurred, restart listening (loop will continue)
                 if self._nudge_occurred:
-                    logger.info("🔄 Nudge occurred - restarting listening for activity choice...")
+                    logger.info("Nudge occurred - restarting listening for activity choice...")
                     self._nudge_occurred = False  # Reset flag
                     # Continue loop to call _listen_for_activity_choice() again
                     continue
@@ -925,7 +924,7 @@ class ActivitySuggestionActivity:
             
             # Check for termination first
             if matched_activity == "__termination__":
-                logger.info("✅ Termination phrase detected - returning to idle mode")
+                logger.info("Termination phrase detected - returning to idle mode")
                 
                 # Speak termination prompt before returning to idle mode
                 try:
@@ -947,12 +946,12 @@ class ActivitySuggestionActivity:
                 if matched_activity == "smalltalk":
                     # Smalltalk doesn't need starting feedback
                     self._route_to_selected_activity(matched_activity)
-                    logger.info(f"✅ User selected activity: {matched_activity}")
+                    logger.info(f"User selected activity: {matched_activity}")
                 else:
                     # Speak feedback and route to selected activity
                     self._speak_starting_activity(matched_activity)
                     self._route_to_selected_activity(matched_activity)
-                    logger.info(f"✅ User selected activity: {matched_activity}")
+                    logger.info(f"User selected activity: {matched_activity}")
             else:
                 # No match - speak feedback and route to smalltalk
                 self._speak_no_match()

@@ -20,7 +20,7 @@ import pyaudio
 import struct
 import threading
 import time
-from typing import Optional, List, Callable, Union
+from typing import Optional, List, Callable, Union, Generator
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -73,6 +73,11 @@ class WakeWordDetector:
         self.running = False
         self._thread = None
         self.is_initialized = False
+        
+        # For subscription-based mode
+        self._audio_generator = None
+        self._subscription_mode = False
+        self._frame_buffer = bytearray()  # Buffer for frame alignment
         
     def initialize(self, built_in_keywords: Optional[List[str]] = None) -> bool:
         """
@@ -209,9 +214,24 @@ class WakeWordDetector:
         logger.info("Stopping wake word detection...")
         self.running = False
         
+        # If in subscription mode, generator will end naturally
+        # If in direct mode, stop audio stream
+        if not self._subscription_mode and self._stream is not None:
+            try:
+                self._stream.stop_stream()
+                self._stream.close()
+                self._stream = None
+            except Exception as e:
+                logger.error(f"Error closing audio stream: {e}")
+        
         # Wait for thread to finish
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=2.0)
+        
+        # Clear subscription state
+        self._subscription_mode = False
+        self._audio_generator = None
+        self._frame_buffer = bytearray()
             
         logger.info("Wake word detection stopped")
     
@@ -226,6 +246,103 @@ class WakeWordDetector:
         if self.porcupine:
             return self.porcupine.sample_rate
         return None
+    
+    def process_audio_chunk(self, audio_chunk: bytes) -> Optional[int]:
+        """
+        Process audio chunk for wake word detection.
+        
+        This method handles chunk size mismatch by buffering and splitting
+        chunks into Porcupine frame_length sized frames.
+        
+        Args:
+            audio_chunk: Audio chunk bytes (16-bit PCM)
+        
+        Returns:
+            Keyword index if detected (>= 0), None otherwise
+        """
+        if not self.is_initialized or not self.porcupine:
+            logger.error("Wake word detector not initialized")
+            return None
+        
+        frame_length = self.porcupine.frame_length
+        bytes_per_frame = frame_length * 2  # 16-bit = 2 bytes per sample
+        
+        # Add chunk to buffer
+        self._frame_buffer.extend(audio_chunk)
+        
+        # Process complete frames
+        while len(self._frame_buffer) >= bytes_per_frame:
+            # Extract one frame
+            frame_bytes = bytes(self._frame_buffer[:bytes_per_frame])
+            self._frame_buffer = self._frame_buffer[bytes_per_frame:]
+            
+            # Convert bytes to PCM samples
+            pcm = struct.unpack_from("h" * frame_length, frame_bytes)
+            
+            # Process frame with Porcupine
+            try:
+                result = self.porcupine.process(pcm)
+                if result >= 0:
+                    logger.info(f"Wake word detected (keyword index: {result})")
+                    return result
+            except Exception as e:
+                logger.error(f"Error processing frame: {e}")
+        
+        return None
+    
+    def start_with_subscription(self, audio_generator: Generator[bytes, None, None], on_detected: Callable[[], None]):
+        """
+        Start wake word detection using audio from SharedAudioManager.
+        
+        Args:
+            audio_generator: Generator yielding audio chunks from SharedAudioManager
+            on_detected: Callback function to call when wake word is detected
+        """
+        if not self.is_initialized:
+            logger.error("Wake word detector not initialized. Call initialize() first.")
+            return
+        
+        if self.running:
+            logger.warning("Wake word detector is already running")
+            return
+        
+        self.running = True
+        self._subscription_mode = True
+        self._audio_generator = audio_generator
+        self._frame_buffer = bytearray()  # Reset buffer
+        
+        def _run_loop():
+            """Background thread loop for subscription-based wake word detection."""
+            logger.info("Wake word detection active (subscription mode)")
+            
+            try:
+                for audio_chunk in audio_generator:
+                    if not self.running:
+                        break
+                    
+                    # Process chunk
+                    result = self.process_audio_chunk(audio_chunk)
+                    
+                    if result is not None and result >= 0:
+                        logger.info("Wake word detected")
+                        try:
+                            on_detected()
+                        except Exception as e:
+                            logger.error(f"Exception in wake word callback: {e}")
+                            
+            except StopIteration:
+                logger.info("Audio generator ended")
+            except Exception as e:
+                if self.running:
+                    logger.error(f"Error in wake word detection loop: {e}", exc_info=True)
+            finally:
+                logger.info("Wake word detection loop ended")
+                self._subscription_mode = False
+                self._audio_generator = None
+        
+        # Start background thread
+        self._thread = threading.Thread(target=_run_loop, daemon=True)
+        self._thread.start()
     
     def cleanup(self):
         """Clean up resources."""
@@ -283,6 +400,10 @@ class OpenWakeWordDetector:
         self.running = False
         self._thread = None
         self.is_initialized = False
+        
+        # For subscription-based mode
+        self._audio_generator = None
+        self._subscription_mode = False
         
         # Model paths
         if backend_dir:
@@ -452,9 +573,23 @@ class OpenWakeWordDetector:
         logger.info("Stopping OpenWakeWord detection...")
         self.running = False
         
+        # If in subscription mode, generator will end naturally
+        # If in direct mode, stop audio stream
+        if not self._subscription_mode and self._stream is not None:
+            try:
+                self._stream.stop_stream()
+                self._stream.close()
+                self._stream = None
+            except Exception as e:
+                logger.error(f"Error closing audio stream: {e}")
+        
         # Wait for thread to finish
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=2.0)
+        
+        # Clear subscription state
+        self._subscription_mode = False
+        self._audio_generator = None
             
         logger.info("OpenWakeWord detection stopped")
     
@@ -465,6 +600,95 @@ class OpenWakeWordDetector:
     def get_sample_rate(self) -> Optional[int]:
         """Get the required sample rate for audio processing."""
         return self.sample_rate
+    
+    def process_audio_chunk(self, audio_chunk: bytes) -> bool:
+        """
+        Process audio chunk for wake word detection.
+        
+        Args:
+            audio_chunk: Audio chunk bytes (16-bit PCM)
+        
+        Returns:
+            True if wake word detected, False otherwise
+        """
+        if not self.is_initialized or not self.model:
+            logger.error("OpenWakeWord detector not initialized")
+            return False
+        
+        try:
+            # Convert bytes to numpy array (int16)
+            audio_data = np.frombuffer(audio_chunk, dtype=np.int16)
+            
+            # Get predictions for all models
+            prediction = self.model.predict(audio_data)
+            
+            # Check each model's prediction
+            for model_name, score in prediction.items():
+                if score > self.detection_threshold:
+                    # Internal debouncing
+                    current_time = time.time()
+                    if current_time - self._last_detection_time < self._detection_debounce_seconds:
+                        continue  # Skip, too soon after last detection
+                    
+                    self._last_detection_time = current_time
+                    logger.info(f"Wake word detected: '{model_name}' (score: {score:.3f})")
+                    return True
+            
+            return False
+        except Exception as e:
+            logger.error(f"Error processing audio chunk: {e}")
+            return False
+    
+    def start_with_subscription(self, audio_generator: Generator[bytes, None, None], on_detected: Callable[[], None]):
+        """
+        Start wake word detection using audio from SharedAudioManager.
+        
+        Args:
+            audio_generator: Generator yielding audio chunks from SharedAudioManager
+            on_detected: Callback function to call when wake word is detected
+        """
+        if not self.is_initialized:
+            logger.error("OpenWakeWord detector not initialized. Call initialize() first.")
+            return
+        
+        if self.running:
+            logger.warning("OpenWakeWord detector is already running")
+            return
+        
+        self.running = True
+        self._subscription_mode = True
+        self._audio_generator = audio_generator
+        
+        def _run_loop():
+            """Background thread loop for subscription-based wake word detection."""
+            logger.info("OpenWakeWord detection active (subscription mode)")
+            
+            try:
+                for audio_chunk in audio_generator:
+                    if not self.running:
+                        break
+                    
+                    # Process chunk
+                    if self.process_audio_chunk(audio_chunk):
+                        logger.info("Wake word detected")
+                        try:
+                            on_detected()
+                        except Exception as e:
+                            logger.error(f"Exception in wake word callback: {e}")
+                            
+            except StopIteration:
+                logger.info("Audio generator ended")
+            except Exception as e:
+                if self.running:
+                    logger.error(f"Error in OpenWakeWord detection loop: {e}", exc_info=True)
+            finally:
+                logger.info("OpenWakeWord detection loop ended")
+                self._subscription_mode = False
+                self._audio_generator = None
+        
+        # Start background thread
+        self._thread = threading.Thread(target=_run_loop, daemon=True)
+        self._thread.start()
     
     def cleanup(self):
         """Clean up resources."""
@@ -574,7 +798,7 @@ if __name__ == "__main__":
     
     def on_wake_word_detected():
         """Callback function called when wake word is detected."""
-        print("🎤 Wake word detected! Starting STT pipeline...")
+        print("Wake word detected! Starting STT pipeline...")
         # Here you would trigger the STT pipeline
         # For example: stt_pipeline.start()
     

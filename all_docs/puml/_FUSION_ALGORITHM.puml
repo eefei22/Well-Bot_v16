@@ -1,0 +1,231 @@
+@startuml Fusion Service - Data Flow Activity Diagram
+
+start
+
+:Receive POST /emotion/snapshot request;
+
+:Extract user_id, timestamp, options;
+
+if (user_id is valid UUID?) then (no)
+  :Return HTTP 400 Error;
+  stop
+else (yes)
+endif
+
+if (timestamp provided?) then (yes)
+  :Parse timestamp;
+  :Convert to UTC+8 timezone;
+else (no)
+  :Get current time UTC+8;
+endif
+
+:Determine window_seconds\n(from options or config default: 60s);
+:Determine timeout_override\n(from options or config default: 1.5s);
+
+:Initialize SERClient, FERClient, VitalsClient;
+
+fork
+  partition "SER Service Call" {
+    :Prepare request payload;
+    :Make HTTP POST to /predict;
+    if (Request successful?) then (yes)
+      :Parse response signals;
+      :Return signals list;
+    else (no)
+      :Retry SER request;
+      if (Retry successful?) then (yes)
+        :Parse response signals;
+        :Return signals list;
+      else (no)
+        :Log warning;
+        :Return empty list;
+      endif
+    endif
+  }
+fork again
+  partition "FER Service Call" {
+    :Prepare request payload;
+    :Make HTTP POST to /predict;
+    if (Request successful?) then (yes)
+      :Parse response signals;
+      :Return signals list;
+    else (no)
+      :Retry FER request;
+      if (Retry successful?) then (yes)
+        :Parse response signals;
+        :Return signals list;
+      else (no)
+        :Log warning;
+        :Return empty list;
+      endif
+    endif
+  }
+fork again
+  partition "Vitals Service Call" {
+    :Prepare request payload;
+    :Make HTTP POST to /predict;
+    if (Request successful?) then (yes)
+      :Parse response signals;
+      :Return signals list;
+    else (no)
+      :Retry Vitals request;
+      if (Retry successful?) then (yes)
+        :Parse response signals;
+        :Return signals list;
+      else (no)
+        :Log warning;
+        :Return empty list;
+      endif
+    endif
+  }
+end fork
+
+:Combine all signals from SER, FER, Vitals;
+:Handle exceptions\n(convert to empty lists);
+
+:Calculate window_start\n= snapshot_timestamp - window_seconds;
+
+repeat
+  :For each signal in all_signals;
+  :Parse signal timestamp;
+  if (Timestamp parsing successful?) then (no)
+    :Log warning;
+    :Include signal anyway;
+  else (yes)
+    if (signal_timestamp >= window_start?) then (yes)
+      :Add signal to filtered_signals;
+    else (no)
+      :Log debug:\nFiltered out stale signal;
+    endif
+  endif
+repeatwhile (More signals?) is (yes)
+->no;
+
+if (filtered_signals is empty?) then (yes)
+  :Return NoSignalsResponse;
+  stop
+else (no)
+endif
+
+partition "Fusion Algorithm" {
+  :Call fuse_signals(filtered_signals);
+  
+  :**Step 1:** Group signals by modality;
+  repeat
+    :For each signal in signals;
+    :Add signal to\nmodality_signals[signal.modality];
+  repeatwhile (More signals?) is (yes)
+  ->no;
+  
+  :**Step 2:** Aggregate per modality\n(average confidence per emotion);
+  repeat
+    :For each modality in modality_signals;
+    repeat
+      :For each signal in modality signals;
+      if (emotion_label is valid?) then (yes)
+        :Add confidence to\nmodality_emotions[modality][emotion_label];
+      else (no)
+        :Log warning:\nInvalid emotion label;
+        :Skip signal;
+      endif
+    repeatwhile (More signals in modality?) is (yes)
+    ->no;
+  repeatwhile (More modalities?) is (yes)
+  ->no;
+  
+  :**Step 3:** Calculate average confidence\nper emotion per modality;
+  repeat
+    :For each modality in modality_emotions;
+    repeat
+      :For each emotion in modality emotions;
+      :Calculate avg_confidence\n= sum(confidences) / count(confidences);
+      :Store in modality_scores[modality][emotion]\n= avg_confidence;
+    repeatwhile (More emotions?) is (yes)
+    ->no;
+  repeatwhile (More modalities?) is (yes)
+  ->no;
+  
+  :**Step 4:** Apply weights and calculate\nweighted scores per emotion;
+  repeat
+    :For each modality in modality_scores;
+    :Get modality_weight from weights config;
+    if (modality_weight == 0.0?) then (yes)
+      :Log warning: Zero weight;
+      :Skip modality;
+    else (no)
+      repeat
+        :For each emotion in modality scores;
+        :Calculate weighted_contribution\n= avg_confidence × modality_weight;
+        :Add to emotion_weighted_scores[emotion]\n+= weighted_contribution;
+      repeatwhile (More emotions in modality?) is (yes)
+      ->no;
+    endif
+  repeatwhile (More modalities?) is (yes)
+  ->no;
+  
+  if (emotion_weighted_scores is empty?) then (yes)
+    :Raise ValueError:\nNo valid emotion scores;
+    stop
+  else (no)
+  endif
+  
+  :**Step 5:** Select emotion with\nhighest weighted score;
+  :Find max(emotion_weighted_scores)\nby score value;
+  :Set emotion_label\n= emotion with max score;
+  :Set raw_score = max score value;
+  
+  :**Step 6:** Normalize confidence_score to [0, 1];
+  :Calculate contributing_weights_sum\n= sum(weights for contributing modalities);
+  if (contributing_weights_sum > 0?) then (yes)
+    :Calculate confidence_score\n= min(raw_score / contributing_weights_sum, 1.0);
+  else (no)
+    :Set confidence_score = 0.0;
+  endif
+  
+  :**Step 7:** Map to emotional_score [0, 100];
+  :Calculate emotional_score\n= round(confidence_score × 100);
+  
+  :Build signals_used list;
+  repeat
+    :For each modality in modality_scores;
+    repeat
+      :For each emotion in modality scores;
+      :Add {modality, emotion_label, confidence}\nto signals_used;
+    repeatwhile (More emotions?) is (yes)
+    ->no;
+  repeatwhile (More modalities?) is (yes)
+  ->no;
+  
+  :Return fused_result {
+    emotion_label,
+    confidence_score,
+    emotional_score,
+    signals_used
+  };
+}
+
+if (Fusion failed with ValueError?) then (yes)
+  :Return NoSignalsResponse\nwith error reason;
+  stop
+else (no)
+endif
+
+:**Step 6:** Write to database;
+:Call insert_emotional_log(\nuser_id, timestamp, emotion_label,\nconfidence_score, emotional_score);
+
+if (Database write successful?) then (yes)
+  :Log success;
+else (no)
+  :Log error: Failed to insert;
+  note right: Still return fused result\neven if DB write fails
+endif
+
+:**Step 7:** Construct FusedEmotionResponse;
+:Build response with user_id, timestamp,\nemotion_label, confidence_score,\nemotional_score, signals_used;
+
+:Return FusedEmotionResponse;
+
+stop
+
+@enduml
+
