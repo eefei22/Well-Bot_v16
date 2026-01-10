@@ -122,9 +122,12 @@ class FERServiceClient:
         Returns:
             True if successful (or placeholder), False if failed
         """
-        if not self.service_url or self.service_url == "https://wellbot-fer-backend-520080168829.asia-southeast1.run.app" or not self.analyze_endpoint:
-            logger.debug("FER service URL not configured - placeholder mode (returning success)")
-            return True
+        # Always attempt to send if an analyze endpoint is configured. If the
+        # service URL is not set, the analyze_endpoint may still point to a
+        # default testing endpoint; attempt the request and report success/failure.
+        if not self.analyze_endpoint:
+            logger.debug("FER analyze endpoint not configured - skipping send")
+            return False
         
         try:
             if not image_file_path.exists():

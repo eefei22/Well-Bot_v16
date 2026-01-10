@@ -290,17 +290,32 @@ class EmotionMonitoringActivity:
         # Capture and send image (if camera available and still running)
         if self._running and self._check_camera_available():
             try:
+                # Refresh user_id before sending image (in case pairing changed)
+                try:
+                    from src.supabase.auth import get_current_user_id
+                    current_user_id = get_current_user_id()
+                    if current_user_id:
+                        self.user_id = current_user_id
+                except Exception:
+                    pass
+
                 image_file = self._capture_image()
                 if image_file and self._running:  # Check again before HTTP request
                     logger.debug(f"Sending image to FER service (timestamp: {timestamp})")
-                    success = self.fer_client.send_image(image_file, self.user_id)
-                    image_sent = success
-                    
-                    if image_sent:
-                        logger.info(f"Image sent to FER service successfully")
-                    else:
-                        logger.warning("Failed to send image to FER service")
-                    
+                    try:
+                        send_user_id = self.user_id or ""
+                        success = False
+                        if self.fer_client:
+                            success = self.fer_client.send_image(image_file, send_user_id)
+                        image_sent = bool(success)
+
+                        if image_sent:
+                            logger.info("Image sent to FER service successfully")
+                        else:
+                            logger.warning("Failed to send image to FER service")
+                    except Exception as e:
+                        logger.error(f"Error sending image to FER service: {e}", exc_info=True)
+
                     # Clean up temp file
                     try:
                         image_file.unlink()
