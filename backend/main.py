@@ -490,14 +490,9 @@ class WellBotOrchestrator:
         with self._lock:
             if self.state != SystemState.LISTENING:
                 logger.warning(f"Intent detected but system in state {self.state.value}, ignoring")
-                # Clear intent flags if we're ignoring this intent
-                if self.idle_mode_activity:
-                    try:
-                        self.idle_mode_activity._intent_detected.clear()
-                        self.idle_mode_activity._detected_intent = None
-                        self.idle_mode_activity._detected_transcript = None
-                    except:
-                        pass
+                # Note: Intent flags (_intent_detected, _detected_intent, _detected_transcript) 
+                # don't exist on IdleModeActivity - they only exist on WakeModeActivity.
+                # These flags are managed by WakeModeActivity and don't need to be cleared here.
                 return
             
             # Transition to processing state
@@ -732,37 +727,109 @@ class WellBotOrchestrator:
         """Handle unknown/unrecognized intent by prompting user to repeat and looping back"""
         logger.info(f"Handling unknown intent for transcript: '{transcript}' - prompting to repeat")
         
-        # Prompt user to repeat using TTS
-        try:
-            if self.idle_mode_activity and self.idle_mode_activity.tts_service:
-                # Load prompt from config
-                language_code = resolve_language(self.user_id)
-                language_config = get_language_config(language_code)
-                wakeword_responses_config = language_config.get("wakeword_responses", {})
-                unknown_intent_prompt = wakeword_responses_config.get(
-                    "unknown_intent",
-                    "I didn't quite catch that. Could you call my name again and repeat please?"
-                )
-                logger.info(f"Speaking unknown intent prompt: {unknown_intent_prompt}")
-                self.idle_mode_activity._speak(unknown_intent_prompt)
-        except Exception as e:
-            logger.warning(f"Failed to speak unknown intent prompt: {e}")
-            # Fallback prompt
-            try:
-                if self.idle_mode_activity:
-                    self.idle_mode_activity._speak("I didn't quite catch that. Could you call my name again and repeat please?")
-            except Exception as e2:
-                logger.error(f"Failed to speak fallback prompt: {e2}")
+        # #region agent log
+        with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+            import json
+            f.write(json.dumps({"sessionId":"debug-session","runId":"post-fix","hypothesisId":"A","location":"main.py:731","message":"_handle_unknown_intent entry","data":{"idle_mode_exists":self.idle_mode_activity is not None,"wake_mode_exists":self.wake_mode_activity is not None,"hasattr_wake_tts":hasattr(self.wake_mode_activity,'tts_service') if self.wake_mode_activity else False,"hasattr_wake_speak":hasattr(self.wake_mode_activity,'_speak') if self.wake_mode_activity else False},"timestamp":int(time.time()*1000)})+"\n")
+        # #endregion
         
-        # Clear any stale intent flags before restarting to prevent immediate re-detection
-        if self.idle_mode_activity:
+        # Load prompt from config
+        language_code = resolve_language(self.user_id)
+        language_config = get_language_config(language_code)
+        wakeword_responses_config = language_config.get("wakeword_responses", {})
+        unknown_intent_prompt = wakeword_responses_config.get(
+            "unknown_intent",
+            "I didn't quite catch that. Could you call my name again and repeat please?"
+        )
+        
+        # Prompt user to repeat using TTS
+        # Try to use wake_mode_activity's TTS if available (it has TTS service)
+        tts_success = False
+        if self.wake_mode_activity and hasattr(self.wake_mode_activity, 'tts_service') and self.wake_mode_activity.tts_service:
+            # #region agent log
+            with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+                import json
+                f.write(json.dumps({"sessionId":"debug-session","runId":"post-fix","hypothesisId":"B","location":"main.py:742","message":"Using wake_mode_activity._speak","data":{},"timestamp":int(time.time()*1000)})+"\n")
+            # #endregion
             try:
-                self.idle_mode_activity._intent_detected.clear()
-                self.idle_mode_activity._detected_intent = None
-                self.idle_mode_activity._detected_transcript = None
-                logger.debug("Cleared stale intent flags before restarting idle mode")
+                logger.info(f"Speaking unknown intent prompt: {unknown_intent_prompt}")
+                self.wake_mode_activity._speak(unknown_intent_prompt)
+                tts_success = True
             except Exception as e:
-                logger.warning(f"Error clearing intent flags: {e}")
+                # #region agent log
+                with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+                    import json
+                    f.write(json.dumps({"sessionId":"debug-session","runId":"post-fix","hypothesisId":"B","location":"main.py:748","message":"Exception using wake_mode_activity._speak","data":{"error":str(e),"error_type":type(e).__name__},"timestamp":int(time.time()*1000)})+"\n")
+                # #endregion
+                logger.warning(f"Failed to speak unknown intent prompt using wake_mode_activity: {e}")
+        
+        # Fallback: Create temporary TTS service (similar to _speak_startup_message)
+        if not tts_success:
+            # #region agent log
+            with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+                import json
+                f.write(json.dumps({"sessionId":"debug-session","runId":"post-fix","hypothesisId":"C","location":"main.py:752","message":"Creating temporary TTS service","data":{},"timestamp":int(time.time()*1000)})+"\n")
+            # #endregion
+            try:
+                # Get language codes for TTS
+                from src.utils.config_resolver import LANGUAGE_CODES
+                lang_config = LANGUAGE_CODES.get(language_code, LANGUAGE_CODES.get('en', {}))
+                
+                # Initialize TTS service
+                tts_service = GoogleTTSClient(
+                    voice_name=lang_config.get('tts_voice_name', 'en-US-Neural2-D'),
+                    language_code=lang_config.get('tts_language_code', 'en-US'),
+                    audio_encoding=texttospeech.AudioEncoding.LINEAR16,
+                    sample_rate_hertz=24000,
+                    num_channels=1,
+                    sample_width_bytes=2
+                )
+                
+                # Generate PCM chunks
+                def text_gen():
+                    yield unknown_intent_prompt
+                
+                pcm_chunks = tts_service.stream_synthesize(text_gen())
+                
+                # Play PCM chunks using PyAudio
+                pa = pyaudio.PyAudio()
+                stream = None
+                try:
+                    stream = pa.open(
+                        format=pyaudio.paInt16,
+                        channels=1,
+                        rate=24000,
+                        output=True
+                    )
+                    
+                    for chunk in pcm_chunks:
+                        stream.write(chunk)
+                    
+                    logger.info(f"Unknown intent prompt spoken: {unknown_intent_prompt[:50]}...")
+                    tts_success = True
+                finally:
+                    # Ensure PyAudio resources are cleaned up
+                    if stream is not None:
+                        try:
+                            stream.stop_stream()
+                            stream.close()
+                        except Exception as e:
+                            logger.warning(f"Error closing audio stream: {e}")
+                    try:
+                        pa.terminate()
+                    except Exception as e:
+                        logger.warning(f"Error terminating PyAudio: {e}")
+            except Exception as e:
+                # #region agent log
+                with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+                    import json
+                    f.write(json.dumps({"sessionId":"debug-session","runId":"post-fix","hypothesisId":"C","location":"main.py:789","message":"Exception creating temporary TTS","data":{"error":str(e),"error_type":type(e).__name__},"timestamp":int(time.time()*1000)})+"\n")
+                # #endregion
+                logger.error(f"Failed to speak unknown intent prompt with temporary TTS: {e}")
+        
+        # Note: Intent flags (_intent_detected, _detected_intent, _detected_transcript) 
+        # don't exist on IdleModeActivity - they only exist on WakeModeActivity.
+        # These flags are managed by WakeModeActivity and don't need to be cleared here.
         
         # Reset system state to LISTENING before restarting
         with self._lock:
@@ -1668,15 +1735,9 @@ class WellBotOrchestrator:
                 self.current_activity = None
             
             # Clear any stale intent flags to prevent immediate re-detection
-            # This is critical when restarting after activity failures
-            if self.idle_mode_activity:
-                try:
-                    self.idle_mode_activity._intent_detected.clear()
-                    self.idle_mode_activity._detected_intent = None
-                    self.idle_mode_activity._detected_transcript = None
-                    logger.debug("Cleared stale intent flags in _restart_idle_mode")
-                except Exception as e:
-                    logger.warning(f"Error clearing intent flags in _restart_idle_mode: {e}")
+            # Note: Intent flags (_intent_detected, _detected_intent, _detected_transcript) 
+            # don't exist on IdleModeActivity - they only exist on WakeModeActivity.
+            # These flags are managed by WakeModeActivity and don't need to be cleared here.
             
             self._transitioning_to_activity = False  # Clear flag when restarting idle mode
             
