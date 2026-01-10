@@ -411,6 +411,16 @@ class IdleModeActivity:
         """Re-initialize the activity for subsequent runs"""
         logger.info("Re-initializing Idle Mode activity...")
         
+        # Stop intervention poller if running
+        if self.intervention_poller:
+            try:
+                self.intervention_poller.stop()
+                logger.debug("Stopped intervention poller before reinitialize")
+            except Exception as e:
+                logger.warning(f"Error stopping intervention poller during reinitialize: {e}")
+            finally:
+                self.intervention_poller = None
+        
         # Cleanup existing wakeword detector before resetting state
         if self.wakeword_detector:
             try:
