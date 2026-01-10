@@ -104,6 +104,7 @@ class InterventionPoller:
             logger.info("Starting intervention poller...")
             
             # Schedule first poll (no immediate poll)
+            # Lock is already held, so call the unlocked version
             self._schedule_next_check()
     
     def stop(self):
@@ -115,28 +116,49 @@ class InterventionPoller:
             
             self._running = False
             if self._timer:
-                self._timer.cancel()
-                self._timer = None
+                try:
+                    self._timer.cancel()
+                except Exception as e:
+                    logger.warning(f"Error canceling timer during stop: {e}")
+                finally:
+                    self._timer = None
             
             logger.info("Intervention poller stopped")
     
     def _schedule_next_check(self):
-        """Schedule the next polling check."""
+        """Schedule the next polling check. Assumes lock is already held."""
         if not self._running:
             return
         
+        # Cancel existing timer if any (shouldn't happen, but protect against race conditions)
+        if self._timer:
+            try:
+                self._timer.cancel()
+            except Exception as e:
+                logger.warning(f"Error canceling existing timer: {e}")
+        
+        # Create and start new timer
         self._timer = threading.Timer(self.poll_interval_seconds, self._poll_cloud_service)
         self._timer.daemon = True
         self._timer.start()
         logger.debug(f"Next poll scheduled in {self.poll_interval_minutes} minutes")
+    
+    def _schedule_next_check_locked(self):
+        """Schedule the next polling check with lock protection."""
+        with self._lock:
+            self._schedule_next_check()
     
     def _poll_cloud_service(self):
         """
         Poll cloud service for intervention suggestion.
         Cloud service will fetch latest emotion from database and process it.
         """
-        if not self._running:
-            return
+        # Check if still running (with lock protection)
+        with self._lock:
+            if not self._running:
+                return
+            # Note: We don't hold the lock during the actual polling to avoid blocking stop()
+            # The lock is only used to check the running state atomically
         
         try:
             logger.debug("Polling cloud service for intervention suggestion...")
@@ -157,8 +179,9 @@ class InterventionPoller:
                 decision = response.get("decision", {})
                 suggestion = response.get("suggestion", {})
                 
-                # Store latest decision in memory
-                self._latest_decision = decision
+                # Store latest decision in memory (with lock protection)
+                with self._lock:
+                    self._latest_decision = decision
                 
                 # Update record (no emotion_entry needed)
                 self.record_manager.update_record(
@@ -174,21 +197,29 @@ class InterventionPoller:
                 
                 # Check if intervention should be triggered
                 trigger_intervention = decision.get("trigger_intervention", False)
-                if trigger_intervention and self.on_intervention_triggered:
-                    logger.info("Intervention trigger detected, calling callback...")
-                    try:
-                        self.on_intervention_triggered()
-                    except Exception as e:
-                        logger.error(f"Error in intervention trigger callback: {e}", exc_info=True)
+                if trigger_intervention:
+                    # Check if still running before triggering callback (with lock protection)
+                    with self._lock:
+                        is_running = self._running
+                        callback = self.on_intervention_triggered
+                    
+                    if is_running and callback:
+                        logger.info("Intervention trigger detected, calling callback...")
+                        try:
+                            callback()
+                        except Exception as e:
+                            logger.error(f"Error in intervention trigger callback: {e}", exc_info=True)
             else:
                 logger.error("Failed to get suggestion from cloud service")
                 
         except Exception as e:
             logger.error(f"Error polling cloud service: {e}", exc_info=True)
         finally:
-            # Schedule next check
-            if self._running:
-                self._schedule_next_check()
+            # Schedule next check (with lock protection)
+            with self._lock:
+                if self._running:
+                    # Lock is already held, so call the unlocked version
+                    self._schedule_next_check()
     
     def get_latest_decision(self) -> Optional[Dict[str, Any]]:
         """
@@ -197,4 +228,5 @@ class InterventionPoller:
         Returns:
             Dictionary with decision data (trigger_intervention, confidence_score, reasoning) or None
         """
-        return self._latest_decision
+        with self._lock:
+            return self._latest_decision
