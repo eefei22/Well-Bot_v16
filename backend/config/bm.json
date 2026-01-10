@@ -82,7 +82,8 @@
     "prompts": {
       "nudge": "Adakah anda masih di situ? Aktiviti mana yang anda ingin cuba?",
       "timeout": "Nampaknya anda tiada di situ. Saya akan berehat sekarang. Panggil nama saya apabila anda sudah bersedia untuk bercakap lagi.",
-      "termination": "Baiklah, jumpa lagi nanti."
+      "termination": "Baiklah, jumpa lagi nanti.",
+      "rejection": "Tidak mengapa. Saya akan berada di sini apabila anda sudah bersedia. Jaga diri!"
     },
     "activity_names": {
       "journaling": "Menulis Jurnal",
@@ -112,8 +113,9 @@
     }
   },
   "mood_rating": {
-    "prompt_before": "Jika anda mahu — pada skala 1 hingga 10 — betapa kuatnya sebarang emosi negatif yang anda rasa sekarang (1 = tiada, 10 = sangat kuat)?",
-    "prompt_after": "Jika anda mahu — pada skala 1 hingga 10 — betapa kuatnya sebarang emosi negatif yang anda rasa sekarang (1 = tiada, 10 = sangat kuat)?",
+    "prompt_before": "Sebelum kita mula, pada skala 1 hingga 10, betapa kuatnya sebarang emosi negatif yang anda rasa sekarang? 1 bermaksud tiada, 10 bermaksud sangat kuat.",
+    "prompt_after": "Sekarang kita sudah selesai, pada skala 1 hingga 10, betapa kuatnya sebarang emosi negatif yang anda rasa sekarang? 1 bermaksud tiada, 10 bermaksud sangat kuat.",
+    "acknowledgment": "Terima kasih kerana berkongsi.",
     "skip_phrases": ["langkau", "tidak", "bukan sekarang", "kemudian", "lepaskan"]
   },
   "audio_paths": {

@@ -58,10 +58,10 @@
     "update_interval_ms": 100
   },
   "intervention": {
-    "poll_interval_minutes": 1.5
+    "poll_interval_minutes": 15
   },
   "mood_rating": {
-    "enabled": false,
+    "enabled": true,
     "timeout_seconds": 10
   },
   "context_service_url": "https://user-context-well-bot-520080168829.asia-south1.run.app",

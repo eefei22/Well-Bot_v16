@@ -8,35 +8,35 @@
     "emotional_score": 23
   },
   "latest_decision": {
-    "trigger_intervention": true,
-    "confidence_score": 0.731,
-    "reasoning": "Negative emotion 'Angry' detected; Confidence 0.73 >= 0.7; Time since last activity: 178.5 minutes"
+    "trigger_intervention": false,
+    "confidence_score": 0.0,
+    "reasoning": "Recent activity 17.0 minutes ago"
   },
   "latest_suggestion": {
     "ranked_activities": [
       {
-        "activity_type": "meditation",
+        "activity_type": "journal",
         "rank": 1,
         "score": 1.0
       },
       {
-        "activity_type": "journal",
+        "activity_type": "quote",
         "rank": 2,
-        "score": 0.933
+        "score": 1.0
       },
       {
-        "activity_type": "quote",
+        "activity_type": "meditation",
         "rank": 3,
-        "score": 0.8
+        "score": 0.952
       },
       {
         "activity_type": "gratitude",
         "rank": 4,
-        "score": 0.667
+        "score": 0.857
       }
     ],
-    "reasoning": "Emotion: Angry; Top suggestion: meditation (score: 1.000)"
+    "reasoning": "Emotion: Fear; Top suggestion: journal (score: 1.000)"
   },
-  "last_request_time": "2025-12-21T00:13:59.929619+08:00",
-  "last_response_time": "2025-12-21T00:14:03.770784+08:00"
+  "last_request_time": "2026-01-07T23:08:56.380953+08:00",
+  "last_response_time": "2026-01-07T23:09:00.002426+08:00"
 }

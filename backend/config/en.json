@@ -12,7 +12,7 @@
       "start": "Let's talk! What's on your mind?",
       "nudge": "Hey are you still there? Feel free to continue our conversation.",
       "timeout": "It seems like you're not there. I'll go take a break now. Just call my name when you're ready to talk again.",
-      "end": "Okay talk later, bye for now!."
+      "end": "Talk later, bye for now!."
     }
   },
   "journal": {
@@ -87,7 +87,8 @@
     "prompts": {
       "nudge": "Are you still there? Which activity would you like to try?",
       "timeout": "It seems like you're not there. I'll go take a break now. Just call my name when you're ready to talk again.",
-      "termination": "Okay, I'll catch you later."
+      "termination": "Okay, I'll catch you later.",
+      "rejection": "No problem at all. I'll be here whenever you're ready. Take care!"
     },
     "activity_names": {
       "journaling": "Journaling",
@@ -96,10 +97,10 @@
       "quote": "Inspirational Quote"
     },
     "activity_descriptions": {
-      "meditation": "a calming way to center your mind and find peace",
-      "journaling": "a chance to reflect and release your thoughts",
-      "quote": "a quick dose of motivation and perspective",
-      "gratitude": "focusing on the good to brighten your day"
+      "meditation": "",
+      "journaling": "",
+      "quote": "",
+      "gratitude": ""
     },
     "smalltalk_suggestion_message": "If you're not feeling like doing any of these suggestions, maybe we can just have a chat?"
   },
@@ -117,8 +118,9 @@
     }
   },
   "mood_rating": {
-    "prompt_before": "If you'd like — on a scale from 1 to 10 — how strong are any negative emotions you feel right now (1 = none, 10 = very strong)?",
-    "prompt_after": "If you'd like — on a scale from 1 to 10 — how strong are any negative emotions you feel right now (1 = none, 10 = very strong)?",
+    "prompt_before": "Before we start, on a scale of 1 to 10, can you rate you're feeling right now? 1 means really bad, 10 means really good.",
+    "prompt_after": "Now that we're done, on a scale of 1 to 10, can you rate you're feeling right now? 1 means really bad, 10 means really good..",
+    "acknowledgment": "Thank you for sharing.",
     "skip_phrases": ["skip", "no", "not now", "later", "pass"]
   },
   "audio_paths": {

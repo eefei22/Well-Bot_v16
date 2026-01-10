@@ -445,6 +445,8 @@ class MeditationActivity:
                 logger.error("Failed to initialize SmallTalk for handoff")
                 return False
             
+            # Pass activity log ID for post-activity mood rating tracking
+            smalltalk.set_activity_log_id(self._activity_public_id)
             smalltalk.start(seed_system_prompt=seed, custom_start_prompt=opener)
             # Continue the normal conversation loop
             ok = smalltalk._conversation_loop()

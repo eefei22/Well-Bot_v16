@@ -77,6 +77,7 @@ class JournalActivity:
         self.termination_detector: Optional[TerminationPhraseDetector] = None
         self._termination_detected = False
         self._saved = False  # Track if journal has already been saved
+        self._no_content_handled = False  # Track if no-content message has already been spoken
         
         logger.info("JournalActivity initialized")
     
@@ -89,14 +90,14 @@ class JournalActivity:
             # Load user-specific configurations
             logger.info(f"Loading configs for user {self.user_id}")
             self.global_config = get_global_config_for_user(self.user_id)
-            language_config = get_language_config(self.user_id)
+            self.language_config = get_language_config(self.user_id)
             
             # Extract journal config and audio paths
-            self.config = language_config.get("journal", {})
-            audio_paths = language_config.get("audio_paths", {})
+            self.config = self.language_config.get("journal", {})
+            audio_paths = self.language_config.get("audio_paths", {})
             self.global_journal_config = self.global_config.get("journal", {})
             
-            logger.info(f"Configs loaded - Language: {language_config.get('_resolved_language', 'unknown')}")
+            logger.info(f"Configs loaded - Language: {self.language_config.get('_resolved_language', 'unknown')}")
             logger.info(f"Journal config keys: {list(self.config.keys())}")
             
             logger.info("✓ Loaded journal configuration")
@@ -227,6 +228,7 @@ class JournalActivity:
                 # Speak message that nothing was recorded
                 no_content_msg = self.config.get("prompts", {}).get("no_content", "Nothing was recorded, ending journal session now.")
                 self._speak(no_content_msg)
+                self._no_content_handled = True  # Mark that we've already handled no-content case
                 completed = False
         except KeyboardInterrupt:
             logger.info("Journal session interrupted by user")
@@ -242,8 +244,8 @@ class JournalActivity:
             traceback.print_exc()
             completed = False
         finally:
-            # If terminated by timeout, save before cleanup (only if not already saved)
-            if self._termination_detected and not self._saved:
+            # If terminated by timeout, save before cleanup (only if not already saved and not already handled)
+            if self._termination_detected and not self._saved and not self._no_content_handled:
                 if self._has_content():
                     logger.info("Saving accumulated content after timeout termination")
                     self.state = "SAVING"
@@ -254,6 +256,7 @@ class JournalActivity:
                     # Speak message that nothing was recorded
                     no_content_msg = self.config.get("prompts", {}).get("no_content", "Nothing was recorded, ending journal session now.")
                     self._speak(no_content_msg)
+                    self._no_content_handled = True  # Mark that we've handled no-content case
                     completed = False
             
             # Note: Completion tracking removed in new schema
@@ -505,6 +508,45 @@ class JournalActivity:
                 confirmation = f"Journal entry saved with {word_count} words."
             
             self._speak(confirmation)
+            
+            # Transition to SmallTalk with contextual prompts
+            logger.info("Journal entry saved. Transitioning to SmallTalk...")
+            
+            # Clear journal face so GUI can derive next state
+            try:
+                if self.ui_interface:
+                    self.ui_interface.update_face_state(None)
+            except Exception:
+                logger.debug("Failed to clear UIInterface face_state before SmallTalk transition")
+            
+            # Load journal config for transition prompts
+            journal_cfg = self.language_config.get("journal", {})
+            seed_tmpl = journal_cfg.get(
+                "seed_system_prompt",
+                "The user just completed a journal entry. Transition into a warm, brief small talk. Journal entry preview: '{journal_preview}'. Ask one inviting, open question related to their journaling experience or what they wrote about.",
+            )
+            # Use first 200 chars of body as preview
+            journal_preview = body[:200] + "..." if len(body) > 200 else body
+            seed = seed_tmpl.replace("{journal_preview}", journal_preview)
+            custom_start = journal_cfg.get("opener", "Thanks for sharing that with me. What else is on your mind?")
+            
+            # Create and start SmallTalk
+            from src.activities.smalltalk import SmallTalkActivity
+            smalltalk = SmallTalkActivity(backend_dir=self.backend_dir, user_id=self.user_id, ui_interface=self.ui_interface)
+            if not smalltalk.initialize():
+                logger.error("Failed to initialize SmallTalk for handoff")
+                return True  # Still return True since journal was saved successfully
+            
+            # Pass activity log ID for post-activity mood rating tracking
+            smalltalk.set_activity_log_id(self._activity_public_id)
+            smalltalk.start(seed_system_prompt=seed, custom_start_prompt=custom_start)
+            
+            # Continue the normal conversation loop
+            ok = smalltalk._conversation_loop()
+            smalltalk.stop()
+            smalltalk.cleanup()
+            smalltalk.reinitialize()
+            
             return True
             
         except Exception as e:
@@ -764,6 +806,7 @@ class JournalActivity:
         self.last_final_time = None
         self._termination_detected = False
         self._saved = False
+        self._no_content_handled = False
         
         # Reset initialization state
         self._initialized = False
@@ -782,6 +825,7 @@ class JournalActivity:
         self.last_final_time = None
         self._termination_detected = False
         self._saved = False
+        self._no_content_handled = False
         
         # Re-initialize components
         return self.initialize()

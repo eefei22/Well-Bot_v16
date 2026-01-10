@@ -1,10 +1,60 @@
-# Well-Bot Project .gitignore
+# Virtual environments
+venv/
 
-# Archive folder
-archive/
+# Environment variables
+.env
 
-
+# OTHER FILES AND FOLDERS
 backend/testing/output/
+backend/config/user_persona.json
+backend/src/supabase/migrations/
+archive/
+backend/src/v_17
+documentation/
+docs/
+*.md
+*.rst
+*.txt
+*.pdf
+*.doc
+*.docx
+*.odt
+*.rtf
+*.ppt
+*.pptx
+*.csv
+*.tsv
+*.xlsx
+*.xls
+*.numbers
+*.puml
+
+#============================================================#
+
+# Temporary files
+*.tmp
+*.temp
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
 # Python
 __pycache__/
 *.py[cod]
@@ -27,58 +77,3 @@ wheels/
 .installed.cfg
 *.egg
 MANIFEST
-
-# Virtual environments
-venv/
-env/
-ENV/
-env.bak/
-venv.bak/
-frontend/venv/
-
-# Node.js / Frontend
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
-
-# Build outputs
-frontend/dist/
-frontend/build/
-
-# Environment variables
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db
-
-# Logs
-*.log
-logs/
-
-# OTHER FILES AND FOLDERS
-backend/testing/output/
-backend/config/user_persona.json
-backend/src/supabase/migrations/
-
-# Temporary files
-*.tmp
-*.temp

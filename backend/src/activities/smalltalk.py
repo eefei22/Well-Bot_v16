@@ -34,6 +34,8 @@ from src.components import (
 from src.utils.config_loader import get_deepseek_config
 from src.utils.config_resolver import get_global_config_for_user, get_language_config, resolve_language
 from src.supabase.auth import get_current_user_id
+from src.supabase.database import update_mood_rating, has_pre_activity_mood_rating
+from src.utils.mood_rating import parse_mood_rating_from_speech
 from src.components import UserContextInjector
 
 logger = logging.getLogger(__name__)
@@ -70,6 +72,9 @@ class SmallTalkActivity:
         # Activity state
         self._active = False
         self._initialized = False
+        
+        # Source activity log ID for post-activity mood rating
+        self._source_activity_log_id: Optional[str] = None
         
         logger.info(f"SmallTalkActivity initialized for user {self.user_id}")
     
@@ -399,6 +404,11 @@ class SmallTalkActivity:
             self._active = False
             return False
     
+    def set_activity_log_id(self, activity_log_id: Optional[str]):
+        """Set the source activity's log ID for post-activity mood rating tracking."""
+        self._source_activity_log_id = activity_log_id
+        logger.debug(f"Set source activity log ID: {activity_log_id}")
+    
     def stop(self):
         """Stop the SmallTalk activity"""
         if not self._active:
@@ -417,6 +427,118 @@ class SmallTalkActivity:
             self.session_manager.stop_session()
         
         logger.info("SmallTalk activity stopped")
+    
+    def _check_pre_activity_mood_rating_exists(self, activity_log_id: str) -> bool:
+        """Check if pre-activity mood rating exists for the given activity log ID."""
+        if not activity_log_id:
+            return False
+        try:
+            return has_pre_activity_mood_rating(activity_log_id)
+        except Exception as e:
+            logger.error(f"Failed to check pre-activity mood rating: {e}", exc_info=True)
+            return False
+    
+    def _prompt_post_activity_mood_rating(self) -> Optional[int]:
+        """Prompt user for post-activity mood rating and capture a single response."""
+        if not self.stt_service:
+            logger.warning("Mood rating skipped - STT service unavailable")
+            return None
+        
+        if not self._active:
+            logger.debug("Mood rating skipped - smalltalk not active")
+            return None
+        
+        # Get config
+        mood_cfg = (self.language_config or {}).get("mood_rating", {})
+        prompt = mood_cfg.get(
+            "prompt_after",
+            "If you'd like — on a scale from 1 to 10 — how strong are any negative emotions you feel right now (1 = none, 10 = very strong)?"
+        )
+        skip_phrases = mood_cfg.get("skip_phrases", ["skip", "no", "not now", "later", "pass"])
+        timeout_seconds = (self.global_config or {}).get("mood_rating", {}).get("timeout_seconds", 10.0)
+        
+        logger.info("Prompting for post-activity mood rating...")
+        
+        # Stop audio manager mic before prompting (if active)
+        if self.audio_manager:
+            self.audio_manager.stop()
+            # Small delay to ensure mic is released
+            time.sleep(0.3)
+        
+        # Speak the prompt using TTS
+        self._speak(prompt)
+        
+        # Create new mic for mood rating capture
+        mic = MicStream(rate=16000, chunk_size=1600)
+        
+        # Start the microphone
+        try:
+            mic.start()
+            mic.unmute()
+            logger.info(f"Post-activity mood rating mic started (muted={mic.is_muted()})")
+        except Exception as e:
+            logger.error(f"Failed to start mic for post-activity mood rating: {e}")
+            return None
+        
+        final_text: Optional[str] = None
+        stt_completed = threading.Event()
+        stt_error = {"error": None}
+        
+        def on_transcript(text: str, is_final: bool):
+            nonlocal final_text
+            if is_final and text:
+                final_text = text
+                if mic.is_running():
+                    mic.stop()
+        
+        def run_stt():
+            try:
+                self.stt_service.stream_recognize(
+                    mic.generator(),
+                    on_transcript,
+                    interim_results=True,
+                    single_utterance=True
+                )
+            except Exception as e:
+                stt_error["error"] = e
+                logger.error(f"STT error during post-activity mood rating capture: {e}")
+            finally:
+                stt_completed.set()
+        
+        stt_thread = threading.Thread(target=run_stt, daemon=True)
+        stt_thread.start()
+        
+        # Wait for response with timeout
+        if not stt_completed.wait(timeout=timeout_seconds):
+            logger.info(f"Post-activity mood rating prompt timed out after {timeout_seconds}s")
+            if mic.is_running():
+                mic.stop()
+        else:
+            logger.debug("STT completed for post-activity mood rating")
+        
+        stt_thread.join(timeout=1.0)
+        
+        try:
+            if stt_error["error"]:
+                return None
+            if final_text:
+                rating = parse_mood_rating_from_speech(final_text, skip_phrases)
+                logger.info(f"Post-activity mood rating: {rating}")
+                
+                # Speak acknowledgment if rating was successfully captured
+                if rating is not None:
+                    mood_cfg = (self.language_config or {}).get("mood_rating", {})
+                    acknowledgment = mood_cfg.get("acknowledgment", "")
+                    if acknowledgment:
+                        logger.debug("Speaking post-activity mood rating acknowledgment")
+                        self._speak(acknowledgment)
+                
+                return rating
+            logger.debug("No response received for post-activity mood rating prompt")
+            return None
+        finally:
+            if mic.is_running():
+                mic.stop()
     
     def cleanup(self):
         """Complete cleanup of all resources including native libraries, cached resources, and dependencies"""
@@ -678,6 +800,25 @@ class SmallTalkActivity:
                     logger.info("No termination detected, proceeding with conversation...")
                 except TerminationPhraseDetected as e:
                     logger.info(f"TERMINATION TRIGGERED! {e}")
+                    
+                    # Check if we should prompt for post-activity mood rating
+                    post_activity_rating: Optional[int] = None
+                    if self._source_activity_log_id:
+                        if self._check_pre_activity_mood_rating_exists(self._source_activity_log_id):
+                            logger.info("Pre-activity mood rating exists, prompting for post-activity mood rating...")
+                            post_activity_rating = self._prompt_post_activity_mood_rating()
+                            
+                            # Write post-activity mood rating to database
+                            if self._source_activity_log_id:
+                                try:
+                                    update_mood_rating(self._source_activity_log_id, post_rating=post_activity_rating)
+                                    logger.info(f"Post-activity mood rating written to DB: {post_activity_rating}")
+                                except Exception as e:
+                                    logger.error(f"Failed to write post-activity mood rating to DB: {e}", exc_info=True)
+                        else:
+                            logger.debug("No pre-activity mood rating found, skipping post-activity prompt")
+                    else:
+                        logger.debug("No source activity log ID, skipping post-activity mood rating")
                     
                     use_audio_files = self.global_smalltalk_config.get("use_audio_files", False)
                     
