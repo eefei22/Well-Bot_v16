@@ -16,6 +16,19 @@ from pathlib import Path
 from typing import Optional
 from datetime import datetime
 
+# Try to import Picamera2 (Hardware specific)
+try:
+    from picamera2 import Picamera2
+    PICAMERA_AVAILABLE = True
+except ImportError:
+    PICAMERA_AVAILABLE = False
+
+# Try to import OpenCV (needed for saving the array to image)
+try:
+    import cv2
+except ImportError:
+    cv2 = None
+
 # Add backend directory to path for imports
 backend_dir = Path(__file__).parent.parent.parent
 sys.path.append(str(backend_dir))
@@ -64,6 +77,10 @@ class EmotionMonitoringActivity:
         
         # SharedAudioManager subscription
         self._audio_generator = None
+
+        # Camera Object (Picamera2)
+        self.picam2 = None
+        self._camera_available = False
         
         # Activity state
         self._active = False
@@ -102,6 +119,25 @@ class EmotionMonitoringActivity:
             )
             
             logger.info("✓ Subscribed to SharedAudioManager")
+
+            # Initialize & Start Camera (Picamera2)
+            if PICAMERA_AVAILABLE and cv2 is not None:
+                try:
+                    logger.info("Starting Picamera2...")
+                    self.picam2 = Picamera2()
+                    # Configure for 640x480 still capture (matches send_image.py)
+                    config = self.picam2.create_still_configuration(main={"size": (640, 480)})
+                    self.picam2.configure(config)
+                    self.picam2.start()
+                    
+                    self._camera_available = True
+                    logger.info("✓ Picamera2 started successfully")
+                except Exception as e:
+                    logger.error(f"Failed to start Picamera2: {e}")
+                    self._camera_available = False
+            else:
+                logger.warning("Picamera2 or OpenCV not installed. Image capture disabled.")
+                self._camera_available = False
             
             self._initialized = True
             logger.info("Emotion Monitoring activity initialized successfully")
@@ -319,7 +355,7 @@ class EmotionMonitoringActivity:
         request_thread.start()
         
         # Wait for completion or stop signal
-        # SER requests typically take 5-15 seconds, so we wait up to 15 seconds
+        # SER requests tyddlly take 5-15 seconds, so we wait up to 15 seconds
         # But we check frequently (every 100ms) to respond quickly to stop signals
         timeout = 15.0  # Allow enough time for SER requests to complete
         check_interval = 0.1  # Check every 100ms
@@ -439,37 +475,20 @@ class EmotionMonitoringActivity:
     
     def _capture_image(self) -> Optional[Path]:
         """
-        Capture image from camera.
-        
-        Returns:
-            Path to temporary image file if successful, None if failed
+        Capture image using Picamera2.
+        Matches logic from send_image.py: capture_array -> imwrite
         """
         try:
-            # Try to import cv2 (OpenCV)
-            try:
-                import cv2
-            except ImportError:
-                logger.debug("OpenCV not available, cannot capture images")
+            if not self.picam2 or not self._camera_available:
                 return None
+
+            logger.debug("Capturing image with Picamera2...")
+
+            # 1. Capture Raw Array (like send_image.py)
+            frame = self.picam2.capture_array()
             
-            logger.debug("Capturing image from camera...")
-            
-            # Open camera
-            camera = cv2.VideoCapture(0)
-            if not camera.isOpened():
-                logger.debug("Camera not available")
-                camera.release()
-                return None
-            
-            # Capture frame
-            ret, frame = camera.read()
-            camera.release()
-            
-            if not ret or frame is None:
-                logger.debug("Failed to capture frame from camera")
-                return None
-            
-            # Save to temporary JPEG file
+            # 2. Save to Temp File
+            # We use tempfile instead of /tmp/frame.jpg to avoid thread conflicts
             temp_file = tempfile.NamedTemporaryFile(
                 delete=False,
                 suffix='.jpg',
@@ -477,15 +496,19 @@ class EmotionMonitoringActivity:
             )
             temp_path = Path(temp_file.name)
             temp_file.close()
+
+            # 3. Write using OpenCV
+            success = cv2.imwrite(str(temp_path), frame)
             
-            # Write image file
-            cv2.imwrite(str(temp_path), frame)
-            
-            logger.debug(f"Image captured and saved to {temp_path}")
+            if not success:
+                logger.warning("cv2.imwrite failed to save image")
+                return None
+
+            logger.debug(f"Image saved to {temp_path}")
             return temp_path
-            
+
         except Exception as e:
-            logger.debug(f"Error capturing image: {e}")
+            logger.error(f"Error capturing image with Picamera2: {e}")
             return None
     
     def _check_camera_available(self) -> bool:
@@ -495,27 +518,7 @@ class EmotionMonitoringActivity:
         Returns:
             True if camera is available, False otherwise
         """
-        if self._camera_available is not None:
-            return self._camera_available
-        
-        try:
-            import cv2
-            camera = cv2.VideoCapture(0)
-            if camera.isOpened():
-                camera.release()
-                self._camera_available = True
-                logger.info("Camera is available")
-            else:
-                self._camera_available = False
-                logger.info("Camera is not available")
-        except ImportError:
-            self._camera_available = False
-            logger.info("OpenCV not installed, camera not available")
-        except Exception as e:
-            self._camera_available = False
-            logger.debug(f"Error checking camera: {e}")
-        
-        return self._camera_available
+        return self._camera_available and self.picam2 is not None
     
     def is_active(self) -> bool:
         """Check if emotion monitoring is currently active"""
@@ -525,7 +528,18 @@ class EmotionMonitoringActivity:
     def cleanup(self):
         """Cleanup resources"""
         self.stop()
-        
+
+        # Stop the camera explicitly
+        if self.picam2:
+            try:
+                logger.info("Stopping Picamera2...")
+                self.picam2.stop()
+                # self.picam2.close() # Note: Picamera2 usually just needs stop(), close() depends on version
+                self.picam2 = None
+                logger.info("Picamera2 stopped.")
+            except Exception as e:
+                logger.warning(f"Error cleaning up camera: {e}")
+
         # Ensure unsubscribe (in case stop() didn't handle it)
         if self._audio_generator:
             try:

@@ -93,6 +93,43 @@ class WellBotOrchestrator:
                 error_message = en_config.get('startup', {}).get('device_not_associated', 
                     "This device is not associated to any user. Please contact Well-Bot customer service for assistance.")
                 
+                logger.error(f"Failed to resolve user: {e}. Initializing GUI to show pairing failure.")
+                try:
+                    self.ui_interface = UIInterface()
+                    backend_assets = self.backend_dir / "assets" / "GUI"
+                    
+                    # Define GIF files, including the new gui_failpairing.gif
+                    gif_files = {
+                        "idle": str((backend_assets / "gui_idleing.gif")), # Fallback
+                        "pairing_failed": str(backend_assets / "gui_failpairing.gif") 
+                    }
+
+                    # Preload assets
+                    try:
+                        preloaded = preload_gif_data(gif_files)
+                    except Exception as pre_err:
+                        logger.warning(f"Preloading failure GIFs failed: {pre_err}")
+                        preloaded = {}
+
+                    # Start the GUI
+                    self._gui_window = start_gui(
+                        self.ui_interface, 
+                        preloaded if preloaded else None, 
+                        update_interval_ms=100, 
+                        wait_for_ready_seconds=2.0
+                    )
+
+                    # Explicitly set the state to 'pairing_failed' so the GIF plays
+                    if self.ui_interface:
+                        self.ui_interface.set_state("pairing_failed")
+                        
+                    # Wait briefly for window to render
+                    if self._gui_window and hasattr(self._gui_window, 'wait_until_ready'):
+                        self._gui_window.wait_until_ready(timeout=3.0)
+
+                except Exception as ui_err:
+                    logger.warning(f"Failed to start GUI for pairing failure: {ui_err}")
+
                 # Speak error message via TTS
                 logger.error("DEVICE_ID environment variable is not set")
                 # Initialize a minimal UI so the face GUI can load frames and display
@@ -162,23 +199,85 @@ class WellBotOrchestrator:
             )
             logger.info(f"✓ User resolved and saved: user_id={self.user_id}, prefer_name={self.prefer_name}, full_name={self.full_name}")
         except ValueError as e:
-            # Load English config for error message (default)
+            # Could not resolve device -> show pairing failure UI and poll until device is associated
+            logger.error(f"Failed to resolve user from device_id {DEVICE_ID}: {e}")
+
+            # Start GUI (if possible) and show pairing failure animation
             try:
-                en_config = load_language_config('en')
-                error_message = en_config.get('startup', {}).get('device_not_associated',
-                    "This device is not associated to any user. Please contact Well-Bot customer service for assistance.")
-                
-                # Speak error message via TTS
-                logger.error(f"Failed to resolve user from device_id {DEVICE_ID}: {e}")
-                self._speak_startup_message(error_message, language='en')
-                logger.error(error_message)
-            except Exception as tts_error:
-                logger.warning(f"Failed to speak error message: {tts_error}")
-            
-            raise RuntimeError(
-                f"Cannot start Well-Bot: {e}. "
-                "Please ensure the device is registered in the database."
-            ) from e
+                self.ui_interface = UIInterface()
+                backend_assets = self.backend_dir / "assets" / "GUI"
+                gif_files = {
+                    "pairing_failed": str(backend_assets / "gui_failpairing.gif"),
+                    "idle": str(backend_assets / "gui_idleing.gif"),
+                }
+                try:
+                    preloaded = preload_gif_data(gif_files)
+                except Exception as pre_err:
+                    logger.warning(f"Preloading pairing-failed GIFs failed: {pre_err}")
+                    preloaded = {}
+
+                self._gui_window = start_gui(
+                    self.ui_interface,
+                    preloaded if preloaded else None,
+                    update_interval_ms=100,
+                    wait_for_ready_seconds=5.0,
+                )
+
+                # Wait for first frame rendered if supported
+                if self._gui_window and getattr(self._gui_window, 'wait_until_ready', None):
+                    try:
+                        self._gui_window.wait_until_ready(timeout=5.0)
+                    except Exception:
+                        logger.debug("GUI readiness wait failed or timed out")
+
+                # Request pairing_failed face
+                try:
+                    if self.ui_interface:
+                        self.ui_interface.update_face_state("pairing_failed")
+                except Exception:
+                    logger.debug("Failed to set pairing_failed face state")
+
+                # Speak pairing failure message so user is informed (block until TTS finishes)
+                try:
+                    en_config = load_language_config('en')
+                    error_message = en_config.get('startup', {}).get('device_not_associated',
+                        "This device is not associated to any user. Please contact Well-Bot customer service for assistance.")
+                    logger.info("Speaking pairing failure message to user")
+                    self._speak_startup_message(error_message, language='en')
+                except Exception as tts_err:
+                    logger.warning(f"Failed to play pairing failure TTS: {tts_err}")
+
+            except Exception as ui_err:
+                logger.warning(f"Failed to start GUI for pairing failure: {ui_err}")
+
+            # Poll the database every 15 seconds until the device is associated
+            logger.info("Polling for device association every 15s...")
+            while True:
+                try:
+                    user_info = resolve_user_from_device_id(DEVICE_ID)
+                    # Success: save and continue startup
+                    self.user_id = user_info['user_id']
+                    self.prefer_name = user_info.get('prefer_name')
+                    self.full_name = user_info.get('full_name')
+                    save_user_context_to_local(
+                        user_id=self.user_id,
+                        prefer_name=self.prefer_name,
+                        full_name=self.full_name,
+                        backend_dir=self.backend_dir
+                    )
+                    logger.info(f"Device successfully paired: user_id={self.user_id}")
+
+                    # Switch GUI back to normal idle mode
+                    try:
+                        if self.ui_interface:
+                            self.ui_interface.update_face_state(None)
+                    except Exception:
+                        logger.debug("Failed to clear pairing_failed face state")
+
+                    break
+                except Exception:
+                    logger.debug("Device not yet associated; retrying in 15s")
+                    time.sleep(15)
         
         # Load user-specific config (will be loaded in _initialize_components)
         self.global_config = None

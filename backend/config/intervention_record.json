@@ -10,7 +10,7 @@
   "latest_decision": {
     "trigger_intervention": false,
     "confidence_score": 0.0,
-    "reasoning": "Recent activity 17.0 minutes ago"
+    "reasoning": "Recent activity 2.5 minutes ago"
   },
   "latest_suggestion": {
     "ranked_activities": [
@@ -37,6 +37,6 @@
     ],
     "reasoning": "Emotion: Fear; Top suggestion: journal (score: 1.000)"
   },
-  "last_request_time": "2026-01-07T23:08:56.380953+08:00",
-  "last_response_time": "2026-01-07T23:09:00.002426+08:00"
+  "last_request_time": "2026-01-10T15:08:29.172242+08:00",
+  "last_response_time": "2026-01-10T15:08:32.262024+08:00"
 }
