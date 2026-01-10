@@ -25,7 +25,9 @@ class UIInterface:
         self._lock = threading.Lock()
         self._state: Dict[str, Any] = {
             "mic_status": "idle",      # "listening", "idle", "muted"
-            "speaker_status": "idle"   # "speaking", "idle"
+            "speaker_status": "idle",  # "speaking", "idle"
+            "loading_status": "idle",  # "loading", "idle"
+            "face_state": None           # explicit face state override (e.g., 'journaling')
         }
         self._listeners: list[Callable] = []
         
@@ -59,6 +61,34 @@ class UIInterface:
             if old_status != status:
                 logger.debug(f"Speaker status updated: {old_status} -> {status}")
         
+        self._notify_listeners()
+    
+    def update_loading_status(self, status: str):
+        """
+        Update loading status.
+        
+        Args:
+            status: "loading" or "idle"
+        """
+        with self._lock:
+            old_status = self._state.get("loading_status")
+            self._state["loading_status"] = status
+            if old_status != status:
+                logger.debug(f"Loading status updated: {old_status} -> {status}")
+        
+        self._notify_listeners()
+
+    def update_face_state(self, state: Optional[str]):
+        """
+        Set an explicit face state. Passing None clears the explicit face_state
+        so the GUI will derive state from mic/speaker/loading statuses again.
+        """
+        with self._lock:
+            old_state = self._state.get("face_state")
+            self._state["face_state"] = state
+            if old_state != state:
+                logger.debug(f"Face state updated: {old_state} -> {state}")
+
         self._notify_listeners()
     
     def get_snapshot(self) -> Dict[str, Any]:
@@ -123,15 +153,27 @@ class NoOpUIInterface:
     def update_speaker_status(self, status: str):
         """No-op: do nothing."""
         pass
-    
+    def update_loading_status(self, status: str):
+        """No-op: do nothing."""
+        pass
+
+    def update_face_state(self, state: Optional[str]):
+        """No-op: do nothing."""
+        pass
+
     def get_snapshot(self) -> Dict[str, Any]:
         """No-op: return empty state."""
-        return {"mic_status": "idle", "speaker_status": "idle"}
-    
+        return {
+            "mic_status": "idle",
+            "speaker_status": "idle",
+            "loading_status": "idle",
+            "face_state": None
+        }
+
     def register_listener(self, callback: Callable):
         """No-op: do nothing."""
         pass
-    
+
     def unregister_listener(self, callback: Callable):
         """No-op: do nothing."""
         pass

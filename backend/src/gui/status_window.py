@@ -1,247 +1,166 @@
-"""
-Status Window - Simple GUI for displaying mic/speaker status
+# """
+# Status Window - Simple GUI for displaying mic/speaker status 
 
-Uses Tkinter to show real-time status of microphone and speaker.
-"""
+# Uses Tkinter to show real-time status of microphone and speaker.
+# """
 
-import tkinter as tk
-from tkinter import ttk
-import threading
-import logging
-from typing import Optional
+# import os
+# import tkinter as tk
+# from PIL import Image, ImageTk, ImageSequence
+# import threading
+# import time
+# import logging
+# from typing import Optional
 
-logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 
-
-class StatusWindow:
-    """
-    Simple Tkinter window showing microphone and speaker status.
-    
-    Polls UI interface for updates and displays status with color indicators.
-    """
-    
-    def __init__(self, ui_interface, update_interval_ms: int = 100):
-        """
-        Initialize the status window.
-        
-        Args:
-            ui_interface: UIInterface instance to poll for updates
-            update_interval_ms: How often to poll for updates (milliseconds)
-        """
-        self.ui_interface = ui_interface
-        self.update_interval_ms = update_interval_ms
-        
-        # Create root window
-        self.root = tk.Tk()
-        self.root.title("Well-Bot Status")
-        self.root.geometry("300x150")
-        self.root.resizable(False, False)
-        
-        # Configure window close behavior
-        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
-        
-        # Status variables
-        self.mic_status = tk.StringVar(value="Idle")
-        self.speaker_status = tk.StringVar(value="Idle")
-        
-        # Create UI elements
-        self._create_widgets()
-        
-        # Start polling for updates
-        self._poll_updates()
-        
-        logger.info("Status window initialized")
-    
-    def _create_widgets(self):
-        """Create and layout GUI widgets."""
-        # Main container
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
-        
-        # Microphone status
-        mic_frame = ttk.Frame(main_frame)
-        mic_frame.grid(row=0, column=0, sticky=(tk.W, tk.E), pady=5)
-        
-        ttk.Label(mic_frame, text="Microphone:", font=("Arial", 10, "bold")).grid(row=0, column=0, padx=5)
-        self.mic_label = ttk.Label(
-            mic_frame, 
-            textvariable=self.mic_status,
-            font=("Arial", 10),
-            foreground="gray"
-        )
-        self.mic_label.grid(row=0, column=1, padx=5)
-        self.mic_indicator = tk.Canvas(mic_frame, width=20, height=20, highlightthickness=0)
-        self.mic_indicator.grid(row=0, column=2, padx=5)
-        self._update_mic_indicator("idle")
-        
-        # Speaker status
-        speaker_frame = ttk.Frame(main_frame)
-        speaker_frame.grid(row=1, column=0, sticky=(tk.W, tk.E), pady=5)
-        
-        ttk.Label(speaker_frame, text="Speaker:", font=("Arial", 10, "bold")).grid(row=0, column=0, padx=5)
-        self.speaker_label = ttk.Label(
-            speaker_frame,
-            textvariable=self.speaker_status,
-            font=("Arial", 10),
-            foreground="gray"
-        )
-        self.speaker_label.grid(row=0, column=1, padx=5)
-        self.speaker_indicator = tk.Canvas(speaker_frame, width=20, height=20, highlightthickness=0)
-        self.speaker_indicator.grid(row=0, column=2, padx=5)
-        self._update_speaker_indicator("idle")
-        
-        # Configure grid weights
-        self.root.columnconfigure(0, weight=1)
-        self.root.rowconfigure(0, weight=1)
-        main_frame.columnconfigure(0, weight=1)
-    
-    def _update_mic_indicator(self, status: str):
-        """
-        Update microphone indicator color.
-        
-        Args:
-            status: "listening" (green), "idle" (gray), "muted" (orange)
-        """
-        self.mic_indicator.delete("all")
-        
-        if status == "listening":
-            color = "green"
-        elif status == "muted":
-            color = "orange"
-        else:  # idle
-            color = "gray"
-        
-        # Draw circle indicator
-        self.mic_indicator.create_oval(2, 2, 18, 18, fill=color, outline="black", width=1)
-    
-    def _update_speaker_indicator(self, status: str):
-        """
-        Update speaker indicator color.
-        
-        Args:
-            status: "speaking" (blue), "idle" (gray)
-        """
-        self.speaker_indicator.delete("all")
-        
-        if status == "speaking":
-            color = "blue"
-        else:  # idle
-            color = "gray"
-        
-        # Draw circle indicator
-        self.speaker_indicator.create_oval(2, 2, 18, 18, fill=color, outline="black", width=1)
-    
-    def _poll_updates(self):
-        """Poll UI interface for updates and refresh display."""
-        try:
-            snapshot = self.ui_interface.get_snapshot()
-            
-            # Update mic status
-            mic_status = snapshot.get("mic_status", "idle")
-            if mic_status == "listening":
-                self.mic_status.set("Listening")
-                self.mic_label.config(foreground="green")
-            elif mic_status == "muted":
-                self.mic_status.set("Muted")
-                self.mic_label.config(foreground="orange")
-            else:
-                self.mic_status.set("Idle")
-                self.mic_label.config(foreground="gray")
-            self._update_mic_indicator(mic_status)
-            
-            # Update speaker status
-            speaker_status = snapshot.get("speaker_status", "idle")
-            if speaker_status == "speaking":
-                self.speaker_status.set("Speaking")
-                self.speaker_label.config(foreground="blue")
-            else:
-                self.speaker_status.set("Idle")
-                self.speaker_label.config(foreground="gray")
-            self._update_speaker_indicator(speaker_status)
-            
-        except Exception as e:
-            logger.error(f"Error polling UI updates: {e}", exc_info=True)
-        
-        # Schedule next poll
-        self.root.after(self.update_interval_ms, self._poll_updates)
-    
-    def _on_close(self):
-        """Handle window close event."""
-        logger.info("Status window closed by user")
-        self.root.destroy()
-    
-    def run(self):
-        """Start the GUI main loop (blocks until window is closed)."""
-        try:
-            # Start polling updates
-            self._poll_updates()
-            # Run mainloop (must be in main thread on Windows)
-            self.root.mainloop()
-        except Exception as e:
-            logger.error(f"Error in GUI mainloop: {e}", exc_info=True)
-    
-    def update_non_blocking(self):
-        """
-        Update GUI without blocking (for use in main thread polling).
-        Call this periodically from main thread instead of mainloop().
-        """
-        try:
-            self.root.update_idletasks()
-            self.root.update()
-        except Exception as e:
-            # Window might be closed
-            if "application has been destroyed" not in str(e).lower():
-                logger.error(f"Error updating GUI: {e}", exc_info=True)
-    
-    def close(self):
-        """Close the window programmatically."""
-        if self.root:
-            self.root.quit()
-            self.root.destroy()
+# # Paths to GIF animations (relative to backend/src)
+# ASSET_DIR = os.path.join(os.path.dirname(__file__), "../../assets/GUI")
+# IDLE_GIF = os.path.join(ASSET_DIR, "gui_idle.gif")
+# LISTEN_GIF = os.path.join(ASSET_DIR, "gui_listen.gif")
+# SPEAK_GIF = os.path.join(ASSET_DIR, "gui_speak.gif")
 
 
-def start_gui(ui_interface, update_interval_ms: int = 100) -> Optional[StatusWindow]:
-    """
-    Create the GUI window (must be called from main thread on Windows).
-    
-    Note: Tkinter on Windows requires running in the main thread. This function
-    creates the window and sets up polling. The caller must periodically call
-    window.update_non_blocking() from the main thread, or start a separate
-    thread only if not on Windows.
-    
-    Args:
-        ui_interface: UIInterface instance
-        update_interval_ms: Polling interval in milliseconds
-        
-    Returns:
-        StatusWindow instance or None if GUI failed to start
-    """
-    try:
-        import sys
-        window = StatusWindow(ui_interface, update_interval_ms)
-        
-        # On Windows, Tkinter must run in main thread
-        # Use a separate thread only on non-Windows systems
-        if sys.platform == "win32":
-            # On Windows, we'll use update_non_blocking() from main thread
-            # Start polling in the window
-            window._poll_updates()
-            logger.info("GUI window created (Windows - use update_non_blocking() in main thread)")
-        else:
-            # On Linux/Mac, we can use a separate thread
-            def run_gui():
-                try:
-                    window.run()
-                except Exception as e:
-                    logger.error(f"GUI thread error: {e}", exc_info=True)
-            
-            gui_thread = threading.Thread(target=run_gui, daemon=True, name="GUI-Thread")
-            gui_thread.start()
-            logger.info("GUI started in separate thread (non-Windows)")
-        
-        return window
-        
-    except Exception as e:
-        logger.error(f"Failed to start GUI: {e}", exc_info=True)
-        return None
+# class FaceDisplayWindow:
+#     """
+#     Fullscreen Tkinter window that displays animated robot face GIFs.
 
+#     States:
+#         - idle      → gui_idle.gif
+#         - listening → gui_listen.gif
+#         - speaking  → gui_speak.gif
+#     """
+
+#     def __init__(self, ui_interface, update_interval_ms: int = 100):
+#         self.ui_interface = ui_interface
+#         self.update_interval_ms = update_interval_ms
+
+#         # Tk window
+#         self.root = tk.Tk()
+#         self.root.title("Well-Bot Face Display")
+#         self.root.attributes("-fullscreen", True)
+#         self.root.configure(bg="black")
+
+#         # Screen size
+#         self.screen_w = self.root.winfo_screenwidth()
+#         self.screen_h = self.root.winfo_screenheight()
+
+#         # Label to show animation frames
+#         self.label = tk.Label(self.root, bg="black")
+#         self.label.pack(expand=True, fill="both")
+
+#         # Load animation frames
+#         self.animations = {
+#             "idle": self._load_gif(IDLE_GIF),
+#             "listening": self._load_gif(LISTEN_GIF),
+#             "speaking": self._load_gif(SPEAK_GIF),
+#         }
+
+#         # Set initial state
+#         self.current_state = "idle"
+#         self.current_frames = self.animations["idle"]
+
+#         # Animation control
+#         self._running = True
+#         self._frame_index = 0
+
+#         # Start animation thread
+#         threading.Thread(target=self._animation_loop, daemon=True).start()
+
+#         # Poll UIInterface
+#         self._poll_updates()
+
+#         logger.info("FaceDisplayWindow initialized")
+
+#     ###########################################################################
+#     # GIF LOADING
+#     ###########################################################################
+#     def _load_gif(self, path):
+#         """Load a GIF into a list of Tkinter-compatible frames."""
+#         frames = []
+#         img = Image.open(path)
+
+#         for frame in ImageSequence.Iterator(img):
+#             frame = frame.convert("RGBA")
+#             frame = frame.resize((self.screen_w, self.screen_h), Image.ANTIALIAS)
+#             frames.append(ImageTk.PhotoImage(frame))
+
+#         return frames
+
+#     ###########################################################################
+#     # STATE UPDATE FROM BACKEND (MIC/SPEAKER)
+#     ###########################################################################
+#     def _poll_updates(self):
+#         """Poll UIInterface for mic/speaker state and update animation state."""
+#         try:
+#             snapshot = self.ui_interface.get_snapshot()
+#             mic = snapshot.get("mic_status", "idle")
+#             speaker = snapshot.get("speaker_status", "idle")
+
+#             new_state = "idle"
+
+#             if speaker == "speaking":
+#                 new_state = "speaking"
+#             elif mic == "listening":
+#                 new_state = "listening"
+
+#             if new_state != self.current_state:
+#                 logger.info(f"FaceDisplay switching to state: {new_state}")
+#                 self.current_state = new_state
+#                 self.current_frames = self.animations[new_state]
+#                 self._frame_index = 0  # restart animation
+
+#         except Exception as e:
+#             logger.error(f"Error polling UIInterface: {e}", exc_info=True)
+
+#         # Poll every update interval
+#         self.root.after(self.update_interval_ms, self._poll_updates)
+
+#     ###########################################################################
+#     # ANIMATION LOOP
+#     ###########################################################################
+#     def _animation_loop(self):
+#         """Continuously display GIF frames."""
+#         while self._running:
+#             try:
+#                 frame = self.current_frames[self._frame_index]
+#                 self.root.after(0, self._update_frame, frame)
+
+#                 self._frame_index = (self._frame_index + 1) % len(self.current_frames)
+#                 time.sleep(0.07)  # ~14 FPS (adjust based on GIF speed)
+#             except Exception as e:
+#                 logger.error(f"Animation loop error: {e}", exc_info=True)
+#                 time.sleep(0.1)
+
+#     def _update_frame(self, frame):
+#         self.label.config(image=frame)
+#         self.label.image = frame
+
+#     ###########################################################################
+#     # WINDOW CONTROL
+#     ###########################################################################
+#     def run(self):
+#         """Run Tkinter main loop."""
+#         self.root.mainloop()
+
+#     def stop(self):
+#         self._running = False
+#         self.root.quit()
+#         self.root.destroy()
+
+
+# ###############################################################################
+# # ENTRY POINT FOR APP
+# ###############################################################################
+# def start_gui(ui_interface, update_interval_ms: int = 100) -> FaceDisplayWindow:
+#     """
+#     Create and launch the robot face GUI window (for Raspberry Pi display).
+#     """
+#     try:
+#         window = FaceDisplayWindow(ui_interface, update_interval_ms)
+#         threading.Thread(target=window.run, daemon=True).start()
+#         logger.info("FaceDisplayWindow started")
+#         return window
+#     except Exception as e:
+#         logger.error(f"Failed to start face GUI: {e}", exc_info=True)
+#         return None

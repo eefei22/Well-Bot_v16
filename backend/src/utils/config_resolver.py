@@ -33,6 +33,16 @@ LANGUAGE_CODES = {
     }
 }
 
+# Language name to code mappings (case-insensitive)
+# Maps full language names from database to language codes
+LANGUAGE_NAME_TO_CODE = {
+    'english': 'en',
+    'chinese': 'cn',
+    'malay': 'bm',
+    'bahasa malay': 'bm',
+    'bahasa': 'bm'
+}
+
 class ConfigResolver:
     """Resolves and caches user-specific configurations."""
     
@@ -76,12 +86,33 @@ class ConfigResolver:
             return 'en'
     
     def _normalize_language(self, lang: Optional[str]) -> LanguageCode:
-        """Normalize and validate language code."""
+        """
+        Normalize and validate language code.
+        Handles both language codes ('en', 'cn', 'bm') and full language names
+        ('English', 'Chinese', 'Malay', 'Bahasa Malay') from the database.
+        """
         if not lang:
             return 'en'
-        lang = lang.lower().strip()
-        if lang in ('en', 'cn', 'bm'):
-            return lang
+        
+        # Normalize input: lowercase and strip whitespace
+        lang_normalized = lang.lower().strip()
+        
+        # First check if it's already a valid language code
+        if lang_normalized in ('en', 'cn', 'bm'):
+            return lang_normalized
+        
+        # Check against language name mappings
+        if lang_normalized in LANGUAGE_NAME_TO_CODE:
+            mapped_code = LANGUAGE_NAME_TO_CODE[lang_normalized]
+            logger.debug(f"Mapped language name '{lang}' to code '{mapped_code}'")
+            return mapped_code
+        
+        # No match found - log warning and fall back to 'en'
+        logger.warning(
+            f"Unmapped language value '{lang}' (normalized: '{lang_normalized}'). "
+            f"Falling back to 'en'. Valid values: language codes ('en', 'cn', 'bm') or "
+            f"language names ({', '.join(LANGUAGE_NAME_TO_CODE.keys())})"
+        )
         return 'en'
     
     def get_language_config(self, user_id: str) -> dict:

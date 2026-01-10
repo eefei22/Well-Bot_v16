@@ -32,6 +32,81 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+def _detect_language_simple(text: str) -> Optional[str]:
+    """
+    Simple language detection using heuristics.
+    Returns 'en', 'cn', 'bm', or None if uncertain.
+    """
+    if not text or not text.strip():
+        return None
+    
+    # Count Chinese characters (CJK Unified Ideographs)
+    chinese_chars = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
+    total_chars = len([c for c in text if c.isalnum() or '\u4e00' <= c <= '\u9fff'])
+    
+    if total_chars == 0:
+        return None
+    
+    chinese_ratio = chinese_chars / total_chars if total_chars > 0 else 0
+    
+    # If more than 30% Chinese characters, likely Chinese
+    if chinese_ratio > 0.3:
+        return 'cn'
+    
+    # Check for common Malay words/patterns
+    malay_indicators = ['saya', 'anda', 'tidak', 'adalah', 'dengan', 'untuk', 'yang', 'ini', 'itu', 'dan', 'atau']
+    text_lower = text.lower()
+    malay_count = sum(1 for word in malay_indicators if word in text_lower)
+    
+    # If contains multiple Malay words, likely Malay
+    if malay_count >= 2:
+        return 'bm'
+    
+    # Default to English if no strong indicators
+    return 'en'
+
+
+def _validate_response_language(response: str, expected_lang: str, language_code: str) -> Tuple[str, bool]:
+    """
+    Validate that LLM response is in the expected language.
+    
+    Args:
+        response: LLM response text
+        expected_lang: Expected language code ('en', 'cn', 'bm')
+        language_code: Language code from config (e.g., 'cmn-CN', 'en-US')
+    
+    Returns:
+        Tuple of (corrected_response, was_corrected)
+    """
+    detected = _detect_language_simple(response)
+    
+    # Map language_code to expected_lang for comparison
+    lang_map = {
+        'en': 'en',
+        'cn': 'cn', 
+        'cmn-CN': 'cn',
+        'bm': 'bm',
+        'id-ID': 'bm',
+        'ms': 'bm'
+    }
+    
+    expected_from_code = lang_map.get(language_code, expected_lang)
+    
+    # If detected language matches expected, return as-is
+    if detected == expected_from_code:
+        return response, False
+    
+    # Language mismatch detected - log warning
+    logger.warning(
+        f"Language mismatch detected! Expected: {expected_from_code}, Detected: {detected}. "
+        f"Response preview: {response[:100]}"
+    )
+    
+    # For now, return the response as-is but log the issue
+    # In the future, we could add translation or retry logic here
+    return response, False
+
+
 class SmallTalkSession:
     """
     Conversation loop:
@@ -55,6 +130,14 @@ class SmallTalkSession:
         self.mic_factory = mic_factory
         self.language_code = language_code
         self.min_confidence = min_confidence
+        
+        # Extract expected language code from language_code (e.g., 'cmn-CN' -> 'cn', 'en-US' -> 'en')
+        lang_map = {
+            'en': 'en', 'en-US': 'en', 'en-GB': 'en',
+            'cn': 'cn', 'cmn-CN': 'cn', 'zh-CN': 'cn', 'zh': 'cn',
+            'bm': 'bm', 'id-ID': 'bm', 'ms': 'bm', 'ms-MY': 'bm'
+        }
+        self.expected_lang = lang_map.get(language_code, 'en')
         
         # Initialize or use provided ConversationSession
         if conversation_session is None:
@@ -147,7 +230,37 @@ class SmallTalkSession:
 
         print()  # newline after full stream
         full_text = "".join(text_chunks)
-        self.messages.append({"role": "assistant", "content": full_text})
+        
+        # Validate response language and apply guardrail
+        validated_text, was_corrected = _validate_response_language(
+            full_text, 
+            self.expected_lang, 
+            self.language_code
+        )
+        
+        # If language mismatch detected, add a stronger reminder to system prompt for next time
+        detected_lang = _detect_language_simple(validated_text)
+        if was_corrected or (detected_lang != self.expected_lang):
+            logger.warning(
+                f"Language guardrail triggered: Expected {self.expected_lang}, "
+                f"but response appears to be in {detected_lang or 'unknown'}"
+            )
+            # Add a reminder message to reinforce language requirement
+            # But limit the reminder length to avoid timeout issues
+            lang_names = {'en': 'English', 'cn': 'Chinese', 'bm': 'Bahasa Malay'}
+            lang_name = lang_names.get(self.expected_lang, 'the user\'s preferred language')
+            reminder = f"\n\n[CRITICAL: Respond ONLY in {lang_name}. Previous response was wrong language.]"
+            # Update the system message with stronger reminder (but truncate if too long to avoid timeout)
+            if self.messages and self.messages[0].get("role") == "system":
+                current_content = self.messages[0]["content"]
+                # Limit total system prompt length to avoid API timeouts
+                max_length = 2000
+                if len(current_content) + len(reminder) > max_length:
+                    # Truncate old reminders if needed
+                    current_content = current_content[:max_length - len(reminder) - 100]
+                self.messages[0]["content"] = current_content + reminder
+        
+        self.messages.append({"role": "assistant", "content": validated_text})
 
         # Then stream TTS audio
         def text_gen():
@@ -163,7 +276,7 @@ class SmallTalkSession:
 
         try:
             self.conversation_session.start_session(title="Small Talk")
-            print("🎤 Small-Talk session started. Speak after wakeword.")
+            print("Small-Talk session started. Speak after wakeword.")
         except Exception as e:
             logger.warning(f"Could not start conversation: {e}")
 

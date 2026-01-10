@@ -12,7 +12,7 @@
       "start": "Let's talk! What's on your mind?",
       "nudge": "Hey are you still there? Feel free to continue our conversation.",
       "timeout": "It seems like you're not there. I'll go take a break now. Just call my name when you're ready to talk again.",
-      "end": "Okay talk later, bye for now!."
+      "end": "Talk later, bye for now!."
     }
   },
   "journal": {
@@ -83,9 +83,12 @@
     "no_match_feedback": "I didn't quite catch that.",
     "suggestions_unavailable": "Suggestions are not available now",
     "unknown_intent_prompt": "I didn't quite catch that, but let me suggest something for you",
+    "intervention_trigger_prompt": "Hey, I'm seeing that you're not having a good day would you like to do an activity with me?",
     "prompts": {
       "nudge": "Are you still there? Which activity would you like to try?",
-      "timeout": "It seems like you're not there. I'll go take a break now. Just call my name when you're ready to talk again."
+      "timeout": "It seems like you're not there. I'll go take a break now. Just call my name when you're ready to talk again.",
+      "termination": "Okay, I'll catch you later.",
+      "rejection": "No problem at all. I'll be here whenever you're ready. Take care!"
     },
     "activity_names": {
       "journaling": "Journaling",
@@ -94,11 +97,16 @@
       "quote": "Inspirational Quote"
     },
     "activity_descriptions": {
-      "meditation": "a calming way to center your mind and find peace",
-      "journaling": "a chance to reflect and release your thoughts",
-      "quote": "a quick dose of motivation and perspective",
-      "gratitude": "focusing on the good to brighten your day"
-    }
+      "meditation": "",
+      "journaling": "",
+      "quote": "",
+      "gratitude": ""
+    },
+    "smalltalk_suggestion_message": "If you're not feeling like doing any of these suggestions, maybe we can just have a chat?"
+  },
+  "startup": {
+    "device_not_associated": "This device is not associated to any user. Please contact Well-Bot customer service for assistance.",
+    "startup_completed": "Startup completed. Hi {name}, call me Well-Bot to wake me up!"
   },
   "wakeword_responses": {
     "prompts": {
@@ -106,8 +114,14 @@
       "nudge": "I'm listening. What would you like to do?",
       "timeout": "I'll be here when you need me. Just say my name.",
       "unknown_intent": "I didn't quite catch that. can you call my name again, and I'll be ready to help you.",
-      "activity_unavailable": "That activity isn't available right now. Can we try something else?"
+      "activity_unavailable": "That activity isn't available right now. Can we try something else? Just call my name, Well-Bot, and I'll be ready for you."
     }
+  },
+  "mood_rating": {
+    "prompt_before": "Before we start, on a scale of 1 to 10, can you rate you're feeling right now? 1 means really bad, 10 means really good.",
+    "prompt_after": "Now that we're done, on a scale of 1 to 10, can you rate you're feeling right now? 1 means really bad, 10 means really good..",
+    "acknowledgment": "Thank you for sharing.",
+    "skip_phrases": ["skip", "no", "not now", "later", "pass"]
   },
   "audio_paths": {
     "wokeword_audio_path": "assets/ENGLISH/wokeword_EN_male.wav",

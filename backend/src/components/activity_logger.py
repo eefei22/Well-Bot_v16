@@ -16,19 +16,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Malaysian timezone (UTC+8)
-try:
-    from zoneinfo import ZoneInfo
-    MALAYSIA_TZ = ZoneInfo("Asia/Kuala_Lumpur")
-except ImportError:
-    # Fallback for Python < 3.9
-    try:
-        import pytz
-        MALAYSIA_TZ = pytz.timezone("Asia/Kuala_Lumpur")
-    except ImportError:
-        logger.warning("Neither zoneinfo nor pytz available. Using UTC+8 offset manually.")
-        from datetime import timezone, timedelta
-        MALAYSIA_TZ = timezone(timedelta(hours=8))
+# Import timezone function from database module (uses existing pattern)
+from src.supabase.database import get_malaysia_timezone
 
 
 def get_context_time_of_day(timestamp: Optional[datetime] = None) -> str:
@@ -48,9 +37,11 @@ def get_context_time_of_day(timestamp: Optional[datetime] = None) -> str:
     Returns:
         One of: 'morning', 'afternoon', 'evening', 'night'
     """
+    malaysia_tz = get_malaysia_timezone()
+    
     if timestamp is None:
         # Get current time in Malaysian timezone
-        timestamp = datetime.now(MALAYSIA_TZ)
+        timestamp = datetime.now(malaysia_tz)
     else:
         # Assume timestamp is UTC, convert to Malaysian time
         if timestamp.tzinfo is None:
@@ -59,7 +50,7 @@ def get_context_time_of_day(timestamp: Optional[datetime] = None) -> str:
             timestamp = timestamp.replace(tzinfo=tz.utc)
         
         # Convert to Malaysian timezone
-        timestamp = timestamp.astimezone(MALAYSIA_TZ)
+        timestamp = timestamp.astimezone(malaysia_tz)
     
     hour = timestamp.hour
     
@@ -108,4 +99,3 @@ def query_activity_logs(
     logger.debug(f"Query intervention logs called with: user_id={user_id}, activity_type={activity_type}, "
                  f"emotional_log_id={emotional_log_id}, limit={limit}, days_back={days_back}")
     return []
-

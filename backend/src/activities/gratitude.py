@@ -38,9 +38,10 @@ logger = logging.getLogger(__name__)
 
 
 class GratitudeActivity:
-    def __init__(self, backend_dir: Path, user_id: Optional[str] = None):
+    def __init__(self, backend_dir: Path, user_id: Optional[str] = None, ui_interface = None):
         self.backend_dir = backend_dir
         self.user_id = user_id or get_current_user_id()
+        self.ui_interface = ui_interface
 
         # Components
         self.stt_service: Optional[GoogleSTTService] = None
@@ -92,7 +93,7 @@ class GratitudeActivity:
                 "end_audio_path": self.audio_paths.get("end_audio_path"),
                 "start_audio_path": self.audio_paths.get("start_gratitude_audio_path"),
             }
-            self.audio_manager = ConversationAudioManager(self.stt_service, mic_factory, audio_config)
+            self.audio_manager = ConversationAudioManager(self.stt_service, mic_factory, audio_config, ui_interface=self.ui_interface)
 
             # TTS client
             # Import texttospeech locally for AudioEncoding enum
@@ -128,100 +129,94 @@ class GratitudeActivity:
         """Record user's gratitude note via STT streaming."""
         logger.info("Starting gratitude recording...")
         
-        # Play start audio if enabled
+        # 1. Play Audio / TTS Prompt
+        # The Audio Manager will automatically handle showing the "Speaking" 
+        # face during this part.
         use_audio_files = self.global_config.get("gratitude", {}).get("use_audio_files", False)
         if use_audio_files:
             start_audio_path = self.audio_paths.get("start_gratitude_audio_path")
             if start_audio_path:
                 full_audio_path = self.backend_dir / start_audio_path
                 if full_audio_path.exists():
-                    logger.info(f"Playing start audio: {start_audio_path}")
                     self.audio_manager.play_audio_file(str(full_audio_path), mute_mic=False)
 
-        # Get and speak start prompt
         prompts = self.gratitude_config.get("prompts", {})
         start_prompt = prompts.get("start", "What are you grateful for today? Speak after the tone.")
+        
+        # This will show gui_speaking.gif
         self._speak(start_prompt)
 
-        # Create mic stream
+        # 2. Prepare Microphone
         mic = self.audio_manager.mic_factory()
         mic.start()
 
-        # Register mic with ConversationAudioManager for silence monitoring
         with self.audio_manager._mic_lock:
             self.audio_manager._current_mic = mic
 
-        # Start silence monitoring
         self._start_silence_monitoring()
-
-        # Buffer for accumulated text (store on self so it's accessible)
         self._accumulated_text = []
 
+        # --- NEW: Now that speaking is done, switch to GRATITUDE face for listening ---
+        if self.ui_interface:
+            logger.info("GUI: Switching to Gratitude face")
+            self.ui_interface.update_face_state("gratitude")
+
+        # Define the callback
         def on_transcript(text: str, is_final: bool):
+            # (Keep existing on_transcript logic exactly as is)
             if not self._active:
                 mic.stop()
                 return
 
-            # Skip if termination already detected
             if self._termination_detected:
-                logger.debug(f"Skipping transcript after termination: '{text}'")
                 return
 
-            # Reset silence timer on any transcript
             if self.audio_manager:
                 self.audio_manager.reset_silence_timer()
 
             if is_final:
                 logger.info(f"Final transcript: {text}")
-                
-                # Check for termination phrase first - if found, stop and exclude it
                 if self.termination_detector.is_termination_phrase(text, active=self._active):
-                    logger.info(f"✅ Termination phrase detected in final: '{text}' - stopping recording")
-                    self._termination_detected = True
-                    mic.stop()
-                    return  # Stop recording, use whatever content we already have
-                else:
-                    logger.debug(f"No termination phrase in: '{text}'")
-                
-                # Add to accumulated text (not a termination phrase)
-                if text.strip():
-                    self._accumulated_text.append(text.strip())
-                    logger.info(f"Content received: {len(self._accumulated_text)} final transcripts")
-                    # Continue recording - wait for termination phrase
+                    logger.info(f"Termination phrase detected in final: '{text}' - stopping recording")
 
-            else:
-                # Interim result - check for termination phrase
-                logger.debug(f"Interim transcript: {text}")
-                if text and self.termination_detector.is_termination_phrase(text, active=self._active):
-                    logger.info(f"Termination phrase detected in interim: {text}")
                     self._termination_detected = True
                     mic.stop()
-                    # Stop recording - we already have content from previous final transcripts if any
+                    return
+                else:
+                    if text.strip():
+                        self._accumulated_text.append(text.strip())
+            else:
+                if text and self.termination_detector.is_termination_phrase(text, active=self._active):
+                    self._termination_detected = True
+                    mic.stop()
                     return
 
         try:
-            # Start STT streaming
             logger.debug("Starting STT streaming recognition...")
+            # This will now happen while gui_gratitude.gif is playing
             self.stt_service.stream_recognize(
                 mic.generator(),
                 on_transcript,
                 interim_results=True,
                 single_utterance=False
             )
-            logger.debug("STT streaming completed normally")
         except Exception as e:
-            logger.error(f"Unexpected error in _record_gratitude during STT streaming: {e}")
+            logger.error(f"Error in _record_gratitude: {e}")
             raise
         finally:
             mic.stop()
-            # Unregister mic
             with self.audio_manager._mic_lock:
                 self.audio_manager._current_mic = None
             self._stop_silence_monitoring()
+            
+            # --- NEW: Clear the forced state so subsequent TTS (saving message) 
+            # shows "Speaking" face again ---
+            if self.ui_interface:
+                logger.info("GUI: Releasing Gratitude face state")
+                self.ui_interface.update_face_state(None)
 
-        # Combine accumulated text
         gratitude_text = " ".join(self._accumulated_text).strip()
-        logger.info(f"Recorded gratitude note: {gratitude_text[:100]}...")
+        logger.info(f"Recorded: {gratitude_text[:100]}...")
         return gratitude_text
 
     def _start_silence_monitoring(self):
@@ -332,10 +327,20 @@ class GratitudeActivity:
             seed = seed_tmpl.replace("{gratitude_note}", self.gratitude_text)
             custom_start = self.gratitude_config.get("opener", "That's beautiful. What else is on your mind?")
 
-            smalltalk = SmallTalkActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+            # Clear gratitude face so GUI can derive next state, then handoff
+            try:
+                if self.ui_interface:
+                    # Clear explicit gratitude face so GUI resumes mic/speaker-driven states
+                    self.ui_interface.update_face_state(None)
+            except Exception:
+                logger.debug("Failed to clear UIInterface face_state before SmallTalk transition")
+
+            smalltalk = SmallTalkActivity(backend_dir=self.backend_dir, user_id=self.user_id, ui_interface=self.ui_interface)
             if not smalltalk.initialize():
                 logger.error("Failed to initialize SmallTalk for handoff")
                 return False
+            # Pass activity log ID for post-activity mood rating tracking
+            smalltalk.set_activity_log_id(self._activity_public_id)
             smalltalk.start(seed_system_prompt=seed, custom_start_prompt=custom_start)
             # Continue the normal conversation loop
             ok = smalltalk._conversation_loop()
@@ -345,6 +350,9 @@ class GratitudeActivity:
             return ok
         except Exception as e:
             logger.error(f"Gratitude activity error: {e}", exc_info=True)
+            # Notify user that activity encountered an error
+            from src.components.activity_error_handler import handle_activity_error
+            handle_activity_error(self.backend_dir, self.user_id, activity_name="gratitude", error_context=str(e))
             completed = False
             return False
         finally:
@@ -355,7 +363,7 @@ class GratitudeActivity:
 
     def cleanup(self):
         """Complete cleanup of all resources including native libraries, cached resources, and dependencies"""
-        logger.info("🧹 Cleaning up Gratitude activity resources...")
+        logger.info("Cleaning up Gratitude activity resources...")
         
         # Stop if still active
         if self._active:
@@ -364,7 +372,7 @@ class GratitudeActivity:
         # Cleanup audio manager (handles PyAudio streams)
         if self.audio_manager:
             try:
-                logger.info("🧹 Cleaning up audio manager...")
+                logger.info("Cleaning up audio manager...")
                 self.audio_manager.cleanup()
                 self.audio_manager = None
                 logger.info("✓ Audio manager cleaned up")
@@ -374,7 +382,7 @@ class GratitudeActivity:
         # Cleanup STT service (Google Cloud Speech client)
         if self.stt_service:
             try:
-                logger.info("🧹 Cleaning up STT service...")
+                logger.info("Cleaning up STT service...")
                 # Close Google Cloud Speech client
                 if hasattr(self.stt_service, 'client') and self.stt_service.client:
                     try:
@@ -391,7 +399,7 @@ class GratitudeActivity:
         # Cleanup TTS service (Google Cloud TTS client)
         if self.tts:
             try:
-                logger.info("🧹 Cleaning up TTS service...")
+                logger.info("Cleaning up TTS service...")
                 # Close Google Cloud TTS client
                 if hasattr(self.tts, 'client') and self.tts.client:
                     try:
@@ -407,7 +415,7 @@ class GratitudeActivity:
         # Cleanup termination detector
         if self.termination_detector:
             try:
-                logger.info("🧹 Cleaning up termination detector...")
+                logger.info("Cleaning up termination detector...")
                 self.termination_detector = None
                 logger.debug("Termination detector cleaned up")
             except Exception as e:
@@ -417,7 +425,7 @@ class GratitudeActivity:
         try:
             from src.utils.config_resolver import _resolver
             if hasattr(_resolver, 'clear_cache'):
-                logger.info("🧹 Clearing config caches...")
+                logger.info("Clearing config caches...")
                 _resolver.clear_cache()
                 logger.debug("Config caches cleared")
         except Exception as e:
@@ -425,7 +433,7 @@ class GratitudeActivity:
         
         # Cleanup temporary files (if any were created)
         try:
-            logger.info("🧹 Checking for temporary files...")
+            logger.info("Checking for temporary files...")
             # Check for temporary Google Cloud credentials file
             # Note: This is a best-effort cleanup - the file may have been cleaned up already
             temp_dir = tempfile.gettempdir()
@@ -437,7 +445,7 @@ class GratitudeActivity:
         
         # Force garbage collection to help release native library resources
         try:
-            logger.info("🧹 Running garbage collection...")
+            logger.info("Running garbage collection...")
             collected = gc.collect()
             logger.debug(f"Garbage collection collected {collected} objects")
         except Exception as e:
@@ -446,7 +454,7 @@ class GratitudeActivity:
         # Reset initialization state
         self._initialized = False
         
-        logger.info("✅ Gratitude activity cleanup completed")
+        logger.info("Gratitude activity cleanup completed")
 
     def is_active(self) -> bool:
         return bool(self._active)

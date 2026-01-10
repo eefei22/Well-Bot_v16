@@ -39,9 +39,10 @@ logger = logging.getLogger(__name__)
 
 
 class SpiritualQuoteActivity:
-    def __init__(self, backend_dir: Path, user_id: Optional[str] = None):
+    def __init__(self, backend_dir: Path, user_id: Optional[str] = None, ui_interface = None):
         self.backend_dir = backend_dir
         self.user_id = user_id or get_current_user_id()
+        self.ui_interface = ui_interface
 
         # Components
         self.stt_service: Optional[GoogleSTTService] = None
@@ -76,7 +77,7 @@ class SpiritualQuoteActivity:
             audio_config = {
                 "backend_dir": str(self.backend_dir),
             }
-            self.audio_manager = ConversationAudioManager(self.stt_service, mic_factory, audio_config)
+            self.audio_manager = ConversationAudioManager(self.stt_service, mic_factory, audio_config, ui_interface=self.ui_interface)
 
             # TTS client
             # Import texttospeech locally for AudioEncoding enum
@@ -118,6 +119,7 @@ class SpiritualQuoteActivity:
             self._active = True
             # 1) Fetch religion and quote
             religion = get_user_religion(self.user_id)
+            print(f"DEBUG: User Religion is: {religion}")
             quote = fetch_next_quote(self.user_id, religion)
             if not quote:
                 logger.info("No quote available; informing user")
@@ -143,10 +145,19 @@ class SpiritualQuoteActivity:
             seed = seed_tmpl.replace("{quote}", quote["text"])
             custom_start = quote_cfg.get("opener", "What are your thoughts on that quote?")
 
-            smalltalk = SmallTalkActivity(backend_dir=self.backend_dir, user_id=self.user_id)
+            # Clear any explicit face state so GUI will resume mic/speaker-driven states
+            try:
+                if self.ui_interface:
+                    self.ui_interface.update_face_state(None)
+            except Exception:
+                logger.debug("Failed to clear UIInterface face_state before SmallTalk transition")
+
+            smalltalk = SmallTalkActivity(backend_dir=self.backend_dir, user_id=self.user_id, ui_interface=self.ui_interface)
             if not smalltalk.initialize():
                 logger.error("Failed to initialize SmallTalk for handoff")
                 return False
+            # Pass activity log ID for post-activity mood rating tracking
+            smalltalk.set_activity_log_id(self._activity_public_id)
             smalltalk.start(seed_system_prompt=seed, custom_start_prompt=custom_start)
             # Continue the normal conversation loop
             ok = smalltalk._conversation_loop()
@@ -156,6 +167,9 @@ class SpiritualQuoteActivity:
             return ok
         except Exception as e:
             logger.error(f"SpiritualQuote activity error: {e}", exc_info=True)
+            # Notify user that activity encountered an error
+            from src.components.activity_error_handler import handle_activity_error
+            handle_activity_error(self.backend_dir, self.user_id, activity_name="quote", error_context=str(e))
             completed = False
             return False
         finally:
@@ -166,7 +180,7 @@ class SpiritualQuoteActivity:
 
     def cleanup(self):
         """Complete cleanup of all resources including native libraries, cached resources, and dependencies"""
-        logger.info("🧹 Cleaning up SpiritualQuote activity resources...")
+        logger.info("Cleaning up SpiritualQuote activity resources...")
         
         # Stop if still active
         if self._active:
@@ -175,7 +189,7 @@ class SpiritualQuoteActivity:
         # Cleanup audio manager (handles PyAudio streams)
         if self.audio_manager:
             try:
-                logger.info("🧹 Cleaning up audio manager...")
+                logger.info("Cleaning up audio manager...")
                 self.audio_manager.cleanup()
                 self.audio_manager = None
                 logger.info("✓ Audio manager cleaned up")
@@ -185,7 +199,7 @@ class SpiritualQuoteActivity:
         # Cleanup STT service (Google Cloud Speech client)
         if self.stt_service:
             try:
-                logger.info("🧹 Cleaning up STT service...")
+                logger.info("Cleaning up STT service...")
                 # Close Google Cloud Speech client
                 if hasattr(self.stt_service, 'client') and self.stt_service.client:
                     try:
@@ -202,7 +216,7 @@ class SpiritualQuoteActivity:
         # Cleanup TTS service (Google Cloud TTS client)
         if self.tts:
             try:
-                logger.info("🧹 Cleaning up TTS service...")
+                logger.info("Cleaning up TTS service...")
                 # Close Google Cloud TTS client
                 if hasattr(self.tts, 'client') and self.tts.client:
                     try:
@@ -219,7 +233,7 @@ class SpiritualQuoteActivity:
         try:
             from src.utils.config_resolver import _resolver
             if hasattr(_resolver, 'clear_cache'):
-                logger.info("🧹 Clearing config caches...")
+                logger.info("Clearing config caches...")
                 _resolver.clear_cache()
                 logger.debug("Config caches cleared")
         except Exception as e:
@@ -227,7 +241,7 @@ class SpiritualQuoteActivity:
         
         # Cleanup temporary files (if any were created)
         try:
-            logger.info("🧹 Checking for temporary files...")
+            logger.info("Checking for temporary files...")
             # Check for temporary Google Cloud credentials file
             # Note: This is a best-effort cleanup - the file may have been cleaned up already
             temp_dir = tempfile.gettempdir()
@@ -239,7 +253,7 @@ class SpiritualQuoteActivity:
         
         # Force garbage collection to help release native library resources
         try:
-            logger.info("🧹 Running garbage collection...")
+            logger.info("Running garbage collection...")
             collected = gc.collect()
             logger.debug(f"Garbage collection collected {collected} objects")
         except Exception as e:
@@ -248,7 +262,7 @@ class SpiritualQuoteActivity:
         # Reset initialization state
         self._initialized = False
         
-        logger.info("✅ SpiritualQuote activity cleanup completed")
+        logger.info("SpiritualQuote activity cleanup completed")
 
     def is_active(self) -> bool:
         return bool(self._active)

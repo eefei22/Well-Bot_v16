@@ -52,6 +52,17 @@
     "enough",
     "stop talking"
   ],
+  "rejection": [
+    "don't want",
+    "don't feel like it",
+    "not interested",
+    "no thank you",
+    "skip",
+    "pass",
+    "not now",
+    "later",
+    "nothing"
+  ],
   "activity_suggestion": [
     "suggest",
     "suggestion",

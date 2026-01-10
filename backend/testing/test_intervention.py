@@ -72,7 +72,7 @@ def test_database_query(user_id: str):
             
             return latest_entry
         else:
-            print("\n  ⚠ No entries found in last 24 hours")
+            print("\n  No entries found in last 24 hours")
             print("  Creating a test entry structure for cloud service test...")
             # Return a mock entry structure for testing
             return {
@@ -113,7 +113,7 @@ def test_cloud_service(emotion_entry: dict):
         if is_healthy:
             print("  ✓ Service is healthy")
         else:
-            print("  ⚠ Service health check failed (continuing anyway)")
+            print("  Service health check failed (continuing anyway)")
         
         # Parse timestamp
         timestamp_str = emotion_entry.get("timestamp")
@@ -125,27 +125,20 @@ def test_cloud_service(emotion_entry: dict):
             else:
                 timestamp = datetime.now()
         except Exception as e:
-            print(f"  ⚠ Failed to parse timestamp, using current time: {e}")
+            print(f"  Failed to parse timestamp, using current time: {e}")
             timestamp = datetime.now()
         
         # Prepare request
-        emotion_label = emotion_entry.get("emotion_label", "Sad")
-        confidence_score = emotion_entry.get("confidence_score", 0.85)
         user_id = emotion_entry.get("user_id")
         
         print(f"\nRequesting suggestion from cloud service...")
         print(f"  User ID: {user_id}")
-        print(f"  Emotion: {emotion_label}")
-        print(f"  Confidence: {confidence_score}")
-        print(f"  Timestamp: {timestamp}")
+        print(f"  Note: Cloud service will fetch latest emotion from database")
         
         # Make request
         request_time = datetime.now()
         response = client.get_suggestion(
-            user_id=user_id,
-            emotion_label=emotion_label,
-            confidence_score=confidence_score,
-            timestamp=timestamp
+            user_id=user_id
         )
         response_time = datetime.now()
         
@@ -210,7 +203,7 @@ def test_record_saving(emotion_entry: dict, cloud_response: dict):
         if record_file_path.exists():
             print(f"  ✓ Record file exists")
         else:
-            print(f"  ⚠ Record file does not exist (will be created)")
+            print(f"  Record file does not exist (will be created)")
         
         # Load current record
         print("\nLoading current record...")
@@ -224,7 +217,6 @@ def test_record_saving(emotion_entry: dict, cloud_response: dict):
         suggestion = response_data.get("suggestion", {})
         
         success = manager.update_record(
-            emotion_entry=emotion_entry,
             decision=decision,
             suggestion=suggestion,
             request_time=cloud_response.get("request_time"),
@@ -278,7 +270,7 @@ def test_record_saving(emotion_entry: dict, cloud_response: dict):
         if file_contents == saved_record:
             print(f"  ✓ File contents match loaded record")
         else:
-            print(f"  ⚠ File contents differ from loaded record")
+            print(f"  File contents differ from loaded record")
         
         print("\n✓ TEST 3 PASSED: Record saving working correctly")
         return True
@@ -339,7 +331,7 @@ def main():
         print("\n✓ All tests passed!")
     else:
         print(f"✗ Test 3: Record Saving - FAILED")
-        print("\n⚠ Some tests failed")
+        print("\nSome tests failed")
     print("=" * 80)
     print()
 

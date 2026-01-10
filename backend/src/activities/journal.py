@@ -32,9 +32,10 @@ from src.components import (
     TerminationPhraseDetector,
     TerminationPhraseDetected
 )
-from src.supabase.database import upsert_journal
+from src.supabase.database import upsert_journal, update_journal_title
 from src.utils.config_resolver import get_global_config_for_user, get_language_config
 from src.supabase.auth import get_current_user_id
+from src.utils.journal_title_client import JournalTitleClient
 
 logger = logging.getLogger(__name__)
 
@@ -47,10 +48,11 @@ class JournalActivity:
     and automatically saves journal entries to the database.
     """
     
-    def __init__(self, backend_dir: Path, user_id: Optional[str] = None):
+    def __init__(self, backend_dir: Path, user_id: Optional[str] = None, ui_interface = None):
         """Initialize the Journal activity"""
         self.backend_dir = backend_dir
         self.user_id = user_id or get_current_user_id()
+        self.ui_interface = ui_interface
         
         # Components (initialized in initialize())
         self.audio_manager: Optional[ConversationAudioManager] = None
@@ -58,6 +60,7 @@ class JournalActivity:
         self.tts_service: Optional[GoogleTTSClient] = None
         self.config: Optional[dict] = None  # journal config from language_config
         self.global_config: Optional[dict] = None  # global numerical config
+        self.title_client: Optional[JournalTitleClient] = None  # Title generation client
         
         # Activity state
         self.state = "INIT"
@@ -74,6 +77,7 @@ class JournalActivity:
         self.termination_detector: Optional[TerminationPhraseDetector] = None
         self._termination_detected = False
         self._saved = False  # Track if journal has already been saved
+        self._no_content_handled = False  # Track if no-content message has already been spoken
         
         logger.info("JournalActivity initialized")
     
@@ -86,14 +90,14 @@ class JournalActivity:
             # Load user-specific configurations
             logger.info(f"Loading configs for user {self.user_id}")
             self.global_config = get_global_config_for_user(self.user_id)
-            language_config = get_language_config(self.user_id)
+            self.language_config = get_language_config(self.user_id)
             
             # Extract journal config and audio paths
-            self.config = language_config.get("journal", {})
-            audio_paths = language_config.get("audio_paths", {})
+            self.config = self.language_config.get("journal", {})
+            audio_paths = self.language_config.get("audio_paths", {})
             self.global_journal_config = self.global_config.get("journal", {})
             
-            logger.info(f"Configs loaded - Language: {language_config.get('_resolved_language', 'unknown')}")
+            logger.info(f"Configs loaded - Language: {self.language_config.get('_resolved_language', 'unknown')}")
             logger.info(f"Journal config keys: {list(self.config.keys())}")
             
             logger.info("✓ Loaded journal configuration")
@@ -148,7 +152,8 @@ class JournalActivity:
                 audio_config=audio_config,
                 sample_rate=audio_settings.get("tts_sample_rate_hertz", 24000),
                 sample_width_bytes=audio_settings.get("tts_sample_width_bytes", 2),
-                num_channels=audio_settings.get("tts_num_channels", 1)
+                num_channels=audio_settings.get("tts_num_channels", 1),
+                ui_interface=self.ui_interface
             )
             logger.info("✓ Audio manager initialized")
             
@@ -156,6 +161,11 @@ class JournalActivity:
             phrases = self.config.get("termination_phrases", [])
             self.termination_detector = TerminationPhraseDetector(phrases, require_active=True)
             logger.info(f"✓ Loaded {len(phrases)} termination phrases")
+            
+            # Initialize title generation client
+            logger.info("Initializing journal title client...")
+            self.title_client = JournalTitleClient()
+            logger.info("✓ Journal title client initialized")
             
             self._initialized = True
             logger.info("✓ Journal activity fully initialized")
@@ -179,6 +189,12 @@ class JournalActivity:
         
         self._active = True
         logger.info("Starting journal session...")
+        # Inform GUI to switch to journaling face (if UI available)
+        try:
+            if self.ui_interface:
+                self.ui_interface.update_face_state("journaling")
+        except Exception:
+            logger.debug("Failed to update UIInterface face_state to 'journaling'")
         
         completed = False
         try:
@@ -212,6 +228,7 @@ class JournalActivity:
                 # Speak message that nothing was recorded
                 no_content_msg = self.config.get("prompts", {}).get("no_content", "Nothing was recorded, ending journal session now.")
                 self._speak(no_content_msg)
+                self._no_content_handled = True  # Mark that we've already handled no-content case
                 completed = False
         except KeyboardInterrupt:
             logger.info("Journal session interrupted by user")
@@ -227,8 +244,8 @@ class JournalActivity:
             traceback.print_exc()
             completed = False
         finally:
-            # If terminated by timeout, save before cleanup (only if not already saved)
-            if self._termination_detected and not self._saved:
+            # If terminated by timeout, save before cleanup (only if not already saved and not already handled)
+            if self._termination_detected and not self._saved and not self._no_content_handled:
                 if self._has_content():
                     logger.info("Saving accumulated content after timeout termination")
                     self.state = "SAVING"
@@ -239,6 +256,7 @@ class JournalActivity:
                     # Speak message that nothing was recorded
                     no_content_msg = self.config.get("prompts", {}).get("no_content", "Nothing was recorded, ending journal session now.")
                     self._speak(no_content_msg)
+                    self._no_content_handled = True  # Mark that we've handled no-content case
                     completed = False
             
             # Note: Completion tracking removed in new schema
@@ -442,7 +460,7 @@ class JournalActivity:
             word_count = len(body.split())
             logger.info(f"Prepared journal body: {len(body)} chars, {word_count} words (first 100 chars: {body[:100]})")
         
-        # Generate title
+        # Generate timestamp title immediately (no waiting for cloud service)
         title = self._generate_title()
         
         # Get mood
@@ -451,7 +469,7 @@ class JournalActivity:
         # Extract topics (placeholder for future)
         topics = self._extract_topics(body)
         
-        # Save to database
+        # Save to database immediately with timestamp title
         try:
             result = upsert_journal(
                 user_id=self.user_id,
@@ -461,10 +479,24 @@ class JournalActivity:
                 topics=topics,
                 is_draft=False
             )
-            logger.info(f"Journal entry saved successfully: {result.get('id')}")
+            journal_id = result.get('id')
+            logger.info(f"Journal entry saved successfully: {journal_id}")
             
             # Mark as saved
             self._saved = True
+            
+            # Start background thread to generate and update title asynchronously
+            if journal_id and self.title_client:
+                logger.info("Starting background thread for title generation...")
+                title_thread = threading.Thread(
+                    target=self._generate_title_async,
+                    args=(journal_id, body),
+                    daemon=True  # Daemon thread won't block shutdown
+                )
+                title_thread.start()
+                logger.info("Background title generation thread started")
+            else:
+                logger.debug("Skipping title generation (no journal_id or title_client)")
             
             # Confirmation TTS from config
             try:
@@ -476,6 +508,45 @@ class JournalActivity:
                 confirmation = f"Journal entry saved with {word_count} words."
             
             self._speak(confirmation)
+            
+            # Transition to SmallTalk with contextual prompts
+            logger.info("Journal entry saved. Transitioning to SmallTalk...")
+            
+            # Clear journal face so GUI can derive next state
+            try:
+                if self.ui_interface:
+                    self.ui_interface.update_face_state(None)
+            except Exception:
+                logger.debug("Failed to clear UIInterface face_state before SmallTalk transition")
+            
+            # Load journal config for transition prompts
+            journal_cfg = self.language_config.get("journal", {})
+            seed_tmpl = journal_cfg.get(
+                "seed_system_prompt",
+                "The user just completed a journal entry. Transition into a warm, brief small talk. Journal entry preview: '{journal_preview}'. Ask one inviting, open question related to their journaling experience or what they wrote about.",
+            )
+            # Use first 200 chars of body as preview
+            journal_preview = body[:200] + "..." if len(body) > 200 else body
+            seed = seed_tmpl.replace("{journal_preview}", journal_preview)
+            custom_start = journal_cfg.get("opener", "Thanks for sharing that with me. What else is on your mind?")
+            
+            # Create and start SmallTalk
+            from src.activities.smalltalk import SmallTalkActivity
+            smalltalk = SmallTalkActivity(backend_dir=self.backend_dir, user_id=self.user_id, ui_interface=self.ui_interface)
+            if not smalltalk.initialize():
+                logger.error("Failed to initialize SmallTalk for handoff")
+                return True  # Still return True since journal was saved successfully
+            
+            # Pass activity log ID for post-activity mood rating tracking
+            smalltalk.set_activity_log_id(self._activity_public_id)
+            smalltalk.start(seed_system_prompt=seed, custom_start_prompt=custom_start)
+            
+            # Continue the normal conversation loop
+            ok = smalltalk._conversation_loop()
+            smalltalk.stop()
+            smalltalk.cleanup()
+            smalltalk.reinitialize()
+            
             return True
             
         except Exception as e:
@@ -484,10 +555,64 @@ class JournalActivity:
             traceback.print_exc()
             return False
     
-    def _generate_title(self) -> str:
-        """Generate default title from timestamp"""
+    def _generate_title(self, body: Optional[str] = None) -> str:
+        """
+        Generate timestamp-based title for journal entry.
+        
+        This is used for immediate save. Title generation from content
+        happens asynchronously in the background via _generate_title_async().
+        
+        Args:
+            body: Optional journal body text (not used, kept for compatibility)
+        
+        Returns:
+            Timestamp-based title string
+        """
         now = datetime.now()
-        return f"Journal {now.strftime('%Y-%m-%d %H:%M')}"
+        timestamp_title = f"Journal {now.strftime('%Y-%m-%d %H:%M')}"
+        logger.debug(f"Generated timestamp-based title: '{timestamp_title}'")
+        return timestamp_title
+    
+    def _generate_title_async(self, journal_id: str, body: str):
+        """
+        Generate title asynchronously in background thread and update journal entry.
+        
+        This method runs in a background thread after the journal entry is saved.
+        It generates a meaningful title from content and updates the database.
+        
+        Args:
+            journal_id: UUID of the journal entry to update
+            body: Journal entry body text for title generation
+        """
+        if not journal_id:
+            logger.warning("Cannot generate title asynchronously: journal_id is missing")
+            return
+        
+        if not self.title_client:
+            logger.warning("Cannot generate title asynchronously: title_client is not available")
+            return
+        
+        try:
+            logger.info(f"Background: Generating title for journal entry {journal_id}...")
+            
+            # Generate title from content
+            generated_title = self.title_client.generate_title(body, retry=True)
+            
+            if generated_title:
+                logger.info(f"Background: Successfully generated title: '{generated_title}'")
+                
+                # Update journal entry with new title
+                success = update_journal_title(journal_id, generated_title)
+                if success:
+                    logger.info(f"Background: Successfully updated journal entry {journal_id} with new title")
+                else:
+                    logger.warning(f"Background: Failed to update journal entry {journal_id} with new title")
+            else:
+                logger.warning(f"Background: Title generation failed for journal entry {journal_id}, keeping timestamp title")
+                
+        except Exception as e:
+            logger.error(f"Background: Error generating/updating title for journal entry {journal_id}: {e}", exc_info=True)
+            # Don't propagate error - user already has saved entry with timestamp title
     
     def _extract_topics(self, text: str) -> List[str]:
         """Extract topics from text (placeholder for future implementation)"""
@@ -573,6 +698,12 @@ class JournalActivity:
         self._active = False
         
         logger.info("Cleaning up journal activity...")
+        # Clear explicit face state so GUI can derive next state
+        try:
+            if self.ui_interface:
+                self.ui_interface.update_face_state(None)
+        except Exception:
+            logger.debug("Failed to clear UIInterface face_state during journal cleanup")
         
         if self.audio_manager:
             self.audio_manager.stop()
@@ -581,7 +712,7 @@ class JournalActivity:
     
     def cleanup(self):
         """Complete cleanup of all resources including native libraries, cached resources, and dependencies"""
-        logger.info("🧹 Cleaning up Journal activity resources...")
+        logger.info("Cleaning up Journal activity resources...")
         
         # Stop if still active
         if self._active:
@@ -590,7 +721,7 @@ class JournalActivity:
         # Cleanup audio manager (handles PyAudio streams)
         if self.audio_manager:
             try:
-                logger.info("🧹 Cleaning up audio manager...")
+                logger.info("Cleaning up audio manager...")
                 self.audio_manager.cleanup()
                 self.audio_manager = None
                 logger.info("✓ Audio manager cleaned up")
@@ -600,7 +731,7 @@ class JournalActivity:
         # Cleanup STT service (Google Cloud Speech client)
         if self.stt_service:
             try:
-                logger.info("🧹 Cleaning up STT service...")
+                logger.info("Cleaning up STT service...")
                 # Close Google Cloud Speech client
                 if hasattr(self.stt_service, 'client') and self.stt_service.client:
                     try:
@@ -617,7 +748,7 @@ class JournalActivity:
         # Cleanup TTS service (Google Cloud TTS client)
         if self.tts_service:
             try:
-                logger.info("🧹 Cleaning up TTS service...")
+                logger.info("Cleaning up TTS service...")
                 # Close Google Cloud TTS client
                 if hasattr(self.tts_service, 'client') and self.tts_service.client:
                     try:
@@ -633,7 +764,7 @@ class JournalActivity:
         # Cleanup termination detector
         if hasattr(self, 'termination_detector') and self.termination_detector:
             try:
-                logger.info("🧹 Cleaning up termination detector...")
+                logger.info("Cleaning up termination detector...")
                 self.termination_detector = None
                 logger.debug("Termination detector cleaned up")
             except Exception as e:
@@ -643,7 +774,7 @@ class JournalActivity:
         try:
             from src.utils.config_resolver import _resolver
             if hasattr(_resolver, 'clear_cache'):
-                logger.info("🧹 Clearing config caches...")
+                logger.info("Clearing config caches...")
                 _resolver.clear_cache()
                 logger.debug("Config caches cleared")
         except Exception as e:
@@ -651,7 +782,7 @@ class JournalActivity:
         
         # Cleanup temporary files (if any were created)
         try:
-            logger.info("🧹 Checking for temporary files...")
+            logger.info("Checking for temporary files...")
             # Check for temporary Google Cloud credentials file
             # Note: This is a best-effort cleanup - the file may have been cleaned up already
             temp_dir = tempfile.gettempdir()
@@ -663,7 +794,7 @@ class JournalActivity:
         
         # Force garbage collection to help release native library resources
         try:
-            logger.info("🧹 Running garbage collection...")
+            logger.info("Running garbage collection...")
             collected = gc.collect()
             logger.debug(f"Garbage collection collected {collected} objects")
         except Exception as e:
@@ -675,15 +806,16 @@ class JournalActivity:
         self.last_final_time = None
         self._termination_detected = False
         self._saved = False
+        self._no_content_handled = False
         
         # Reset initialization state
         self._initialized = False
         
-        logger.info("✅ Journal activity cleanup completed")
+        logger.info("Journal activity cleanup completed")
     
     def reinitialize(self) -> bool:
         """Re-initialize the activity for subsequent runs"""
-        logger.info("🔄 Re-initializing Journal activity...")
+        logger.info("Re-initializing Journal activity...")
         
         # Reset state
         self._active = False
@@ -693,6 +825,7 @@ class JournalActivity:
         self.last_final_time = None
         self._termination_detected = False
         self._saved = False
+        self._no_content_handled = False
         
         # Re-initialize components
         return self.initialize()
@@ -704,7 +837,7 @@ class JournalActivity:
         Returns:
             True if activity completed successfully, False otherwise
         """
-        logger.info("🎬 JournalActivity.run() - Starting activity execution")
+        logger.info("JournalActivity.run() - Starting activity execution")
         try:
             # Start the activity (runs the full session synchronously)
             self.start()
@@ -714,6 +847,9 @@ class JournalActivity:
             
         except Exception as e:
             logger.error(f"Error running Journal activity: {e}", exc_info=True)
+            # Notify user that activity encountered an error
+            from src.components.activity_error_handler import handle_activity_error
+            handle_activity_error(self.backend_dir, self.user_id, activity_name="journaling", error_context=str(e))
             return False
     
     def is_active(self) -> bool:

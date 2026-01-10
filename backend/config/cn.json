@@ -88,9 +88,12 @@
     "no_match_feedback": "我没有听清楚。",
     "suggestions_unavailable": "目前无法提供建议。",
     "unknown_intent_prompt": "我没有听清楚，但让我为你推荐一些活动吧",
+    "intervention_trigger_prompt": "嘿，我看到你今天心情不是很好，想和我一起做个活动吗？",
     "prompts": {
       "nudge": "你还在吗？你想尝试哪个活动？我们可以一起冥想，或者你想写日记？ 我也可以送你一句励志名言，或者来一次感恩练习。你随便选一个吧",
-      "timeout": "看起来你不在，我先休息一下。等你准备好了，随时叫我。"
+      "timeout": "看起来你不在，我先休息一下。等你准备好了，随时叫我。",
+      "termination": "好的，我们稍后再见。",
+      "rejection": "没问题。我随时都在，等你准备好了再找我。保重！"
     },
     "activity_names": {
       "journaling": "写日记",
@@ -103,7 +106,12 @@
       "journaling": "一个反思与释放思绪的机会。",
       "quote": "一剂短暂的动力与启发。",
       "gratitude": "专注于美好，点亮你的一天。"
-    }
+    },
+    "smalltalk_suggestion_message": "如果你不想做这些建议的活动，也许我们可以聊聊天？"
+  },
+  "startup": {
+    "device_not_associated": "此设备未关联任何用户。请联系 Well-Bot 客户服务寻求帮助。",
+    "startup_completed": "启动完成。你好 {name}，叫我 Well-Bot 来唤醒我！"
   },
   "wakeword_responses": {
     "prompts": {
@@ -113,6 +121,12 @@
       "unknown_intent": "我没听清楚。你可以再叫我一次，我就能帮你啦。",
       "activity_unavailable": "这个活动现在不能进行。我们试试别的好吗？"
     }
+  },
+  "mood_rating": {
+    "prompt_before": "在我们开始之前，从1到10分，你现在感受到的任何负面情绪有多强烈？1表示没有，10表示非常强烈。",
+    "prompt_after": "现在我们已经完成了，从1到10分，你现在感受到的任何负面情绪有多强烈？1表示没有，10表示非常强烈。",
+    "acknowledgment": "谢谢你的分享。",
+    "skip_phrases": ["跳过", "不", "现在不要", "稍后", "算了"]
   },
   "audio_paths": {
     "wokeword_audio_path": "assets/ENGLISH/wokeword_EN_male.wav",

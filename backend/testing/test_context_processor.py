@@ -23,7 +23,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Default user ID (from database.py)
-DEFAULT_USER_ID = "8517c97f-66ef-4955-86ed-531013d33d3e"
+DEFAULT_USER_ID = "96975f52-5b05-4eb1-bfa5-530485112518"
 
 
 def test_context_processor_endpoint(
@@ -63,15 +63,15 @@ def test_context_processor_endpoint(
             health_data = health_response.json() if health_response.text else {}
             logger.info(f"  ✓ Service is healthy: {health_data}")
         else:
-            logger.warning(f"  ⚠ Health check returned status {health_response.status_code}")
+            logger.warning(f"  Health check returned status {health_response.status_code}")
     except requests.exceptions.ConnectionError:
         logger.error(f"  ✗ Cannot connect to service at {context_service_url}")
         logger.error(f"  Please verify the context processor service is running")
         return False
     except requests.exceptions.Timeout:
-        logger.warning(f"  ⚠ Health check timed out (service may be slow)")
+        logger.warning(f"  Health check timed out (service may be slow)")
     except Exception as e:
-        logger.warning(f"  ⚠ Health check failed: {e} (continuing anyway)")
+        logger.warning(f"  Health check failed: {e} (continuing anyway)")
     
     logger.info("")
     

@@ -166,7 +166,7 @@ def test_stt_capture(stt_service):
             if is_final:
                 final_transcript = text
                 logger.info("=" * 60)
-                logger.info(f"🎯 FINAL TRANSCRIPT: {text}")
+                logger.info(f"FINAL TRANSCRIPT: {text}")
                 logger.info("=" * 60)
                 save_transcript(text, True, timestamp)
             else:
@@ -329,9 +329,9 @@ def main():
                 transcript = test_stt_capture(stt_service)
                 
                 if transcript:
-                    logger.info(f"\n✅ Final transcript received: '{transcript}'")
+                    logger.info(f"\nFinal transcript received: '{transcript}'")
                 else:
-                    logger.warning("\n⚠️  No final transcript received")
+                    logger.warning("\n  No final transcript received")
                 
             except KeyboardInterrupt:
                 logger.info("\nInterrupted by user (Ctrl+C)")

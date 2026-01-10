@@ -32,9 +32,10 @@ from src.components import (
     normalize_text
 )
 from src.utils.config_loader import get_deepseek_config
-from src.utils.config_resolver import get_global_config_for_user, get_language_config
+from src.utils.config_resolver import get_global_config_for_user, get_language_config, resolve_language
 from src.supabase.auth import get_current_user_id
-from src.supabase.database import get_user_language
+from src.supabase.database import update_mood_rating, has_pre_activity_mood_rating
+from src.utils.mood_rating import parse_mood_rating_from_speech
 from src.components import UserContextInjector
 
 logger = logging.getLogger(__name__)
@@ -71,6 +72,9 @@ class SmallTalkActivity:
         # Activity state
         self._active = False
         self._initialized = False
+        
+        # Source activity log ID for post-activity mood rating
+        self._source_activity_log_id: Optional[str] = None
         
         logger.info(f"SmallTalkActivity initialized for user {self.user_id}")
     
@@ -131,13 +135,33 @@ class SmallTalkActivity:
             # Store audio config for callback methods
             self.audio_config = audio_config
             
-            # Get user language for system prompt
-            user_lang = get_user_language(self.user_id) or 'en'
-            language_name = LANGUAGE_NAMES.get(user_lang, 'English')
+            # Get user language for system prompt - use resolve_language to get normalized code
+            user_lang_code = resolve_language(self.user_id)  # Returns 'en', 'cn', or 'bm'
+            language_name = LANGUAGE_NAMES.get(user_lang_code, 'English')
             
-            # Build system prompt with language instruction
+            # Build system prompt with STRONG language instruction at the beginning
             base_system_prompt = self.smalltalk_config.get("system_prompt", "You are a friendly assistant. Do not use emojis and always always ask follow up questions.")
-            system_prompt_with_language = f"{base_system_prompt}\n\nImportant: Always respond in {language_name}. This is the user's preferred language."
+            
+            # Create a much stronger language enforcement instruction
+            # Use explicit language names in the target language for better LLM understanding
+            lang_instructions = {
+                'cn': '中文',
+                'bm': 'Bahasa Melayu', 
+                'en': 'English'
+            }
+            target_lang_name = lang_instructions.get(user_lang_code, language_name)
+            
+            language_instruction = f"""CRITICAL LANGUAGE REQUIREMENT: You MUST respond ONLY in {language_name} ({target_lang_name}). 
+- The user's preferred language is {language_name} (language code: {user_lang_code})
+- ALL your responses must be in {language_name} - never use English or any other language
+- If the user writes in {language_name}, respond in {language_name}
+- If the user writes in English, still respond in {language_name}
+- This is non-negotiable: every single response must be in {language_name}
+- Do NOT switch to English even if the user asks questions in English
+
+{base_system_prompt}"""
+            
+            system_prompt_with_language = language_instruction
             
             # Initialize ConversationSession
             logger.info("Initializing ConversationSession...")
@@ -248,7 +272,7 @@ class SmallTalkActivity:
             logger.info(f"Making POST request to context processor...")
             response = requests.post(
                 endpoint,
-                json={"user_id": user_id},
+                json={"user_id": user_id, "conversation_id": conversation_id},
                 headers={"Content-Type": "application/json"},
                 timeout=300  # 5 minutes - processing can take 1-3 minutes
             )
@@ -317,11 +341,11 @@ class SmallTalkActivity:
         
         # Safety checks
         if not all([self.audio_manager, self.session_manager, self.llm_pipeline]):
-            logger.error("❌ Components not properly initialized - cannot start activity")
+            logger.error("Components not properly initialized - cannot start activity")
             return False
         
         try:
-            logger.info("🚀 Starting SmallTalk activity...")
+            logger.info("Starting SmallTalk activity...")
             self._active = True
             
             # Start session
@@ -372,13 +396,18 @@ class SmallTalkActivity:
                 on_timeout=self._handle_timeout
             )
             
-            logger.info("✅ SmallTalk activity started successfully")
+            logger.info("SmallTalk activity started successfully")
             return True
             
         except Exception as e:
             logger.error(f"Failed to start SmallTalk activity: {e}", exc_info=True)
             self._active = False
             return False
+    
+    def set_activity_log_id(self, activity_log_id: Optional[str]):
+        """Set the source activity's log ID for post-activity mood rating tracking."""
+        self._source_activity_log_id = activity_log_id
+        logger.debug(f"Set source activity log ID: {activity_log_id}")
     
     def stop(self):
         """Stop the SmallTalk activity"""
@@ -397,11 +426,123 @@ class SmallTalkActivity:
         if self.session_manager:
             self.session_manager.stop_session()
         
-        logger.info("✅ SmallTalk activity stopped")
+        logger.info("SmallTalk activity stopped")
+    
+    def _check_pre_activity_mood_rating_exists(self, activity_log_id: str) -> bool:
+        """Check if pre-activity mood rating exists for the given activity log ID."""
+        if not activity_log_id:
+            return False
+        try:
+            return has_pre_activity_mood_rating(activity_log_id)
+        except Exception as e:
+            logger.error(f"Failed to check pre-activity mood rating: {e}", exc_info=True)
+            return False
+    
+    def _prompt_post_activity_mood_rating(self) -> Optional[int]:
+        """Prompt user for post-activity mood rating and capture a single response."""
+        if not self.stt_service:
+            logger.warning("Mood rating skipped - STT service unavailable")
+            return None
+        
+        if not self._active:
+            logger.debug("Mood rating skipped - smalltalk not active")
+            return None
+        
+        # Get config
+        mood_cfg = (self.language_config or {}).get("mood_rating", {})
+        prompt = mood_cfg.get(
+            "prompt_after",
+            "If you'd like — on a scale from 1 to 10 — how strong are any negative emotions you feel right now (1 = none, 10 = very strong)?"
+        )
+        skip_phrases = mood_cfg.get("skip_phrases", ["skip", "no", "not now", "later", "pass"])
+        timeout_seconds = (self.global_config or {}).get("mood_rating", {}).get("timeout_seconds", 10.0)
+        
+        logger.info("Prompting for post-activity mood rating...")
+        
+        # Stop audio manager mic before prompting (if active)
+        if self.audio_manager:
+            self.audio_manager.stop()
+            # Small delay to ensure mic is released
+            time.sleep(0.3)
+        
+        # Speak the prompt using TTS
+        self._speak(prompt)
+        
+        # Create new mic for mood rating capture
+        mic = MicStream(rate=16000, chunk_size=1600)
+        
+        # Start the microphone
+        try:
+            mic.start()
+            mic.unmute()
+            logger.info(f"Post-activity mood rating mic started (muted={mic.is_muted()})")
+        except Exception as e:
+            logger.error(f"Failed to start mic for post-activity mood rating: {e}")
+            return None
+        
+        final_text: Optional[str] = None
+        stt_completed = threading.Event()
+        stt_error = {"error": None}
+        
+        def on_transcript(text: str, is_final: bool):
+            nonlocal final_text
+            if is_final and text:
+                final_text = text
+                if mic.is_running():
+                    mic.stop()
+        
+        def run_stt():
+            try:
+                self.stt_service.stream_recognize(
+                    mic.generator(),
+                    on_transcript,
+                    interim_results=True,
+                    single_utterance=True
+                )
+            except Exception as e:
+                stt_error["error"] = e
+                logger.error(f"STT error during post-activity mood rating capture: {e}")
+            finally:
+                stt_completed.set()
+        
+        stt_thread = threading.Thread(target=run_stt, daemon=True)
+        stt_thread.start()
+        
+        # Wait for response with timeout
+        if not stt_completed.wait(timeout=timeout_seconds):
+            logger.info(f"Post-activity mood rating prompt timed out after {timeout_seconds}s")
+            if mic.is_running():
+                mic.stop()
+        else:
+            logger.debug("STT completed for post-activity mood rating")
+        
+        stt_thread.join(timeout=1.0)
+        
+        try:
+            if stt_error["error"]:
+                return None
+            if final_text:
+                rating = parse_mood_rating_from_speech(final_text, skip_phrases)
+                logger.info(f"Post-activity mood rating: {rating}")
+                
+                # Speak acknowledgment if rating was successfully captured
+                if rating is not None:
+                    mood_cfg = (self.language_config or {}).get("mood_rating", {})
+                    acknowledgment = mood_cfg.get("acknowledgment", "")
+                    if acknowledgment:
+                        logger.debug("Speaking post-activity mood rating acknowledgment")
+                        self._speak(acknowledgment)
+                
+                return rating
+            logger.debug("No response received for post-activity mood rating prompt")
+            return None
+        finally:
+            if mic.is_running():
+                mic.stop()
     
     def cleanup(self):
         """Complete cleanup of all resources including native libraries, cached resources, and dependencies"""
-        logger.info("🧹 Cleaning up SmallTalk activity resources...")
+        logger.info("Cleaning up SmallTalk activity resources...")
         
         # Stop if still active
         if self._active:
@@ -410,7 +551,7 @@ class SmallTalkActivity:
         # Cleanup LLM pipeline first (may have active connections/streams)
         if self.llm_pipeline:
             try:
-                logger.info("🧹 Cleaning up LLM pipeline...")
+                logger.info("Cleaning up LLM pipeline...")
                 # Close TTS client if it exists
                 if hasattr(self.llm_pipeline, 'tts') and self.llm_pipeline.tts:
                     if hasattr(self.llm_pipeline.tts, 'client'):
@@ -448,7 +589,7 @@ class SmallTalkActivity:
         # Cleanup audio manager (handles PyAudio streams)
         if self.audio_manager:
             try:
-                logger.info("🧹 Cleaning up audio manager...")
+                logger.info("Cleaning up audio manager...")
                 self.audio_manager.cleanup()
                 self.audio_manager = None
                 logger.info("✓ Audio manager cleaned up")
@@ -458,7 +599,7 @@ class SmallTalkActivity:
         # Cleanup STT service (Google Cloud Speech client)
         if self.stt_service:
             try:
-                logger.info("🧹 Cleaning up STT service...")
+                logger.info("Cleaning up STT service...")
                 # Close Google Cloud Speech client
                 if hasattr(self.stt_service, 'client') and self.stt_service.client:
                     try:
@@ -477,7 +618,7 @@ class SmallTalkActivity:
         if self.session_manager:
             try:
                 conversation_id = self.session_manager.get_conversation_id()
-                logger.info("🧹 Ending conversation in database...")
+                logger.info("Ending conversation in database...")
                 self.session_manager.end_conversation()
                 self.session_manager = None
                 logger.info("✓ Session manager cleaned up")
@@ -514,7 +655,7 @@ class SmallTalkActivity:
         try:
             from src.utils.config_resolver import _resolver
             if hasattr(_resolver, 'clear_cache'):
-                logger.info("🧹 Clearing config caches...")
+                logger.info("Clearing config caches...")
                 _resolver.clear_cache()
                 logger.debug("Config caches cleared")
         except Exception as e:
@@ -522,7 +663,7 @@ class SmallTalkActivity:
         
         # Cleanup temporary files (if any were created)
         try:
-            logger.info("🧹 Checking for temporary files...")
+            logger.info("Checking for temporary files...")
             # Check for temporary Google Cloud credentials file
             # Note: This is a best-effort cleanup - the file may have been cleaned up already
             temp_dir = tempfile.gettempdir()
@@ -534,7 +675,7 @@ class SmallTalkActivity:
         
         # Force garbage collection to help release native library resources
         try:
-            logger.info("🧹 Running garbage collection...")
+            logger.info("Running garbage collection...")
             collected = gc.collect()
             logger.debug(f"Garbage collection collected {collected} objects")
         except Exception as e:
@@ -543,7 +684,7 @@ class SmallTalkActivity:
         # Reset initialization state
         self._initialized = False
         
-        logger.info("✅ SmallTalk activity cleanup completed")
+        logger.info("SmallTalk activity cleanup completed")
     
     def _speak(self, text: str, is_nudge: bool = False):
         """Speak text using TTS
@@ -580,7 +721,7 @@ class SmallTalkActivity:
     
     def reinitialize(self) -> bool:
         """Re-initialize the activity for subsequent runs"""
-        logger.info("🔄 Re-initializing SmallTalk activity...")
+        logger.info("Re-initializing SmallTalk activity...")
         
         # Reset state
         self._active = False
@@ -600,11 +741,11 @@ class SmallTalkActivity:
         Returns:
             True if activity completed successfully, False otherwise
         """
-        logger.info("🎬 SmallTalkActivity.run() - Starting activity execution")
+        logger.info("SmallTalkActivity.run() - Starting activity execution")
         try:
             # Start the activity
             if not self.start():
-                logger.error("❌ SmallTalkActivity.run() - Failed to start activity")
+                logger.error("SmallTalkActivity.run() - Failed to start activity")
                 return False
             
             # Run conversation loop
@@ -617,13 +758,16 @@ class SmallTalkActivity:
             
         except Exception as e:
             logger.error(f"Error running SmallTalk activity: {e}", exc_info=True)
+            # Notify user that activity encountered an error
+            from src.components.activity_error_handler import handle_activity_error
+            handle_activity_error(self.backend_dir, self.user_id, activity_name="smalltalk", error_context=str(e))
             self.stop()
             self.cleanup()  # Ensure cleanup is called to trigger context processor
             return False
     
     def _conversation_loop(self) -> bool:
         """Main conversation loop"""
-        logger.info("💬 Starting conversation loop...")
+        logger.info("Starting conversation loop...")
         
         try:
             while self.session_manager.is_active() and self._active:
@@ -656,6 +800,25 @@ class SmallTalkActivity:
                     logger.info("No termination detected, proceeding with conversation...")
                 except TerminationPhraseDetected as e:
                     logger.info(f"TERMINATION TRIGGERED! {e}")
+                    
+                    # Check if we should prompt for post-activity mood rating
+                    post_activity_rating: Optional[int] = None
+                    if self._source_activity_log_id:
+                        if self._check_pre_activity_mood_rating_exists(self._source_activity_log_id):
+                            logger.info("Pre-activity mood rating exists, prompting for post-activity mood rating...")
+                            post_activity_rating = self._prompt_post_activity_mood_rating()
+                            
+                            # Write post-activity mood rating to database
+                            if self._source_activity_log_id:
+                                try:
+                                    update_mood_rating(self._source_activity_log_id, post_rating=post_activity_rating)
+                                    logger.info(f"Post-activity mood rating written to DB: {post_activity_rating}")
+                                except Exception as e:
+                                    logger.error(f"Failed to write post-activity mood rating to DB: {e}", exc_info=True)
+                        else:
+                            logger.debug("No pre-activity mood rating found, skipping post-activity prompt")
+                    else:
+                        logger.debug("No source activity log ID, skipping post-activity mood rating")
                     
                     use_audio_files = self.global_smalltalk_config.get("use_audio_files", False)
                     
@@ -786,7 +949,7 @@ class SmallTalkActivity:
                         logger.info("Skipping context processor notification - turn count < 4")
                     break
             
-            logger.info("✅ Conversation loop completed successfully")
+            logger.info("Conversation loop completed successfully")
             return True
             
         except Exception as e:
@@ -795,7 +958,7 @@ class SmallTalkActivity:
     
     def _handle_nudge(self):
         """Handle silence nudge callback"""
-        logger.info("🔔 Handling silence nudge...")
+        logger.info("Handling silence nudge...")
         
         try:
             use_audio_files = self.global_smalltalk_config.get("use_audio_files", False)
@@ -821,14 +984,14 @@ class SmallTalkActivity:
             # Speak the nudge prompt (with delays to prevent STT pickup)
             logger.info(f"Speaking nudge prompt...")
             self._speak(nudge_prompt, is_nudge=True)
-            logger.info("✅ Nudge prompt spoken successfully")
+            logger.info("Nudge prompt spoken successfully")
             
         except Exception as e:
-            logger.error(f"❌ Error in _handle_nudge: {e}", exc_info=True)
+            logger.error(f"Error in _handle_nudge: {e}", exc_info=True)
     
     def _handle_timeout(self):
         """Handle silence timeout callback"""
-        logger.info("⏰ Handling silence timeout...")
+        logger.info("Handling silence timeout...")
         
         try:
             use_audio_files = self.global_smalltalk_config.get("use_audio_files", False)
@@ -854,10 +1017,10 @@ class SmallTalkActivity:
             # Speak the timeout prompt
             logger.info(f"Speaking timeout prompt...")
             self._speak(timeout_prompt)
-            logger.info("✅ Timeout prompt spoken successfully")
+            logger.info("Timeout prompt spoken successfully")
             
         except Exception as e:
-            logger.error(f"❌ Error in _handle_timeout: {e}", exc_info=True)
+            logger.error(f"Error in _handle_timeout: {e}", exc_info=True)
         finally:
             # Always stop the activity, even if TTS fails
             logger.info("Stopping activity due to timeout...")

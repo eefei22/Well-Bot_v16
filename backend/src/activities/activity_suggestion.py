@@ -29,10 +29,10 @@ from src.components import (
     KeywordIntentMatcher
 )
 from src.utils.config_loader import get_deepseek_config
-from src.utils.config_resolver import get_global_config_for_user, get_language_config
+from src.utils.config_resolver import get_global_config_for_user, get_language_config, resolve_language
 from src.supabase.auth import get_current_user_id
-from src.supabase.database import get_user_language
 from src.utils.intervention_record import InterventionRecordManager
+from src.utils.mood_rating import parse_mood_rating_from_speech
 
 logger = logging.getLogger(__name__)
 
@@ -52,10 +52,11 @@ class ActivitySuggestionActivity:
     activity based on keyword matching.
     """
     
-    def __init__(self, backend_dir: Path, user_id: Optional[str] = None):
+    def __init__(self, backend_dir: Path, user_id: Optional[str] = None, ui_interface = None):
         """Initialize the Activity Suggestion activity"""
         self.backend_dir = backend_dir
         self.user_id = user_id or get_current_user_id()
+        self.ui_interface = ui_interface
         
         # Components (initialized in initialize())
         self.audio_manager: Optional[ConversationAudioManager] = None
@@ -71,10 +72,12 @@ class ActivitySuggestionActivity:
         self._selected_activity: Optional[str] = None  # Store selected activity for routing
         self._conversation_context: List[Dict[str, str]] = []  # Store conversation for smalltalk seeding
         self._timeout_detected = False  # Flag to track if timeout occurred
+        self._termination_detected = False  # Flag to track if termination phrase was detected
         self._listening_mic: Optional[MicStream] = None  # Reference to mic used in _listen_for_activity_choice
         self._timeout_handler_finished = threading.Event()  # Event to signal when timeout handler completes
         self._nudge_occurred = False  # Flag to track if nudge occurred (to restart listening)
         self._listening_result: Optional[str] = None  # Store result from _listen_for_activity_choice
+        self._detected_mood_rating: Optional[int] = None  # Store pre-activity mood rating
         
         logger.info(f"ActivitySuggestionActivity initialized for user {self.user_id}")
     
@@ -140,7 +143,8 @@ class ActivitySuggestionActivity:
             self.audio_manager = ConversationAudioManager(
                 stt_service=self.stt_service,
                 mic_factory=mic_factory,
-                audio_config=audio_config
+                audio_config=audio_config,
+                ui_interface=self.ui_interface
             )
             logger.info("✓ ConversationAudioManager initialized")
             
@@ -148,8 +152,8 @@ class ActivitySuggestionActivity:
             self.audio_config = audio_config
             
             # Get user language for system prompt
-            user_lang = get_user_language(self.user_id) or 'en'
-            language_name = LANGUAGE_NAMES.get(user_lang, 'English')
+            user_lang_code = resolve_language(self.user_id)  # Returns 'en', 'cn', or 'bm'
+            language_name = LANGUAGE_NAMES.get(user_lang_code, 'English')
             
             # Build system prompt with language instruction
             base_system_prompt = self.smalltalk_config.get("system_prompt", "You are a friendly assistant. Do not use emojis and always always ask follow up questions.")
@@ -310,6 +314,13 @@ class ActivitySuggestionActivity:
                     "Here are some wellness activities you can try:"
                 )
                 
+                # Get smalltalk suggestion message and append it
+                smalltalk_message = self.activity_suggestion_config.get(
+                    "smalltalk_suggestion_message",
+                    "If you're not feeling like doing any of these suggestions, maybe we can just have a chat?"
+                )
+                cold_start_intro = f"{cold_start_intro}\n\n{smalltalk_message}"
+                
                 # Speak the complete cold start intro message via TTS
                 self._speak(cold_start_intro)
                 logger.info(f"Spoke cold start activity suggestions (full text):\n{cold_start_intro}")
@@ -330,8 +341,14 @@ class ActivitySuggestionActivity:
             activities_text = self._format_activities_for_tts(ranked_activities)
             logger.debug(f"Formatted activities for TTS:\n{activities_text}")
             
-            # Combine intro message and activities
-            full_message = f"{intro_message}\n\n{activities_text}"
+            # Get smalltalk suggestion message
+            smalltalk_message = self.activity_suggestion_config.get(
+                "smalltalk_suggestion_message",
+                "If you're not feeling like doing any of these suggestions, maybe we can just have a chat?"
+            )
+            
+            # Combine intro message, activities, and smalltalk suggestion
+            full_message = f"{intro_message}\n\n{activities_text}\n\n{smalltalk_message}"
             
             # Speak full message via TTS
             self._speak(full_message)
@@ -364,9 +381,13 @@ class ActivitySuggestionActivity:
         try:
             logger.info("Listening for activity choice with keyword matching...")
             
-            # Use standard STT parameters (16kHz)
-            mic = MicStream(rate=16000, chunk_size=1600)  # 100ms chunks at 16kHz
+            # Use audio_manager's mic factory to ensure proper tracking
+            mic = self.audio_manager.mic_factory()
             self._listening_mic = mic  # Store reference so timeout handler can stop it
+            
+            # Register mic with ConversationAudioManager so silence monitoring can track it
+            with self.audio_manager._mic_lock:
+                self.audio_manager._current_mic = mic
             
             intent_result: Optional[dict] = None
             transcript: Optional[str] = None
@@ -387,6 +408,12 @@ class ActivitySuggestionActivity:
                         logger.info("Timeout detected in on_transcript callback - stopping mic")
                         mic.stop()
                         return
+                    
+                    # Reset silence timer on any transcript (interim or final)
+                    # This prevents nudge from triggering while user is speaking
+                    if self.audio_manager and text:
+                        self.audio_manager.reset_silence_timer()
+                    
                     if is_final and text:
                         transcript = text
                         mic.stop()
@@ -423,6 +450,20 @@ class ActivitySuggestionActivity:
                     if intent_result:
                         logger.info(f"Intent detected: {intent_result.get('intent')}")
                 
+                # Check for termination intent first
+                if intent_result:
+                    intent_name = intent_result.get("intent")
+                    if intent_name == "termination":
+                        logger.info("Termination phrase detected - will return to idle mode")
+                        self._termination_detected = True
+                        return "__termination__"  # Special sentinel value for termination
+                    
+                    # Check for rejection intent
+                    if intent_name == "rejection":
+                        logger.info("Rejection detected - will acknowledge and return to idle mode")
+                        self._termination_detected = True
+                        return "__rejection__"  # Special sentinel value for rejection
+                
                 # Map intent to activity type
                 if intent_result:
                     intent_name = intent_result.get("intent")
@@ -450,6 +491,10 @@ class ActivitySuggestionActivity:
                 return None
             finally:
                 mic.stop()
+                # Clear mic reference from ConversationAudioManager
+                with self.audio_manager._mic_lock:
+                    if self.audio_manager._current_mic == mic:
+                        self.audio_manager._current_mic = None
                 self._listening_mic = None  # Clear reference
             
         except Exception as e:
@@ -521,9 +566,17 @@ class ActivitySuggestionActivity:
         """Get the selected activity for routing"""
         return self._selected_activity
     
+    def is_termination_detected(self) -> bool:
+        """Check if termination phrase was detected"""
+        return self._termination_detected
+    
     def get_conversation_context(self) -> List[Dict[str, str]]:
         """Get conversation context for seeding smalltalk"""
         return self._conversation_context.copy()
+    
+    def get_mood_rating(self) -> Optional[int]:
+        """Get the detected pre-activity mood rating"""
+        return self._detected_mood_rating
     
     def add_system_message(self, content: str):
         """Inject a system message into the LLM pipeline before starting."""
@@ -532,7 +585,7 @@ class ActivitySuggestionActivity:
     
     def _handle_nudge(self):
         """Handle silence nudge callback"""
-        logger.info("🔔 Handling silence nudge...")
+        logger.info("Handling silence nudge...")
         
         try:
             use_audio_files = self.global_smalltalk_config.get("use_audio_files", False)
@@ -558,25 +611,29 @@ class ActivitySuggestionActivity:
             # Speak the nudge prompt (with delays to prevent STT pickup)
             logger.info(f"Speaking nudge prompt...")
             self._speak(nudge_prompt, is_nudge=True)
-            logger.info("✅ Nudge prompt spoken successfully")
+            logger.info("Nudge prompt spoken successfully")
             
             # After nudge TTS finishes, restart listening for activity choice
             # This replicates the same flow as after the initial greeting
-            logger.info("🔄 Restarting listening for activity choice after nudge...")
+            logger.info("Restarting listening for activity choice after nudge...")
             self._nudge_occurred = True
             
             # Stop the current listening mic if it's still active
             if self._listening_mic and self._listening_mic.is_running():
                 logger.info("Stopping current listening mic to restart after nudge...")
                 self._listening_mic.stop()
+                # Clear mic reference from ConversationAudioManager
+                with self.audio_manager._mic_lock:
+                    if self.audio_manager._current_mic == self._listening_mic:
+                        self.audio_manager._current_mic = None
                 self._listening_mic = None
             
         except Exception as e:
-            logger.error(f"❌ Error in _handle_nudge: {e}", exc_info=True)
+            logger.error(f"Error in _handle_nudge: {e}", exc_info=True)
     
     def _handle_timeout(self):
         """Handle silence timeout callback"""
-        logger.info("⏰ Handling silence timeout...")
+        logger.info("Handling silence timeout...")
         
         # Set timeout flag so run() knows not to route to smalltalk
         self._timeout_detected = True
@@ -587,6 +644,11 @@ class ActivitySuggestionActivity:
             logger.info("Stopping listening mic due to timeout...")
             try:
                 self._listening_mic.stop()
+                # Clear mic reference from ConversationAudioManager
+                if self.audio_manager:
+                    with self.audio_manager._mic_lock:
+                        if self.audio_manager._current_mic == self._listening_mic:
+                            self.audio_manager._current_mic = None
             except Exception as e:
                 logger.warning(f"Error stopping listening mic: {e}")
         
@@ -614,10 +676,10 @@ class ActivitySuggestionActivity:
             # Speak the timeout prompt
             logger.info(f"Speaking timeout prompt...")
             self._speak(timeout_prompt)
-            logger.info("✅ Timeout prompt spoken successfully")
+            logger.info("Timeout prompt spoken successfully")
             
         except Exception as e:
-            logger.error(f"❌ Error in _handle_timeout: {e}", exc_info=True)
+            logger.error(f"Error in _handle_timeout: {e}", exc_info=True)
         finally:
             # Signal that timeout handler has finished (allows run() to proceed with cleanup)
             logger.info("Timeout handler finished - signaling completion")
@@ -635,12 +697,13 @@ class ActivitySuggestionActivity:
         
         # Safety checks
         if not all([self.audio_manager, self.session_manager, self.llm_pipeline]):
-            logger.error("❌ Components not properly initialized - cannot start activity")
+            logger.error("Components not properly initialized - cannot start activity")
+            logger.error(f"  audio_manager: {self.audio_manager is not None}, session_manager: {self.session_manager is not None}, llm_pipeline: {self.llm_pipeline is not None}")
             return False
         
         # Check if keyword matcher is initialized (required for activity suggestion)
         if not self.intent_matcher:
-            logger.error("❌ Keyword intent matcher not initialized - cannot start activity")
+            logger.error("Keyword intent matcher not initialized - cannot start activity")
             # Speak error message and return False
             unavailable_msg = self.activity_suggestion_config.get(
                 "suggestions_unavailable",
@@ -650,14 +713,20 @@ class ActivitySuggestionActivity:
             return False
         
         try:
-            logger.info("🚀 Starting Activity Suggestion activity...")
+            logger.info("Starting Activity Suggestion activity...")
             self._active = True
             self._selected_activity = None
             self._conversation_context = []
+            self._detected_mood_rating = None
             
             
             # Start session
             conv_id = self.session_manager.start_session("Activity Suggestion")
+            # Double-check llm_pipeline is not None before using it
+            if self.llm_pipeline is None:
+                logger.error("llm_pipeline is None - cannot set conversation_id")
+                self._active = False
+                return False
             self.llm_pipeline.conversation_id = conv_id
             
             # Check if audio files should be used
@@ -678,7 +747,7 @@ class ActivitySuggestionActivity:
                 on_timeout=self._handle_timeout
             )
             
-            logger.info("✅ Activity Suggestion activity started successfully")
+            logger.info("Activity Suggestion activity started successfully")
             return True
             
         except Exception as e:
@@ -700,6 +769,11 @@ class ActivitySuggestionActivity:
             logger.info("Stopping listening mic...")
             try:
                 self._listening_mic.stop()
+                # Clear mic reference from ConversationAudioManager
+                if self.audio_manager:
+                    with self.audio_manager._mic_lock:
+                        if self.audio_manager._current_mic == self._listening_mic:
+                            self.audio_manager._current_mic = None
             except Exception as e:
                 logger.warning(f"Error stopping listening mic: {e}")
             self._listening_mic = None
@@ -712,11 +786,11 @@ class ActivitySuggestionActivity:
         if self.session_manager:
             self.session_manager.stop_session()
         
-        logger.info("✅ Activity Suggestion activity stopped")
+        logger.info("Activity Suggestion activity stopped")
     
     def cleanup(self):
         """Complete cleanup of all resources"""
-        logger.info("🧹 Cleaning up Activity Suggestion activity resources...")
+        logger.info("Cleaning up Activity Suggestion activity resources...")
         
         # Stop if still active
         if self._active:
@@ -725,7 +799,7 @@ class ActivitySuggestionActivity:
         # Cleanup LLM pipeline
         if self.llm_pipeline:
             try:
-                logger.info("🧹 Cleaning up LLM pipeline...")
+                logger.info("Cleaning up LLM pipeline...")
                 if hasattr(self.llm_pipeline, 'tts') and self.llm_pipeline.tts:
                     if hasattr(self.llm_pipeline.tts, 'client'):
                         try:
@@ -757,7 +831,7 @@ class ActivitySuggestionActivity:
         # Cleanup audio manager
         if self.audio_manager:
             try:
-                logger.info("🧹 Cleaning up audio manager...")
+                logger.info("Cleaning up audio manager...")
                 self.audio_manager.cleanup()
                 self.audio_manager = None
                 logger.info("✓ Audio manager cleaned up")
@@ -767,7 +841,7 @@ class ActivitySuggestionActivity:
         # Cleanup STT service
         if self.stt_service:
             try:
-                logger.info("🧹 Cleaning up STT service...")
+                logger.info("Cleaning up STT service...")
                 self.stt_service = None
                 logger.info("✓ STT service cleaned up")
             except Exception as e:
@@ -777,7 +851,7 @@ class ActivitySuggestionActivity:
         
         # Force garbage collection
         try:
-            logger.info("🧹 Running garbage collection...")
+            logger.info("Running garbage collection...")
             collected = gc.collect()
             logger.debug(f"Garbage collection collected {collected} objects")
         except Exception as e:
@@ -786,7 +860,122 @@ class ActivitySuggestionActivity:
         # Reset initialization state
         self._initialized = False
         
-        logger.info("✅ Activity Suggestion activity cleanup completed")
+        logger.info("Activity Suggestion activity cleanup completed")
+    
+    def _should_prompt_mood_rating(self, intent: str) -> bool:
+        """Return True if mood rating should be prompted for this intent."""
+        if not self.global_config:
+            return False
+
+        mood_cfg = self.global_config.get("mood_rating", {})
+        enabled = mood_cfg.get("enabled", True)
+        if not enabled:
+            return False
+
+        allowed_intents = {"smalltalk", "journaling", "meditation", "gratitude", "quote"}
+        return intent in allowed_intents
+
+    def _prompt_mood_rating(self) -> Optional[int]:
+        """Prompt user for mood rating and capture a single response."""
+        if not self.stt_service:
+            logger.warning("Mood rating skipped - STT service unavailable")
+            return None
+
+        if not self._active:
+            logger.debug("Mood rating skipped - activity not active")
+            return None
+
+        mood_cfg = (self.language_config or {}).get("mood_rating", {})
+        prompt = mood_cfg.get(
+            "prompt_before",
+            "Before we start, on a scale of 1 to 10, how strong are any negative emotions you're feeling right now? 1 means none, 10 means very strong."
+        )
+        skip_phrases = mood_cfg.get("skip_phrases", ["skip", "no", "not now", "later", "pass"])
+        timeout_seconds = (self.global_config or {}).get("mood_rating", {}).get("timeout_seconds", 10.0)
+
+        logger.info("Prompting for pre-activity mood rating...")
+
+        # Stop listening mic before prompting (if still active)
+        if self._listening_mic and self._listening_mic.is_running():
+            logger.debug("Stopping listening mic before mood rating prompt")
+            self._listening_mic.stop()
+            self._listening_mic = None
+            # Small delay to ensure mic is released
+            time.sleep(0.3)
+
+        # Speak the prompt using TTS
+        self._speak(prompt)
+
+        # Create new mic for mood rating capture
+        mic = MicStream(rate=16000, chunk_size=1600)
+
+        # Start the microphone
+        try:
+            mic.start()
+            mic.unmute()
+            logger.info(f"Mood rating mic started (muted={mic.is_muted()})")
+        except Exception as e:
+            logger.error(f"Failed to start mic for mood rating: {e}")
+            return None
+
+        final_text: Optional[str] = None
+        stt_completed = threading.Event()
+        stt_error = {"error": None}
+
+        def on_transcript(text: str, is_final: bool):
+            nonlocal final_text
+            if is_final and text:
+                final_text = text
+                if mic.is_running():
+                    mic.stop()
+
+        def run_stt():
+            try:
+                self.stt_service.stream_recognize(
+                    mic.generator(),
+                    on_transcript,
+                    interim_results=True,
+                    single_utterance=True
+                )
+            except Exception as e:
+                stt_error["error"] = e
+                logger.error(f"STT error during mood rating capture: {e}")
+            finally:
+                stt_completed.set()
+
+        stt_thread = threading.Thread(target=run_stt, daemon=True)
+        stt_thread.start()
+
+        # Wait for response with timeout
+        if not stt_completed.wait(timeout=timeout_seconds):
+            logger.info(f"Mood rating prompt timed out after {timeout_seconds}s")
+            if mic.is_running():
+                mic.stop()
+        else:
+            logger.debug("STT completed for mood rating")
+
+        stt_thread.join(timeout=1.0)
+
+        try:
+            if stt_error["error"]:
+                return None
+            if final_text:
+                rating = parse_mood_rating_from_speech(final_text, skip_phrases)
+                logger.info(f"Pre-activity mood rating: {rating}")
+                
+                # Speak acknowledgment if rating was successfully captured
+                if rating is not None:
+                    acknowledgment = mood_cfg.get("acknowledgment", "")
+                    if acknowledgment:
+                        logger.debug("Speaking mood rating acknowledgment")
+                        self._speak(acknowledgment)
+                
+                return rating
+            logger.debug("No response received for mood rating prompt")
+            return None
+        finally:
+            if mic.is_running():
+                mic.stop()
     
     def _speak(self, text: str, is_nudge: bool = False):
         """Speak text using TTS"""
@@ -818,7 +1007,7 @@ class ActivitySuggestionActivity:
     
     def reinitialize(self) -> bool:
         """Re-initialize the activity for subsequent runs"""
-        logger.info("🔄 Re-initializing Activity Suggestion activity...")
+        logger.info("Re-initializing Activity Suggestion activity...")
         
         # Reset state
         self._active = False
@@ -826,10 +1015,12 @@ class ActivitySuggestionActivity:
         self._selected_activity = None
         self._conversation_context = []
         self._timeout_detected = False
+        self._termination_detected = False  # Reset termination flag
         self._listening_mic = None  # Clear mic reference
         self._timeout_handler_finished.clear()  # Reset timeout handler event
         self._nudge_occurred = False  # Reset nudge flag
         self._listening_result = None  # Reset listening result
+        self._detected_mood_rating = None  # Reset mood rating
         
         # Re-initialize components
         return self.initialize()
@@ -845,11 +1036,11 @@ class ActivitySuggestionActivity:
         Returns:
             True if activity completed successfully, False otherwise
         """
-        logger.info("🎬 ActivitySuggestionActivity.run() - Starting activity execution")
+        logger.info("ActivitySuggestionActivity.run() - Starting activity execution")
         try:
             # Start the activity
             if not self.start():
-                logger.error("❌ ActivitySuggestionActivity.run() - Failed to start activity")
+                logger.error("ActivitySuggestionActivity.run() - Failed to start activity")
                 return False
             
             # Listen for user's activity choice in a loop (to handle nudge restarts)
@@ -860,12 +1051,12 @@ class ActivitySuggestionActivity:
                 
                 # If we got a result, break out of the loop
                 if matched_activity:
-                    logger.info(f"✅ Activity matched: {matched_activity}")
+                    logger.info(f"Activity matched: {matched_activity}")
                     break
                 
                 # If nudge occurred, restart listening (loop will continue)
                 if self._nudge_occurred:
-                    logger.info("🔄 Nudge occurred - restarting listening for activity choice...")
+                    logger.info("Nudge occurred - restarting listening for activity choice...")
                     self._nudge_occurred = False  # Reset flag
                     # Continue loop to call _listen_for_activity_choice() again
                     continue
@@ -888,16 +1079,72 @@ class ActivitySuggestionActivity:
                 self.stop()
                 return True
             
+            # Check for termination first
+            if matched_activity == "__termination__":
+                logger.info("Termination phrase detected - returning to idle mode")
+                
+                # Speak termination prompt before returning to idle mode
+                try:
+                    prompts = self.activity_suggestion_config.get("prompts", {})
+                    termination_prompt = prompts.get(
+                        "termination",
+                        "Okay, I'll catch you later."
+                    )
+                    logger.info(f"Speaking termination prompt: {termination_prompt}")
+                    self._speak(termination_prompt)
+                except Exception as e:
+                    logger.warning(f"Failed to load or speak termination prompt: {e}")
+                
+                self._selected_activity = "__termination__"  # Special sentinel value
+                self.stop()
+                return True
+            
+            # Check for rejection
+            if matched_activity == "__rejection__":
+                logger.info("Rejection detected - acknowledging and returning to idle mode")
+                
+                # Speak rejection prompt before returning to idle mode
+                try:
+                    prompts = self.activity_suggestion_config.get("prompts", {})
+                    rejection_prompt = prompts.get(
+                        "rejection",
+                        "No problem at all. I'll be here whenever you're ready. Take care!"
+                    )
+                    logger.info(f"Speaking rejection prompt: {rejection_prompt}")
+                    self._speak(rejection_prompt)
+                except Exception as e:
+                    logger.warning(f"Failed to load or speak rejection prompt: {e}")
+                
+                self._selected_activity = "__termination__"  # Use termination sentinel to return to idle mode
+                self.stop()
+                return True
+            
+            # Prompt mood rating if matched activity is valid (not None, not termination, not timeout)
+            if matched_activity:
+                should_prompt = self._should_prompt_mood_rating(matched_activity)
+                if should_prompt:
+                    try:
+                        # Ensure listening mic is stopped before prompting (if still active)
+                        if self._listening_mic and self._listening_mic.is_running():
+                            logger.debug("Stopping listening mic before mood rating prompt")
+                            self._listening_mic.stop()
+                            self._listening_mic = None
+                        
+                        self._detected_mood_rating = self._prompt_mood_rating()
+                    except Exception as e:
+                        logger.error(f"Exception in mood rating prompt: {e}", exc_info=True)
+                        self._detected_mood_rating = None
+            
             if matched_activity:
                 if matched_activity == "smalltalk":
                     # Smalltalk doesn't need starting feedback
                     self._route_to_selected_activity(matched_activity)
-                    logger.info(f"✅ User selected activity: {matched_activity}")
+                    logger.info(f"User selected activity: {matched_activity}")
                 else:
                     # Speak feedback and route to selected activity
                     self._speak_starting_activity(matched_activity)
                     self._route_to_selected_activity(matched_activity)
-                    logger.info(f"✅ User selected activity: {matched_activity}")
+                    logger.info(f"User selected activity: {matched_activity}")
             else:
                 # No match - speak feedback and route to smalltalk
                 self._speak_no_match()
