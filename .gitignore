@@ -10,6 +10,24 @@ backend/config/user_persona.json
 backend/src/supabase/migrations/
 archive/
 backend/src/v_17
+documentation/
+docs/
+*.md
+*.rst
+*.txt
+*.pdf
+*.doc
+*.docx
+*.odt
+*.rtf
+*.ppt
+*.pptx
+*.csv
+*.tsv
+*.xlsx
+*.xls
+*.numbers
+*.puml
 
 #============================================================#
 
