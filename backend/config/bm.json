@@ -100,7 +100,7 @@
     "smalltalk_suggestion_message": "Jika anda tidak mahu melakukan mana-mana cadangan ini, mungkin kita boleh berbual?"
   },
   "startup": {
-    "device_not_associated": "Peranti ini tidak dikaitkan dengan mana-mana pengguna. Sila hubungi perkhidmatan pelanggan Well-Bot untuk bantuan.",
+    "device_not_associated": "Saya mengalami masalah untuk mengesahkan peranti anda. Jangan risau, saya akan terus mencuba di latar belakang. Sila pastikan sambungan internet anda berfungsi.",
     "startup_completed": "Permulaan selesai. Hai {name}, panggil saya Well-Bot untuk membangunkan saya!"
   },
   "wakeword_responses": {

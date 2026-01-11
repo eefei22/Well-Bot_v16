@@ -105,7 +105,7 @@
     "smalltalk_suggestion_message": "If you're not feeling like doing any of these suggestions, maybe we can just have a chat?"
   },
   "startup": {
-    "device_not_associated": "This device is not associated to any user. Please contact Well-Bot customer service for assistance.",
+    "device_not_associated": "I'm having trouble connecting to verify your device. Don't worry, I'll keep trying in the background. Please ensure your internet connection is working.",
     "startup_completed": "Startup completed. Hi {name}, call me Well-Bot to wake me up!"
   },
   "wakeword_responses": {

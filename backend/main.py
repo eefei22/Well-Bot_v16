@@ -60,6 +60,7 @@ logger = logging.getLogger(__name__)
 class SystemState(Enum):
     """System states for the orchestration"""
     STARTING        = "starting"
+    WAITING_FOR_USER_ASSOCIATION = "waiting_for_user_association"  # Waiting to resolve device-user association
     LISTENING       = "listening"        # Listening for wake word
     PROCESSING      = "processing"       # After wake word, processing speech/intent
     ACTIVITY_ACTIVE = "activity_active"  # Running an activity (e.g., smalltalk)
@@ -86,15 +87,23 @@ class WellBotOrchestrator:
             self.servo_controller = None
 
         # Resolve user from device_id at startup
+        # Initialize flags for association retry logic
+        self.association_pending = False
+        self.user_id = None
+        self.prefer_name = None
+        self.full_name = None
+        self._association_retry_thread = None
+        self._stop_retry_flag = False
+        
         if not DEVICE_ID:
             # Load English config for error message (default)
+            logger.error("DEVICE_ID environment variable is not set")
+            self.association_pending = True
             try:
                 en_config = load_language_config('en')
                 error_message = en_config.get('startup', {}).get('device_not_associated', 
                     "This device is not associated to any user. Please contact Well-Bot customer service for assistance.")
                 
-                # Speak error message via TTS
-                logger.error("DEVICE_ID environment variable is not set")
                 # Initialize a minimal UI so the face GUI can load frames and display
                 # before we play the startup TTS. This improves UX so the user sees
                 # the face immediately while the startup message is spoken.
@@ -140,45 +149,77 @@ class WellBotOrchestrator:
                 logger.error(error_message)
             except Exception as tts_error:
                 logger.warning(f"Failed to speak error message: {tts_error}")
-            
-            raise ValueError(
-                "DEVICE_ID environment variable is not set. "
-                "Please set DEVICE_ID in your .env file to identify this device."
-            )
-        
-        logger.info(f"Resolving user for device_id: {DEVICE_ID}")
-        try:
-            user_info = resolve_user_from_device_id(DEVICE_ID)
-            self.user_id = user_info['user_id']
-            self.prefer_name = user_info.get('prefer_name')
-            self.full_name = user_info.get('full_name')
-            
-            # Save user info to user_persona.json
-            save_user_context_to_local(
-                user_id=self.user_id,
-                prefer_name=self.prefer_name,
-                full_name=self.full_name,
-                backend_dir=self.backend_dir
-            )
-            logger.info(f"✓ User resolved and saved: user_id={self.user_id}, prefer_name={self.prefer_name}, full_name={self.full_name}")
-        except ValueError as e:
-            # Load English config for error message (default)
+        else:
+            logger.info(f"Resolving user for device_id: {DEVICE_ID}")
             try:
-                en_config = load_language_config('en')
-                error_message = en_config.get('startup', {}).get('device_not_associated',
-                    "This device is not associated to any user. Please contact Well-Bot customer service for assistance.")
+                user_info = resolve_user_from_device_id(DEVICE_ID)
+                self.user_id = user_info['user_id']
+                self.prefer_name = user_info.get('prefer_name')
+                self.full_name = user_info.get('full_name')
                 
-                # Speak error message via TTS
+                # Save user info to user_persona.json
+                save_user_context_to_local(
+                    user_id=self.user_id,
+                    prefer_name=self.prefer_name,
+                    full_name=self.full_name,
+                    backend_dir=self.backend_dir
+                )
+                logger.info(f"✓ User resolved and saved: user_id={self.user_id}, prefer_name={self.prefer_name}, full_name={self.full_name}")
+            except ValueError as e:
+                # Device association failed - enter waiting mode instead of crashing
                 logger.error(f"Failed to resolve user from device_id {DEVICE_ID}: {e}")
-                self._speak_startup_message(error_message, language='en')
-                logger.error(error_message)
-            except Exception as tts_error:
-                logger.warning(f"Failed to speak error message: {tts_error}")
-            
-            raise RuntimeError(
-                f"Cannot start Well-Bot: {e}. "
-                "Please ensure the device is registered in the database."
-            ) from e
+                self.association_pending = True
+                
+                # Load English config for error message (default)
+                try:
+                    en_config = load_language_config('en')
+                    error_message = en_config.get('startup', {}).get('device_not_associated',
+                        "This device is not associated to any user. Please contact Well-Bot customer service for assistance.")
+                    
+                    # Initialize minimal UI for waiting mode
+                    try:
+                        self.ui_interface = UIInterface()
+
+                        # Build GIF paths and preload into memory to avoid GUI lag
+                        backend_assets = self.backend_dir / "assets" / "GUI"
+                        gif_files = {
+                            "idle": str((backend_assets / "gui_idleing.gif") if (backend_assets / "gui_idleing.gif").exists() else (backend_assets / "gui_idleing.gif")),
+                            "listening": str((backend_assets / "gui_listening.gif") if (backend_assets / "gui_listening.gif").exists() else (backend_assets / "gui_listening.gif")),
+                            "speaking": str((backend_assets / "gui_speaking.gif") if (backend_assets / "gui_speaking.gif").exists() else (backend_assets / "gui_speaking.gif")),
+                            "loading": str(backend_assets / "gui_loading.gif"),
+                            "journaling": str(backend_assets / "gui_journaling.gif"),
+                            "meditating": str(backend_assets / "gui_meditating.gif"),
+                            "gratitude": str(backend_assets / "gui_gratitude.gif"),
+                        }
+
+                        try:
+                            preloaded = preload_gif_data(gif_files)
+                        except Exception as e:
+                            logger.warning(f"Preloading GIFs failed: {e}")
+                            preloaded = {}
+
+                        # Start GUI and pass preloaded frames (if any)
+                        self._gui_window = start_gui(self.ui_interface, preloaded if preloaded else None, update_interval_ms=100, wait_for_ready_seconds=2.0)
+                        if self._gui_window:
+                            # Wait until the window reports first frame rendered (max 5s)
+                            try:
+                                if getattr(self._gui_window, 'wait_until_ready', None):
+                                    if self._gui_window.wait_until_ready(timeout=5.0):
+                                        logger.info("✓ GUI frames loaded and first frame displayed")
+                                    else:
+                                        logger.warning("GUI did not signal readiness within timeout; proceeding to speak")
+                            except Exception:
+                                logger.debug("GUI readiness check failed - continuing")
+                        else:
+                            logger.warning("GUI window not ready yet; continuing to speak startup message")
+                    except Exception as ui_err:
+                        logger.warning(f"Failed to start GUI before startup TTS: {ui_err}")
+                    
+                    # Speak error message via TTS
+                    self._speak_startup_message(error_message, language='en')
+                    logger.error(error_message)
+                except Exception as tts_error:
+                    logger.warning(f"Failed to speak error message: {tts_error}")
         
         # Load user-specific config (will be loaded in _initialize_components)
         self.global_config = None
@@ -263,6 +304,111 @@ class WellBotOrchestrator:
         except Exception as e:
             logger.warning(f"Failed to speak startup message: {e}", exc_info=True)
             return False
+
+    def _attempt_user_association(self) -> bool:
+        """
+        Attempt to resolve user from device_id.
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        if not DEVICE_ID:
+            logger.warning("DEVICE_ID is not set, cannot attempt association")
+            return False
+        
+        try:
+            logger.info(f"Attempting to resolve user for device_id: {DEVICE_ID}")
+            user_info = resolve_user_from_device_id(DEVICE_ID)
+            
+            if not user_info:
+                logger.warning("No user found for device_id")
+                return False
+            
+            # Successfully resolved user
+            with self._lock:
+                self.user_id = user_info['user_id']
+                self.prefer_name = user_info.get('prefer_name')
+                self.full_name = user_info.get('full_name')
+            
+            # Save user info to user_persona.json
+            save_user_context_to_local(
+                user_id=self.user_id,
+                prefer_name=self.prefer_name,
+                full_name=self.full_name,
+                backend_dir=self.backend_dir
+            )
+            
+            logger.info(f"✓ User resolved and saved: user_id={self.user_id}, prefer_name={self.prefer_name}, full_name={self.full_name}")
+            return True
+            
+        except Exception as e:
+            logger.warning(f"Failed to resolve user from device_id {DEVICE_ID}: {e}")
+            return False
+
+    def _start_association_retry_thread(self):
+        """
+        Start a background thread that periodically retries device-user association.
+        Retries every 3 minutes (180 seconds) until successful or system shutdown.
+        """
+        if self._association_retry_thread is not None:
+            logger.warning("Association retry thread already running")
+            return
+        
+        def retry_loop():
+            """Background thread that retries association every 3 minutes"""
+            retry_interval = 30  # 3 minutes in seconds
+            
+            while not self._stop_retry_flag:
+                # Wait for retry interval (check every second for stop flag)
+                for _ in range(retry_interval):
+                    if self._stop_retry_flag:
+                        logger.info("Association retry thread stopping due to shutdown")
+                        return
+                    time.sleep(1)
+                
+                # Attempt association
+                logger.info("Retrying device-user association...")
+                if self._attempt_user_association():
+                    # Success! Complete initialization and transition to normal operation
+                    logger.info("✓ Device-user association successful! Completing initialization...")
+                    
+                    try:
+                        # Initialize components now that we have user_id
+                        if self._initialize_components():
+                            # Start idle mode (wake word detection)
+                            with self._lock:
+                                self.state = SystemState.LISTENING
+                                self.association_pending = False
+                            
+                            self._start_idle_mode()
+                            
+                            # Speak startup completion message
+                            try:
+                                language = resolve_language(self.user_id)
+                                lang_config = get_language_config(language)
+                                startup_msg = lang_config.get('startup', {}).get('startup_completed', 
+                                    "Well-Bot is now ready. Say my name to wake me up.")
+                                self._speak_startup_message(startup_msg, language=language)
+                            except Exception as e:
+                                logger.warning(f"Failed to speak startup completion message: {e}")
+                            
+                            logger.info("System transitioned to normal operation")
+                        else:
+                            logger.error("Failed to initialize components after association")
+                            # Continue retrying
+                    except Exception as e:
+                        logger.error(f"Error during post-association initialization: {e}", exc_info=True)
+                        # Continue retrying
+                    
+                    # Stop retry loop
+                    return
+                else:
+                    logger.info(f"Association retry failed, will retry again in {retry_interval} seconds")
+        
+        self._stop_retry_flag = False
+        self._association_retry_thread = threading.Thread(target=retry_loop, daemon=True, name="AssociationRetry")
+        self._association_retry_thread.start()
+        logger.info("Association retry thread started (3-minute interval)")
 
     def _validate_config_files(self) -> bool:
         """Validate that all required config files exist."""
@@ -1761,6 +1907,23 @@ class WellBotOrchestrator:
         """Start the entire orchestration system."""
         logger.info("=== Well-Bot Orchestrator Starting ===")
 
+        # Check if we're waiting for device-user association
+        if self.association_pending:
+            logger.info("Device-user association pending, entering waiting mode...")
+            
+            with self._lock:
+                self.state = SystemState.WAITING_FOR_USER_ASSOCIATION
+            
+            # Start the retry thread
+            self._start_association_retry_thread()
+            
+            # TODO: Show visual indicator in GUI for waiting state
+            # if self.ui_interface:
+            #     self.ui_interface.set_waiting_mode(True)
+            
+            logger.info("System in waiting mode - will retry association every 3 minutes")
+            return True  # System stays alive in waiting mode
+
         if not self._validate_config_files():
             logger.error("Configuration validation failed")
             return False
@@ -1822,6 +1985,16 @@ class WellBotOrchestrator:
 
         with self._lock:
             self.state = SystemState.SHUTTING_DOWN
+
+        # Stop association retry thread if running
+        if self._association_retry_thread is not None:
+            logger.info("Stopping association retry thread...")
+            self._stop_retry_flag = True
+            self._association_retry_thread.join(timeout=5.0)
+            if self._association_retry_thread.is_alive():
+                logger.warning("Association retry thread did not stop in time")
+            else:
+                logger.info("✅ Association retry thread stopped")
 
         # Cleanup servo
         if self.servo_controller:
