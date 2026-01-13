@@ -113,8 +113,8 @@
     }
   },
   "mood_rating": {
-    "prompt_before": "Sebelum kita mula, pada skala 1 hingga 10, betapa kuatnya sebarang emosi negatif yang anda rasa sekarang? 1 bermaksud tiada, 10 bermaksud sangat kuat.",
-    "prompt_after": "Sekarang kita sudah selesai, pada skala 1 hingga 10, betapa kuatnya sebarang emosi negatif yang anda rasa sekarang? 1 bermaksud tiada, 10 bermaksud sangat kuat.",
+    "prompt_before": "Sebelum kita bermula, pada skala 1 hingga 10, bolehkah anda menilai perasaan anda sekarang? 1 bermaksud sangat tidak baik, 10 bermaksud sangat baik.",
+    "prompt_after": "Sekarang kita sudah selesai, pada skala 1 hingga 10, bolehkah anda menilai perasaan anda sekarang? 1 bermaksud sangat tidak baik, 10 bermaksud sangat baik.",
     "acknowledgment": "Terima kasih kerana berkongsi.",
     "skip_phrases": ["langkau", "tidak", "bukan sekarang", "kemudian", "lepaskan"]
   },

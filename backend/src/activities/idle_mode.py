@@ -93,6 +93,11 @@ class IdleModeActivity:
         self._intervention_triggered_flag = threading.Event()
         self._last_was_intervention = False  # Track if last trigger was intervention
         
+        # Preferences checking thread
+        self._preferences_check_thread: Optional[threading.Thread] = None
+        self._preferences_check_interval = 300  # 5 minutes in seconds
+        self._stop_preferences_check = False
+        
         logger.info(f"IdleModeActivity initialized for user {self.user_id}")
     
     def initialize(self) -> bool:
@@ -226,6 +231,9 @@ class IdleModeActivity:
                 except Exception as e:
                     logger.warning(f"Error starting emotion monitoring: {e}", exc_info=True)
             
+            # Start preferences checking thread
+            self._start_preferences_check_thread()
+            
             self._active = True
             logger.info("Idle mode active: listening for wake word and monitoring emotions")
             return True
@@ -244,6 +252,9 @@ class IdleModeActivity:
         
         # Mark as inactive FIRST
         self._active = False
+        
+        # Stop preferences checking thread
+        self._stop_preferences_check_thread()
         
         # Stop emotion monitoring
         if self.emotion_monitoring_activity:
@@ -403,9 +414,87 @@ class IdleModeActivity:
                 except Exception as e:
                     logger.warning(f"Error cleaning up emotion monitoring: {e}")
             
+            # Stop preferences check thread
+            self._stop_preferences_check_thread()
+            
             logger.info("Idle mode cleanup completed")
         except Exception as e:
             logger.error(f"Error during idle mode cleanup: {e}", exc_info=True)
+    
+    def _start_preferences_check_thread(self):
+        """Start background thread to periodically check user preferences"""
+        if self._preferences_check_thread is not None:
+            logger.warning("Preferences check thread already running")
+            return
+        
+        def check_loop():
+            """Background thread that checks preferences immediately, then every 5 minutes"""
+            first_check = True  # Flag to check immediately on first run
+            
+            while not self._stop_preferences_check:
+                try:
+                    # On first run, check immediately. Otherwise wait for interval
+                    if not first_check:
+                        # Wait for check interval (check every second for stop flag)
+                        for _ in range(self._preferences_check_interval):
+                            if self._stop_preferences_check:
+                                logger.debug("Preferences check thread stopping due to shutdown")
+                                return
+                            time.sleep(1)
+                    else:
+                        first_check = False
+                        logger.info("Performing initial preferences check on idle_mode start...")
+                    
+                    # Check all preferences
+                    from src.utils.config_resolver import check_user_preferences_changed
+                    changes = check_user_preferences_changed(self.user_id)
+                    
+                    # Handle changes
+                    if any(changes.values()):
+                        logger.info(f"User preferences changed for {self.user_id}: {changes}")
+                        
+                        # Invalidate language cache if language changed
+                        if changes['language']:
+                            from src.utils.config_resolver import invalidate_user_cache
+                            invalidate_user_cache(self.user_id)
+                            logger.info("Language cache invalidated - new language will be used on next activity")
+                        
+                        # Update user_persona.json if prefer_name or spiritual_beliefs changed
+                        if changes['prefer_name'] or changes['spiritual_beliefs']:
+                            from src.supabase.auth import refresh_user_persona_from_database
+                            if refresh_user_persona_from_database(self.user_id, self.backend_dir):
+                                logger.info("User persona refreshed with latest preferences")
+                            else:
+                                logger.warning("Failed to refresh user persona")
+                    else:
+                        logger.debug(f"No preference changes detected for user {self.user_id}")
+                        
+                except Exception as e:
+                    logger.warning(f"Error in preferences check loop: {e}", exc_info=True)
+                    # Continue loop even on error
+                    if not first_check:  # Only sleep if not first check
+                        time.sleep(1)
+        
+        self._stop_preferences_check = False
+        self._preferences_check_thread = threading.Thread(
+            target=check_loop,
+            daemon=True,
+            name="PreferencesCheck"
+        )
+        self._preferences_check_thread.start()
+        logger.info(f"Preferences check thread started (checking every {self._preferences_check_interval} seconds)")
+    
+    def _stop_preferences_check_thread(self):
+        """Stop the preferences checking thread"""
+        if self._preferences_check_thread is not None:
+            logger.info("Stopping preferences check thread...")
+            self._stop_preferences_check = True
+            self._preferences_check_thread.join(timeout=5.0)
+            if self._preferences_check_thread.is_alive():
+                logger.warning("Preferences check thread did not stop within timeout")
+            else:
+                logger.info("✓ Preferences check thread stopped")
+            self._preferences_check_thread = None
     
     def reinitialize(self) -> bool:
         """Re-initialize the activity for subsequent runs"""

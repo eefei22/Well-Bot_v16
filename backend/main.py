@@ -380,7 +380,7 @@ class WellBotOrchestrator:
                                 self.state = SystemState.LISTENING
                                 self.association_pending = False
                             
-                            self._start_idle_mode()
+                            self._start_idle_mode_activity()
                             
                             # Speak startup completion message
                             try:
@@ -479,6 +479,10 @@ class WellBotOrchestrator:
     def _initialize_components(self) -> bool:
         """Initialize STT, voice pipeline, activities."""
         try:
+            # Force refresh user configs to ensure we have latest preferences
+            from src.utils.config_resolver import force_refresh_user_configs
+            force_refresh_user_configs(self.user_id)
+            
             # Resolve user language and load configs
             user_lang = resolve_language(self.user_id)
             logger.info(f"Resolved language '{user_lang}' for user {self.user_id}")
@@ -750,8 +754,21 @@ class WellBotOrchestrator:
             logger.info("Activity suggestion intent detected - launching activity suggestion")
             self._start_activity_suggestion_activity()
         elif intent == "termination":
-            logger.info("Termination intent detected – ending session")
-            self._handle_termination()
+            # Check if we're in wake mode - if so, acknowledge and return to idle instead of shutting down
+            current_thread = threading.current_thread()
+            with self._lock:
+                is_in_wake_mode = (
+                    self._wake_mode_thread is not None and
+                    self._wake_mode_thread.is_alive() and
+                    current_thread == self._wake_mode_thread
+                )
+            
+            if is_in_wake_mode:
+                logger.info("Termination intent detected in wake mode – returning to idle mode")
+                self._handle_wake_mode_termination()
+            else:
+                logger.info("Termination intent detected – ending session")
+                self._handle_termination()
         else:
             logger.info(f"Unknown intent '{intent}' – prompting to repeat")
             self._handle_unknown_intent(transcript)
@@ -868,6 +885,66 @@ class WellBotOrchestrator:
             self.state = SystemState.SHUTTING_DOWN
         self.stop()
 
+    def _handle_wake_mode_termination(self):
+        """Handle termination intent in wake mode by acknowledging and returning to idle mode."""
+        logger.info("Termination intent received in wake mode – returning to idle mode")
+        
+        # Load prompt from config
+        try:
+            language_code = resolve_language(self.user_id)
+            language_config = get_language_config(language_code)
+            wakeword_responses_config = language_config.get("wakeword_responses", {})
+            prompts_config = wakeword_responses_config.get("prompts", {})
+            termination_prompt = prompts_config.get(
+                "termination",
+                "Alright, just call my name again when you're ready."
+            )
+            
+            # Speak acknowledgment using wake_mode_activity's TTS if available
+            if self.wake_mode_activity and hasattr(self.wake_mode_activity, '_speak'):
+                try:
+                    logger.info(f"Speaking wake mode termination prompt: {termination_prompt}")
+                    self.wake_mode_activity._speak(termination_prompt)
+                except Exception as e:
+                    logger.warning(f"Failed to speak wake mode termination prompt using wake_mode_activity: {e}")
+                    # Fallback: try using idle mode TTS
+                    if self.idle_mode_activity and hasattr(self.idle_mode_activity, '_speak'):
+                        try:
+                            self.idle_mode_activity._speak(termination_prompt)
+                        except Exception as e2:
+                            logger.error(f"Failed to speak wake mode termination prompt using idle_mode_activity: {e2}")
+            elif self.idle_mode_activity and hasattr(self.idle_mode_activity, '_speak'):
+                try:
+                    logger.info(f"Speaking wake mode termination prompt using idle_mode_activity: {termination_prompt}")
+                    self.idle_mode_activity._speak(termination_prompt)
+                except Exception as e:
+                    logger.error(f"Failed to speak wake mode termination prompt: {e}")
+        except Exception as e:
+            logger.error(f"Error loading or speaking wake mode termination prompt: {e}", exc_info=True)
+            # Fallback to default message
+            try:
+                if self.wake_mode_activity and hasattr(self.wake_mode_activity, '_speak'):
+                    self.wake_mode_activity._speak("Alright, just call my name again when you're ready.")
+                elif self.idle_mode_activity and hasattr(self.idle_mode_activity, '_speak'):
+                    self.idle_mode_activity._speak("Alright, just call my name again when you're ready.")
+            except Exception as e2:
+                logger.error(f"Failed to speak fallback termination prompt: {e2}")
+        
+        # Stop wake mode activity to clean up resources
+        try:
+            if self.wake_mode_activity:
+                self.wake_mode_activity.stop()
+        except Exception as e:
+            logger.warning(f"Error stopping wake mode activity: {e}")
+        
+        # Return to idle mode instead of shutting down
+        # Reset state to allow idle mode to restart
+        with self._lock:
+            if self.state == SystemState.PROCESSING or self.state == SystemState.ACTIVITY_ACTIVE:
+                self.state = SystemState.IDLE
+        
+        # Restart idle mode
+        self._restart_idle_mode_if_needed()
 
     def _handle_unknown_intent(self, transcript: str):
         """Handle unknown/unrecognized intent by prompting user to repeat and looping back"""
@@ -1844,6 +1921,11 @@ class WellBotOrchestrator:
                     self.idle_mode_activity.cleanup()
                     logger.info("Idle mode cleanup completed")
                     
+                    # Invalidate language cache before reinitializing to ensure fresh preferences
+                    from src.utils.config_resolver import invalidate_user_cache
+                    invalidate_user_cache(self.user_id)
+                    logger.debug("Invalidated language cache before idle_mode restart")
+                    
                     # Re-initialize for next run
                     logger.info("Re-initializing idle mode activity...")
                     if not self.idle_mode_activity.reinitialize():
@@ -1921,7 +2003,7 @@ class WellBotOrchestrator:
             # if self.ui_interface:
             #     self.ui_interface.set_waiting_mode(True)
             
-            logger.info("System in waiting mode - will retry association every 3 minutes")
+            logger.info("System in waiting mode - will retry association every 0.5 minutes")
             return True  # System stays alive in waiting mode
 
         if not self._validate_config_files():
