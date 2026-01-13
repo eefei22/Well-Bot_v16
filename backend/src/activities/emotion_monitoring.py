@@ -91,7 +91,7 @@ class EmotionMonitoringActivity:
             self.ser_client = SERServiceClient(service_url=os.getenv("SER_SERVICE_URL"))
             self.fer_client = FERServiceClient(service_url=os.getenv("FER_SERVICE_URL"))
             
-            logger.info("✓ Service clients initialized")
+            logger.info("Service clients initialized")
             
             # Subscribe to SharedAudioManager
             audio_manager = SharedAudioManager.get_instance()
@@ -101,7 +101,7 @@ class EmotionMonitoringActivity:
                 chunk_size=1600
             )
             
-            logger.info("✓ Subscribed to SharedAudioManager")
+            logger.info("Subscribed to SharedAudioManager")
             
             self._initialized = True
             logger.info("Emotion Monitoring activity initialized successfully")
@@ -119,22 +119,35 @@ class EmotionMonitoringActivity:
         
         with self._lock:
             if self._active:
-                logger.warning("Emotion monitoring already active")
+                logger.debug(
+                    "event=emotion.start.noop user_id=%s reason=already_active",
+                    self.user_id,
+                )
                 return True
             
             self._active = True
             self._running = True
-            logger.info("Emotion monitoring active")
+            logger.info(
+                "event=emotion.start user_id=%s audio_chunk_seconds=%s",
+                self.user_id,
+                self.audio_chunk_duration_seconds,
+            )
             return True
     
     def stop(self):
         """Stop the emotion monitoring activity immediately (non-blocking)"""
         with self._lock:
             if not self._active:
-                logger.warning("Emotion monitoring not active, cannot stop")
+                logger.debug(
+                    "event=emotion.stop.noop user_id=%s reason=not_active",
+                    self.user_id,
+                )
                 return
             
-            logger.info("Stopping emotion monitoring activity immediately...")
+            logger.info(
+                "event=emotion.stop.begin user_id=%s",
+                self.user_id,
+            )
             # Set flags immediately to interrupt ongoing operations
             self._running = False
             self._active = False
@@ -158,7 +171,10 @@ class EmotionMonitoringActivity:
                 except Exception as e:
                     logger.warning(f"Error unsubscribing from SharedAudioManager: {e}")
             
-            logger.info("Emotion monitoring stopped (flags set, operations will abort)")
+            logger.info(
+                "event=emotion.stop.end user_id=%s",
+                self.user_id,
+            )
     
     def run(self) -> bool:
         """
@@ -167,7 +183,10 @@ class EmotionMonitoringActivity:
         Returns:
             True if activity completed normally, False if stopped or error
         """
-        logger.info("EmotionMonitoringActivity.run() - Starting emotion monitoring execution")
+        logger.info(
+            "event=emotion.run.begin user_id=%s",
+            self.user_id,
+        )
         
         if not self._initialized:
             logger.error("Cannot run: activity not initialized")
@@ -203,7 +222,10 @@ class EmotionMonitoringActivity:
                     if self._running:
                         time.sleep(1.0)
             
-            logger.info("Emotion monitoring loop ended")
+            logger.info(
+                "event=emotion.run.end user_id=%s",
+                self.user_id,
+            )
             return True
             
         except Exception as e:
@@ -401,14 +423,20 @@ class EmotionMonitoringActivity:
                     chunk = next(self._audio_generator)
                     audio_chunks.append(chunk)
                 except StopIteration:
-                    logger.warning("Audio generator ended unexpectedly")
+                    if not self._running:
+                        logger.debug("Audio generator ended during shutdown")
+                    else:
+                        logger.warning("Audio generator ended unexpectedly")
                     break
                 except Exception as e:
                     logger.warning(f"Error capturing audio chunk: {e}")
                     break
             
             if not audio_chunks:
-                logger.warning("No audio chunks captured")
+                if not self._running:
+                    logger.debug("No audio chunks captured (stopped during capture)")
+                else:
+                    logger.warning("No audio chunks captured")
                 return None
             
             # Save to temporary WAV file

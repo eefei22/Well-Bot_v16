@@ -49,11 +49,12 @@ from src.components.tts import GoogleTTSClient
 from google.cloud import texttospeech
 import pyaudio
 
-# Configure logging
+# Configure logging (force overrides any earlier basicConfig() from imported modules)
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s | %(levelname)-8s | %(name)-15s | %(message)s',
-    datefmt='%H:%M:%S'
+    format='%(asctime)s | %(levelname)-8s | %(name)-28s | %(threadName)-18s | %(message)s',
+    datefmt='%H:%M:%S',
+    force=True,
 )
 logger = logging.getLogger(__name__)
 
@@ -81,7 +82,7 @@ class WellBotOrchestrator:
         
         try:
             self.servo_controller = ServoController()
-            logger.info("✓ Servo controller loaded (On-Demand mode)")
+            logger.info("Servo controller loaded (On-Demand mode)")
         except Exception as e:
             logger.warning(f"Could not load servo controller: {e}")
             self.servo_controller = None
@@ -135,7 +136,7 @@ class WellBotOrchestrator:
                         try:
                             if getattr(self._gui_window, 'wait_until_ready', None):
                                 if self._gui_window.wait_until_ready(timeout=5.0):
-                                    logger.info("✓ GUI frames loaded and first frame displayed")
+                                    logger.info("GUI frames loaded and first frame displayed")
                                 else:
                                     logger.warning("GUI did not signal readiness within timeout; proceeding to speak")
                         except Exception:
@@ -164,7 +165,7 @@ class WellBotOrchestrator:
                     full_name=self.full_name,
                     backend_dir=self.backend_dir
                 )
-                logger.info(f"✓ User resolved and saved: user_id={self.user_id}, prefer_name={self.prefer_name}, full_name={self.full_name}")
+                logger.info(f"User resolved and saved: user_id={self.user_id}, prefer_name={self.prefer_name}, full_name={self.full_name}")
             except ValueError as e:
                 # Device association failed - enter waiting mode instead of crashing
                 logger.error(f"Failed to resolve user from device_id {DEVICE_ID}: {e}")
@@ -205,7 +206,7 @@ class WellBotOrchestrator:
                             try:
                                 if getattr(self._gui_window, 'wait_until_ready', None):
                                     if self._gui_window.wait_until_ready(timeout=5.0):
-                                        logger.info("✓ GUI frames loaded and first frame displayed")
+                                        logger.info("GUI frames loaded and first frame displayed")
                                     else:
                                         logger.warning("GUI did not signal readiness within timeout; proceeding to speak")
                             except Exception:
@@ -338,7 +339,7 @@ class WellBotOrchestrator:
                 backend_dir=self.backend_dir
             )
             
-            logger.info(f"✓ User resolved and saved: user_id={self.user_id}, prefer_name={self.prefer_name}, full_name={self.full_name}")
+            logger.info(f"User resolved and saved: user_id={self.user_id}, prefer_name={self.prefer_name}, full_name={self.full_name}")
             return True
             
         except Exception as e:
@@ -370,7 +371,7 @@ class WellBotOrchestrator:
                 logger.info("Retrying device-user association...")
                 if self._attempt_user_association():
                     # Success! Complete initialization and transition to normal operation
-                    logger.info("✓ Device-user association successful! Completing initialization...")
+                    logger.info("Device-user association successful! Completing initialization...")
                     
                     try:
                         # Initialize components now that we have user_id
@@ -418,7 +419,7 @@ class WellBotOrchestrator:
             if not f.exists():
                 missing.append(str(f))
             else:
-                logger.info(f"✓ Found: {f}")
+                logger.info(f"Found: {f}")
         if missing:
             logger.error(f"Missing required files: {missing}")
             return False
@@ -512,7 +513,7 @@ class WellBotOrchestrator:
             if not self.idle_mode_activity.initialize():
                 raise RuntimeError("Failed to initialize Idle Mode activity")
             
-            logger.info("✓ Idle Mode activity initialized")
+            logger.info("Idle Mode activity initialized")
 
             # Initialize Wake Mode activity
             logger.info("Initializing Wake Mode activity (intent recognition)…")
@@ -523,7 +524,7 @@ class WellBotOrchestrator:
             )
             if not self.wake_mode_activity.initialize():
                 raise RuntimeError("Failed to initialize Wake Mode activity")
-            logger.info("✓ Wake Mode activity initialized")
+            logger.info("Wake Mode activity initialized")
             return True
         
         except Exception as e:
@@ -549,7 +550,7 @@ class WellBotOrchestrator:
                     logger.info("Initializing UI interface for GUI...")
                     self.ui_interface = UIInterface()
                     logger.info(
-                        f"✓ UI interface initialized (id={id(self.ui_interface)})"
+                        f"UI interface initialized (id={id(self.ui_interface)})"
                     )
             else:
                 logger.info("GUI disabled - using NoOp UI interface")
@@ -611,7 +612,7 @@ class WellBotOrchestrator:
                         if hasattr(self._gui_window, 'wait_until_ready'):
                             is_ready = self._gui_window.wait_until_ready(timeout=15.0)
                             if is_ready:
-                                logger.info("✓ GUI is ready and visible")
+                                logger.info("GUI is ready and visible")
                             else:
                                 logger.warning("GUI started but timed out waiting for readiness")
                         else:
@@ -1681,7 +1682,17 @@ class WellBotOrchestrator:
 
     def _on_wake_detected(self):
         """Callback when wake word is detected by idle_mode - start wake_mode immediately"""
-        logger.info("Wake word detected callback - starting wake_mode immediately")
+        idle_run_id = None
+        if self.idle_mode_activity and hasattr(self.idle_mode_activity, "get_current_run_id"):
+            try:
+                idle_run_id = self.idle_mode_activity.get_current_run_id()
+            except Exception:
+                idle_run_id = None
+
+        logger.info(
+            "event=orchestrator.trigger.received trigger=wakeword idle_run_id=%s",
+            idle_run_id,
+        )
         
         # Check system state
         with self._lock:
@@ -1705,7 +1716,17 @@ class WellBotOrchestrator:
     
     def _on_intervention_triggered(self):
         """Callback when intervention is triggered by idle_mode - start wake_mode immediately"""
-        logger.info("Intervention triggered callback - starting wake_mode immediately")
+        idle_run_id = None
+        if self.idle_mode_activity and hasattr(self.idle_mode_activity, "get_current_run_id"):
+            try:
+                idle_run_id = self.idle_mode_activity.get_current_run_id()
+            except Exception:
+                idle_run_id = None
+
+        logger.info(
+            "event=orchestrator.trigger.received trigger=intervention idle_run_id=%s",
+            idle_run_id,
+        )
         
         # Check system state
         with self._lock:
@@ -2010,7 +2031,7 @@ class WellBotOrchestrator:
             logger.error("Configuration validation failed")
             return False
 
-        logger.info("✓ Global and language configurations loaded")
+        logger.info("Global and language configurations loaded")
 
         if not self._initialize_components():
             logger.error("Component initialization failed")
@@ -2038,7 +2059,7 @@ class WellBotOrchestrator:
             # Speak success message via TTS
             logger.info("Speaking startup completion message...")
             self._speak_startup_message(success_message, language=user_language)
-            logger.info(f"✓ Startup success message: {success_message}")
+            logger.info(f"Startup success message: {success_message}")
         except Exception as e:
             logger.warning(f"Failed to speak startup success message: {e}", exc_info=True)
             # Continue startup even if TTS fails

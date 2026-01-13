@@ -324,7 +324,7 @@ class WakeWordDetector:
                     result = self.process_audio_chunk(audio_chunk)
                     
                     if result is not None and result >= 0:
-                        logger.info("Wake word detected")
+                        logger.debug("Wake word detected (subscription mode) - delegating to callback")
                         try:
                             on_detected()
                         except Exception as e:
@@ -670,7 +670,7 @@ class OpenWakeWordDetector:
                     
                     # Process chunk
                     if self.process_audio_chunk(audio_chunk):
-                        logger.info("Wake word detected")
+                        logger.debug("Wake word detected (subscription mode) - delegating to callback")
                         try:
                             on_detected()
                         except Exception as e:
@@ -746,7 +746,7 @@ def create_wake_word_detector(access_key_file: str, custom_keyword_file: Optiona
         
         # Try to initialize Porcupine
         if detector.initialize():
-            logger.info("✓ Using Porcupine for wake word detection")
+            logger.info("Using Porcupine for wake word detection")
             return detector
         else:
             logger.warning("Porcupine initialization failed, falling back to OpenWakeWord")
@@ -779,7 +779,7 @@ def create_wake_word_detector(access_key_file: str, custom_keyword_file: Optiona
     detector = OpenWakeWordDetector(backend_dir=backend_dir)
     
     if detector.initialize():
-        logger.info("✓ Using OpenWakeWord for wake word detection (fallback mode)")
+        logger.info("Using OpenWakeWord for wake word detection (fallback mode)")
         return detector
     else:
         logger.error("OpenWakeWord initialization also failed")
