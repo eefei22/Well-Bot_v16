@@ -242,6 +242,7 @@ class WellBotOrchestrator:
         self._wake_mode_thread: Optional[threading.Thread] = None  # Track wake mode thread
         self._transitioning_to_activity = False  # Flag to prevent idle mode restart during activity transition
         self._restarting_idle_mode = False  # Flag to prevent multiple concurrent idle mode restarts
+        self._last_activity_end_time = None  # Timestamp when last activity ended (to prevent immediate wakeword triggers)
         self._current_activity_log_id: Optional[str] = None  # Track log ID for completion
         self._pre_activity_mood_rating: Optional[int] = None  # Store pre-activity mood rating
         
@@ -756,12 +757,12 @@ class WellBotOrchestrator:
             self._start_activity_suggestion_activity()
         elif intent == "termination":
             # Check if we're in wake mode - if so, acknowledge and return to idle instead of shutting down
-            current_thread = threading.current_thread()
+            # Wake mode routing happens from threads spawned by wake_mode_activity, but the parent
+            # wake_mode_thread remains alive during routing, so we check if it's alive
             with self._lock:
                 is_in_wake_mode = (
                     self._wake_mode_thread is not None and
-                    self._wake_mode_thread.is_alive() and
-                    current_thread == self._wake_mode_thread
+                    self._wake_mode_thread.is_alive()
                 )
             
             if is_in_wake_mode:
@@ -871,6 +872,10 @@ class WellBotOrchestrator:
                 with self._lock:
                     self._activity_thread = None
                 
+                # Record activity end time to prevent immediate wakeword triggers
+                import time
+                self._last_activity_end_time = time.time()
+                
                 # When activity ends, restart wake word detection
                 self._restart_idle_mode()
 
@@ -931,7 +936,7 @@ class WellBotOrchestrator:
             except Exception as e2:
                 logger.error(f"Failed to speak fallback termination prompt: {e2}")
         
-        # Stop wake mode activity to clean up resources
+        # Stop wake mode activity to clean up resources (idempotent - wake_mode already stops itself)
         try:
             if self.wake_mode_activity:
                 self.wake_mode_activity.stop()
@@ -939,23 +944,21 @@ class WellBotOrchestrator:
             logger.warning(f"Error stopping wake mode activity: {e}")
         
         # Return to idle mode instead of shutting down
-        # Reset state to allow idle mode to restart
+        # Reset state to IDLE to allow idle mode to restart
+        # Note: wake_mode_thread will exit naturally after routing completes
         with self._lock:
-            if self.state == SystemState.PROCESSING or self.state == SystemState.ACTIVITY_ACTIVE:
+            # Reset from any activity-related state back to IDLE
+            if self.state in [SystemState.PROCESSING, SystemState.ACTIVITY_ACTIVE]:
                 self.state = SystemState.IDLE
+                logger.info("Reset system state to IDLE for wake mode termination")
         
-        # Restart idle mode
+        # Restart idle mode (this will be called after wake_mode_thread exits naturally)
+        # The wake_mode_thread's finally block will clear the thread reference
         self._restart_idle_mode_if_needed()
 
     def _handle_unknown_intent(self, transcript: str):
         """Handle unknown/unrecognized intent by prompting user to repeat and looping back"""
         logger.info(f"Handling unknown intent for transcript: '{transcript}' - prompting to repeat")
-        
-        # #region agent log
-        with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
-            import json
-            f.write(json.dumps({"sessionId":"debug-session","runId":"post-fix","hypothesisId":"A","location":"main.py:731","message":"_handle_unknown_intent entry","data":{"idle_mode_exists":self.idle_mode_activity is not None,"wake_mode_exists":self.wake_mode_activity is not None,"hasattr_wake_tts":hasattr(self.wake_mode_activity,'tts_service') if self.wake_mode_activity else False,"hasattr_wake_speak":hasattr(self.wake_mode_activity,'_speak') if self.wake_mode_activity else False},"timestamp":int(time.time()*1000)})+"\n")
-        # #endregion
         
         # Load prompt from config
         language_code = resolve_language(self.user_id)
@@ -970,30 +973,15 @@ class WellBotOrchestrator:
         # Try to use wake_mode_activity's TTS if available (it has TTS service)
         tts_success = False
         if self.wake_mode_activity and hasattr(self.wake_mode_activity, 'tts_service') and self.wake_mode_activity.tts_service:
-            # #region agent log
-            with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
-                import json
-                f.write(json.dumps({"sessionId":"debug-session","runId":"post-fix","hypothesisId":"B","location":"main.py:742","message":"Using wake_mode_activity._speak","data":{},"timestamp":int(time.time()*1000)})+"\n")
-            # #endregion
             try:
                 logger.info(f"Speaking unknown intent prompt: {unknown_intent_prompt}")
                 self.wake_mode_activity._speak(unknown_intent_prompt)
                 tts_success = True
             except Exception as e:
-                # #region agent log
-                with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
-                    import json
-                    f.write(json.dumps({"sessionId":"debug-session","runId":"post-fix","hypothesisId":"B","location":"main.py:748","message":"Exception using wake_mode_activity._speak","data":{"error":str(e),"error_type":type(e).__name__},"timestamp":int(time.time()*1000)})+"\n")
-                # #endregion
                 logger.warning(f"Failed to speak unknown intent prompt using wake_mode_activity: {e}")
         
         # Fallback: Create temporary TTS service (similar to _speak_startup_message)
         if not tts_success:
-            # #region agent log
-            with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
-                import json
-                f.write(json.dumps({"sessionId":"debug-session","runId":"post-fix","hypothesisId":"C","location":"main.py:752","message":"Creating temporary TTS service","data":{},"timestamp":int(time.time()*1000)})+"\n")
-            # #endregion
             try:
                 # Get language codes for TTS
                 from src.utils.config_resolver import LANGUAGE_CODES
@@ -1044,11 +1032,6 @@ class WellBotOrchestrator:
                     except Exception as e:
                         logger.warning(f"Error terminating PyAudio: {e}")
             except Exception as e:
-                # #region agent log
-                with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
-                    import json
-                    f.write(json.dumps({"sessionId":"debug-session","runId":"post-fix","hypothesisId":"C","location":"main.py:789","message":"Exception creating temporary TTS","data":{"error":str(e),"error_type":type(e).__name__},"timestamp":int(time.time()*1000)})+"\n")
-                # #endregion
                 logger.error(f"Failed to speak unknown intent prompt with temporary TTS: {e}")
         
         # Note: Intent flags (_intent_detected, _detected_intent, _detected_transcript) 
@@ -1702,6 +1685,16 @@ class WellBotOrchestrator:
             logger.info(f"System state is {current_state.value}, not LISTENING - skipping wake_mode start")
             return
         
+        # Check if we just ended an activity (cooldown period to prevent immediate wakeword triggers)
+        # Ignore wakeword detections within 2 seconds of activity ending (prevents buffered/delayed detections)
+        WAKE_COOLDOWN_SECONDS = 2.0
+        if self._last_activity_end_time:
+            import time
+            time_since_activity_end = time.time() - self._last_activity_end_time
+            if time_since_activity_end < WAKE_COOLDOWN_SECONDS:
+                logger.info(f"Wakeword detected {time_since_activity_end:.2f}s after activity ended (cooldown: {WAKE_COOLDOWN_SECONDS}s) - ignoring to prevent immediate wake_mode trigger")
+                return
+        
         # Start wake_mode immediately (non-blocking)
         intervention_mode = False
         if self.idle_mode_activity and hasattr(self.idle_mode_activity, 'was_last_trigger_intervention'):
@@ -1862,6 +1855,12 @@ class WellBotOrchestrator:
     
     def _restart_idle_mode_if_needed(self):
         """Helper to restart idle mode if needed (checks state and flags)"""
+        # Never restart during shutdown
+        with self._lock:
+            if self.state == SystemState.SHUTTING_DOWN:
+                logger.info("System is shutting down - skipping idle mode restart")
+                return
+
         # Check if we're transitioning to an activity
         if self._transitioning_to_activity:
             logger.info("System is transitioning to activity - skipping idle mode restart")
@@ -1894,6 +1893,12 @@ class WellBotOrchestrator:
 
     def _restart_idle_mode(self):
         """Restart idle mode activity after an activity ends."""
+        # Never restart during shutdown
+        with self._lock:
+            if self.state == SystemState.SHUTTING_DOWN:
+                logger.info("System is shutting down - skipping idle mode restart")
+                return
+
         logger.info("Restarting idle mode activity…")
         
         # Prevent concurrent restart attempts
@@ -1931,53 +1936,38 @@ class WellBotOrchestrator:
                 finally:
                     self._idle_mode_thread = None
             
-            # 2) Ensure complete cleanup of previous idle mode
+            # 2) Restart idle mode without full reinitialize (fast path)
+            # Idle mode is stopped before starting any activity via _stop_idle_mode_for_activity(),
+            # so a full cleanup+reinitialize here is usually redundant and can delay returning to LISTENING.
             if self.idle_mode_activity:
-                logger.info("Performing complete idle mode cleanup...")
                 try:
-                    # Stop the activity completely
                     self.idle_mode_activity.stop()
-                    
-                    # Cleanup resources
-                    self.idle_mode_activity.cleanup()
-                    logger.info("Idle mode cleanup completed")
-                    
-                    # Invalidate language cache before reinitializing to ensure fresh preferences
+                except Exception:
+                    pass
+
+                # Ensure configs are fresh for future activities (preferences thread also updates during idle)
+                try:
                     from src.utils.config_resolver import invalidate_user_cache
                     invalidate_user_cache(self.user_id)
                     logger.debug("Invalidated language cache before idle_mode restart")
-                    
-                    # Re-initialize for next run
-                    logger.info("Re-initializing idle mode activity...")
-                    if not self.idle_mode_activity.reinitialize():
-                        logger.error("Failed to re-initialize idle mode activity")
-                        with self._lock:
-                            self._restarting_idle_mode = False
-                        raise RuntimeError("Failed to re-initialize idle mode")
-                    
-                    logger.info("Idle mode re-initialized successfully")
-                except Exception as e:
-                    logger.error(f"Error during idle mode cleanup/reinit: {e}", exc_info=True)
-                    # Try to recreate the activity if reinit failed
-                    try:
-                        logger.info("Attempting to recreate idle mode activity...")
+                except Exception:
+                    pass
+
+                # If idle_mode_activity isn't initialized for any reason, recover by initializing (or recreating).
+                if not getattr(self.idle_mode_activity, "_initialized", False):
+                    logger.info("Idle mode activity not initialized; initializing before restart")
+                    if not self.idle_mode_activity.initialize():
+                        logger.warning("Idle mode initialize failed; recreating IdleModeActivity")
                         self.idle_mode_activity = IdleModeActivity(
                             backend_dir=self.backend_dir,
                             user_id=self.user_id,
                             on_wake_detected=self._on_wake_detected,
                             on_intervention_triggered=self._on_intervention_triggered,
                             ui_interface=self.ui_interface,
-                            servo_controller=self.servo_controller
+                            servo_controller=self.servo_controller,
                         )
                         if not self.idle_mode_activity.initialize():
                             raise RuntimeError("Failed to recreate idle mode activity")
-                    except Exception as recreate_error:
-                        logger.error(f"Failed to recreate idle mode activity: {recreate_error}", exc_info=True)
-                        with self._lock:
-                            self.state = SystemState.SHUTTING_DOWN
-                        with self._lock:
-                            self._restarting_idle_mode = False
-                        return
             # 3) Reset state and clear transition flag
             with self._lock:
                 self.state = SystemState.LISTENING
@@ -2097,12 +2087,12 @@ class WellBotOrchestrator:
             if self._association_retry_thread.is_alive():
                 logger.warning("Association retry thread did not stop in time")
             else:
-                logger.info("✅ Association retry thread stopped")
+                logger.info("Association retry thread stopped")
 
         # Cleanup servo
         if self.servo_controller:
             self.servo_controller.cleanup()
-            logger.info("✅ Servo controller cleaned up")
+            logger.info("Servo controller cleaned up")
 
         # Stop activity if active
         if self.current_activity == "smalltalk" and self.smalltalk_activity:

@@ -8,11 +8,23 @@
       "Stop talking",
       "Exit"
     ],
+    "guardrail_phrases": [
+      "kill myself",
+      "end my life",
+      "suicide",
+      "want to die",
+      "end it all",
+      "take my life",
+      "hurt myself",
+      "self harm"
+    ],
+    "guardrail_system_prompt": "The user has expressed concerning thoughts. Be extra supportive, empathetic, and encouraging. Ask open-ended questions to understand their feelings better. Do not dismiss their concerns. Offer hope and remind them that help is available.",
     "prompts": {
       "start": "Let's talk! What's on your mind?",
       "nudge": "Hey are you still there? Feel free to continue our conversation.",
       "timeout": "It seems like you're not there. I'll go take a break now. Just call my name when you're ready to talk again.",
-      "end": "Talk later, bye for now!."
+      "end": "Talk later, bye for now!.",
+      "guardrail_response": "I’m really sorry that you’re feeling this overwhelmed. You don’t have to go through this alone. What you’re feeling matters, and support is available right now. Please call Befrienders KL at 03-7627 2929. Trained volunteers are there to listen and support you, without judgment. If you feel that you’re in immediate danger, please go to the nearest hospital or call your local emergency number. If it helps, I can stay here with you while you reach out."
     }
   },
   "journal": {

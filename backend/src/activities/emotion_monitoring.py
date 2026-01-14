@@ -80,6 +80,25 @@ class EmotionMonitoringActivity:
         
         logger.info(f"EmotionMonitoringActivity initialized for user {self.user_id}")
         logger.info(f"Audio chunk duration: {self.audio_chunk_duration_seconds}s")
+
+    def _ensure_audio_subscription(self) -> bool:
+        """Ensure we have an active SharedAudioManager subscription."""
+        if self._audio_generator is not None:
+            return True
+
+        try:
+            audio_manager = SharedAudioManager.get_instance()
+            self._audio_generator = audio_manager.subscribe(
+                subscriber_id="emotion_monitoring",
+                sample_rate=16000,
+                chunk_size=1600,
+            )
+            logger.info("event=emotion.audio.subscribe user_id=%s", self.user_id)
+            return True
+        except Exception as e:
+            logger.warning("event=emotion.audio.subscribe_failed user_id=%s error=%s", self.user_id, e)
+            self._audio_generator = None
+            return False
     
     def initialize(self) -> bool:
         """Initialize the activity components"""
@@ -127,6 +146,8 @@ class EmotionMonitoringActivity:
             
             self._active = True
             self._running = True
+            # Re-subscribe if we were previously stopped (stop() unsubscribes and clears generator).
+            self._ensure_audio_subscription()
             logger.info(
                 "event=emotion.start user_id=%s audio_chunk_seconds=%s",
                 self.user_id,
@@ -402,8 +423,14 @@ class EmotionMonitoringActivity:
         """
         try:
             if not self._audio_generator:
-                logger.error("Audio generator not available")
-                return None
+                if not self._running:
+                    logger.debug("Audio generator not available (stopped)")
+                    return None
+
+                # Recover if possible (e.g., idle-mode restart without reinitialize()).
+                if not self._ensure_audio_subscription():
+                    logger.warning("Audio generator not available")
+                    return None
             
             logger.debug(f"Capturing audio for {self.audio_chunk_duration_seconds}s...")
             
