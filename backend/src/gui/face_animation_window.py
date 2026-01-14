@@ -269,6 +269,18 @@ class FaceAnimationWindow:
     
     def run(self):
         self.root.mainloop()
+    
+    def update_non_blocking(self):
+        """
+        Process pending GUI events without blocking (for Windows main thread).
+        This allows the GUI to remain responsive when not running in mainloop().
+        """
+        try:
+            if self.root:
+                self.root.update()
+        except Exception as e:
+            logger.error(f"Error updating GUI: {e}")
+            raise  # Re-raise so main.py can handle cleanup
 
 
 def start_gui(ui_interface, gif_source_or_interval=None, update_interval_ms=83, wait_for_ready_seconds: float = 1.0):

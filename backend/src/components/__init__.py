@@ -30,6 +30,8 @@ __all__ = [
     'SmallTalkSession',
     'TerminationPhraseDetector',
     'TerminationPhraseDetected',
+    'GuardrailPhraseDetector',
+    'GuardrailPhraseDetected',
     'normalize_text',
     'KeywordIntentMatcher',
     'DeepSeekClient',
@@ -103,6 +105,12 @@ def __getattr__(name):
     elif name == 'TerminationPhraseDetected':
         from .termination_phrase import TerminationPhraseDetected
         return TerminationPhraseDetected
+    elif name == 'GuardrailPhraseDetector':
+        from .termination_phrase import GuardrailPhraseDetector
+        return GuardrailPhraseDetector
+    elif name == 'GuardrailPhraseDetected':
+        from .termination_phrase import GuardrailPhraseDetected
+        return GuardrailPhraseDetected
     elif name == 'normalize_text':
         from .termination_phrase import normalize_text
         return normalize_text

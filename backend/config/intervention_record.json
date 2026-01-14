@@ -8,7 +8,7 @@
     "emotional_score": 23
   },
   "latest_decision": {
-    "trigger_intervention": false,
+    "trigger_intervention": true,
     "confidence_score": 0.0,
     "reasoning": "Recent activity 6.2 minutes ago"
   },

@@ -110,7 +110,7 @@
     "smalltalk_suggestion_message": "如果你不想做这些建议的活动，也许我们可以聊聊天？"
   },
   "startup": {
-    "device_not_associated": "此设备未关联任何用户。请联系 Well-Bot 客户服务寻求帮助。",
+    "device_not_associated": "我在验证你的设备时遇到了问题。别担心，我会在后台继续尝试。请确保你的网络连接正常。",
     "startup_completed": "启动完成。你好 {name}，叫我 Well-Bot 来唤醒我！"
   },
   "wakeword_responses": {

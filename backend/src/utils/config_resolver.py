@@ -61,12 +61,15 @@ class ConfigResolver:
         Falls back to 'en' on any error.
         """
         # Check cache first
+        cached_lang = None
         with self._lock:
             if user_id in self._language_cache:
                 lang, timestamp = self._language_cache[user_id]
-                if time.time() - timestamp < self._cache_ttl:
+                cache_age = time.time() - timestamp
+                if cache_age < self._cache_ttl:
                     logger.debug(f"Using cached language '{lang}' for user {user_id}")
                     return lang
+                cached_lang = lang
         
         # Fetch from database
         from ..supabase.database import get_user_language
@@ -169,6 +172,127 @@ class ConfigResolver:
             self._language_cache.clear()
             self._config_cache.clear()
             logger.info("Cleared all caches")
+    
+    def _check_language_changed(self, user_id: str) -> bool:
+        """
+        Check if language preference has changed.
+        
+        Args:
+            user_id: User UUID to check
+            
+        Returns:
+            True if language changed, False if unchanged or error
+        """
+        try:
+            # Get cached language
+            cached_lang = None
+            with self._lock:
+                if user_id in self._language_cache:
+                    cached_lang, timestamp = self._language_cache[user_id]
+            
+            # Fetch from database
+            from ..supabase.database import get_user_language
+            db_lang = get_user_language(user_id)
+            db_lang_normalized = self._normalize_language(db_lang)
+            
+            # Compare
+            if cached_lang is None:
+                # No cache, can't determine change
+                return False
+            
+            changed = cached_lang != db_lang_normalized
+            if changed:
+                logger.info(f"Language changed for user {user_id}: {cached_lang} -> {db_lang_normalized}")
+            
+            return changed
+        except Exception as e:
+            logger.warning(f"Error checking language change for user {user_id}: {e}")
+            return False
+    
+    def _check_prefer_name_changed(self, user_id: str) -> bool:
+        """
+        Check if prefer_name has changed.
+        
+        Args:
+            user_id: User UUID to check
+            
+        Returns:
+            True if prefer_name changed, False if unchanged or error
+        """
+        try:
+            # Get from user_persona.json
+            from ..supabase.auth import _load_user_persona
+            try:
+                persona_data = _load_user_persona()
+                cached_prefer_name = persona_data.get('prefer_name')
+            except (FileNotFoundError, ValueError):
+                cached_prefer_name = None
+            
+            # Fetch from database
+            from ..supabase.client import fetch_user_by_id
+            user = fetch_user_by_id(user_id)
+            if not user:
+                return False
+            
+            db_prefer_name = user.get('prefer_name')
+            
+            # Compare (handle None cases)
+            cached_prefer_name = cached_prefer_name or None
+            db_prefer_name = db_prefer_name or None
+            
+            changed = cached_prefer_name != db_prefer_name
+            if changed:
+                logger.info(f"prefer_name changed for user {user_id}: {cached_prefer_name} -> {db_prefer_name}")
+            
+            return changed
+        except Exception as e:
+            logger.warning(f"Error checking prefer_name change for user {user_id}: {e}")
+            return False
+    
+    def _check_spiritual_beliefs_changed(self, user_id: str) -> bool:
+        """
+        Check if spiritual_beliefs has changed.
+        
+        Note: spiritual_beliefs is not currently cached in user_persona.json,
+        so we compare against the last known value from database.
+        For now, we'll fetch and compare directly.
+        
+        Args:
+            user_id: User UUID to check
+            
+        Returns:
+            True if spiritual_beliefs changed, False if unchanged or error
+        """
+        try:
+            # Get from user_persona.json (if stored)
+            from ..supabase.auth import _load_user_persona
+            cached_spiritual_beliefs = None
+            try:
+                persona_data = _load_user_persona()
+                cached_spiritual_beliefs = persona_data.get('spiritual_beliefs')
+            except (FileNotFoundError, ValueError):
+                pass
+            
+            # Fetch from database
+            from ..supabase.client import fetch_user_by_id
+            user = fetch_user_by_id(user_id)
+            if not user:
+                return False
+            
+            db_spiritual_beliefs = user.get('spiritual_beliefs')
+            
+            # Compare (handle None cases)
+            cached_spiritual_beliefs = cached_spiritual_beliefs or None
+            db_spiritual_beliefs = db_spiritual_beliefs or None
+            
+            changed = cached_spiritual_beliefs != db_spiritual_beliefs
+            if changed:
+                logger.info(f"spiritual_beliefs changed for user {user_id}: {cached_spiritual_beliefs} -> {db_spiritual_beliefs}")
+            
+            return changed
+        except Exception as e:
+            logger.warning(f"Error checking spiritual_beliefs change for user {user_id}: {e}")
+            return False
 
 # Global resolver instance
 _resolver = ConfigResolver(cache_ttl_seconds=300)
@@ -231,3 +355,50 @@ def invalidate_user_cache(user_id: str) -> None:
     """Manually invalidate cache for a user."""
     _resolver.invalidate_user(user_id)
 
+def check_user_preferences_changed(user_id: str) -> Dict[str, bool]:
+    """
+    Check if any user preferences have changed.
+    
+    Checks:
+    - language: Compares cached language with database
+    - prefer_name: Compares user_persona.json with database
+    - spiritual_beliefs: Compares user_persona.json with database
+    
+    Args:
+        user_id: User UUID to check
+        
+    Returns:
+        Dictionary with keys 'language', 'prefer_name', 'spiritual_beliefs'
+        Values are True if changed, False if unchanged or error
+    """
+    changes = {
+        'language': False,
+        'prefer_name': False,
+        'spiritual_beliefs': False
+    }
+    
+    try:
+        # Check language
+        changes['language'] = _resolver._check_language_changed(user_id)
+        
+        # Check prefer_name
+        changes['prefer_name'] = _resolver._check_prefer_name_changed(user_id)
+        
+        # Check spiritual_beliefs
+        changes['spiritual_beliefs'] = _resolver._check_spiritual_beliefs_changed(user_id)
+        
+    except Exception as e:
+        logger.warning(f"Error checking user preferences for {user_id}: {e}")
+    
+    return changes
+
+def force_refresh_user_configs(user_id: str) -> None:
+    """
+    Force refresh both language and config caches for user.
+    Invalidates cache so next access will fetch fresh from database.
+    
+    Args:
+        user_id: User UUID to refresh
+    """
+    _resolver.invalidate_user(user_id)
+    logger.info(f"Force refreshed configs for user {user_id}")

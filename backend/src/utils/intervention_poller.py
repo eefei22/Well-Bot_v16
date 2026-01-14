@@ -97,7 +97,7 @@ class InterventionPoller:
         """Start the polling service."""
         with self._lock:
             if self._running:
-                logger.warning("Poller is already running")
+                logger.debug("event=poller.start.noop reason=already_running user_id=%s", self.user_id)
                 return
             
             self._running = True
@@ -111,7 +111,7 @@ class InterventionPoller:
         """Stop the polling service."""
         with self._lock:
             if not self._running:
-                logger.warning("Poller is not running")
+                logger.debug("event=poller.stop.noop reason=not_running user_id=%s", self.user_id)
                 return
             
             self._running = False
