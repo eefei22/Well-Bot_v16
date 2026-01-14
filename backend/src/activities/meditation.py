@@ -311,7 +311,7 @@ class MeditationActivity:
 
         try:
             self._active = True
-            # Inform GUI to switch to meditating face (if UI available)
+            # Inform GUI to switch to meditating face 
             try:
                 if self.ui_interface:
                     self.ui_interface.update_face_state("meditating")

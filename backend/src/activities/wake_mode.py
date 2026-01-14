@@ -52,7 +52,8 @@ class WakeModeActivity:
         self,
         backend_dir: Path,
         user_id: Optional[str] = None,
-        on_intent_detected: Optional[callable] = None
+        on_intent_detected: Optional[callable] = None,
+        ui_interface=None
     ):
         """
         Initialize the Wake Mode Activity
@@ -66,6 +67,7 @@ class WakeModeActivity:
         self.backend_dir = backend_dir
         self.user_id = user_id if user_id is not None else get_current_user_id()
         self.on_intent_detected = on_intent_detected
+        self.ui_interface = ui_interface
         
         # Components (initialized in initialize())
         self.stt_service: Optional[GoogleSTTService] = None
@@ -388,6 +390,13 @@ class WakeModeActivity:
         
         try:
             mic.start()
+            # Notify UI that mic is listening
+            try:
+                if self.ui_interface:
+                    self.ui_interface.update_mic_status("listening")
+            except Exception:
+                pass
+
             logger.info("Microphone active (direct MicStream), awaiting speech for keyword matching")
             
             # Capture transcript using STT with timeout
@@ -577,6 +586,12 @@ class WakeModeActivity:
             # Stop mic (only if still running - may have been stopped earlier for mood rating)
             if mic.is_running():
                 mic.stop()
+                # Notify UI that mic is idle
+                try:
+                    if self.ui_interface:
+                        self.ui_interface.update_mic_status("idle")
+                except Exception:
+                    pass
             
             # Mark STT as inactive (only if not already marked)
             with self._lock:
@@ -1003,6 +1018,13 @@ class WakeModeActivity:
             logger.error(f"Audio file not found: {audio_path}")
             return False
 
+        # Notify UI that speaker is active
+        try:
+            if self.ui_interface:
+                self.ui_interface.update_speaker_status("speaking")
+        except Exception:
+            pass
+
         # Method 1: Try pydub (most reliable)
         if PYDUB_AVAILABLE:
             try:
@@ -1010,6 +1032,11 @@ class WakeModeActivity:
                 audio = AudioSegment.from_wav(audio_path)
                 play(audio)
                 logger.debug("Audio played successfully with pydub")
+                try:
+                    if self.ui_interface:
+                        self.ui_interface.update_speaker_status("idle")
+                except Exception:
+                    pass
                 return True
             except Exception as e:
                 logger.warning(f"pydub playback failed: {e}, trying fallback")
@@ -1023,6 +1050,11 @@ class WakeModeActivity:
                 
                 if result.returncode == 0:
                     logger.debug("Audio played successfully with PowerShell")
+                    try:
+                        if self.ui_interface:
+                            self.ui_interface.update_speaker_status("idle")
+                    except Exception:
+                        pass
                     return True
                 else:
                     logger.warning(f"PowerShell playback failed: {result.stderr}")
@@ -1030,6 +1062,11 @@ class WakeModeActivity:
                 logger.warning(f"PowerShell playback error: {e}")
 
         logger.error(f"All audio playback methods failed for: {audio_path}")
+        try:
+            if self.ui_interface:
+                self.ui_interface.update_speaker_status("idle")
+        except Exception:
+            pass
         return False
 
     def _speak(self, text: str):
@@ -1061,13 +1098,20 @@ class WakeModeActivity:
                 output=True
             )
             
+            # Notify UI that TTS/speaker is active
+            try:
+                if self.ui_interface:
+                    self.ui_interface.update_speaker_status("speaking")
+            except Exception:
+                pass
+
             for chunk in pcm_chunks:
                 stream.write(chunk)
-            
+
             stream.stop_stream()
             stream.close()
             pa.terminate()
-            
+
             logger.info(f"TTS played: {text[:50]}...")
         except Exception as e:
             logger.error(f"TTS error: {e}")
@@ -1077,3 +1121,9 @@ class WakeModeActivity:
                 if self._mic_stream and self._mic_stream.is_running():
                     logger.debug("Unmuting microphone after TTS")
                     self._mic_stream.unmute()
+            # Notify UI that speaker is idle
+            try:
+                if self.ui_interface:
+                    self.ui_interface.update_speaker_status("idle")
+            except Exception:
+                pass

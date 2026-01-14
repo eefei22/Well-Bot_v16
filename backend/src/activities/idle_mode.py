@@ -123,9 +123,10 @@ class IdleModeActivity:
             try:
                 wakeword_model_path = self.backend_dir / "config" / "WakeWord" / "WellBot_WakeWordModel_ARM2.ppn"
                 self.wakeword_detector = create_wake_word_detector(
-                    PORCUPINE_ACCESS_KEY, 
+                    PORCUPINE_ACCESS_KEY,
                     str(wakeword_model_path),
-                    backend_dir=self.backend_dir
+                    backend_dir=self.backend_dir,
+                    ui_interface=self.ui_interface
                 )
                 logger.info("Wakeword detector created")
             except Exception as e:
@@ -664,7 +665,7 @@ class IdleModeActivity:
         # Minimal wake reaction before handoff to wake mode
         if self.ui_interface:
             try:
-                self.ui_interface.update_mic_status("listening")
+                self.ui_interface.update_mic_status("idle")
             except Exception:
                 pass
         if self.servo_controller:

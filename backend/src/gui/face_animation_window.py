@@ -53,12 +53,25 @@ class FaceAnimationWindow:
         self.ui_interface = ui_interface
         self.update_interval_ms = update_interval_ms
 
+        # Keep a reference to the original gif source and whether it's preloaded.
+        # This allows on-demand synchronous loading of a state (e.g. speaking)
+        # if the background loader hasn't finished yet.
+        self._gif_source = gif_source
+        self._is_preloaded = False
+
         # Tkinter setup
         self.root = tk.Tk()
         self.root.title("Well-Bot Face Display")
-        self.root.attributes("-fullscreen", True)
+        
+        # --- FEATURE: Toggle Fullscreen ---
+        self.is_fullscreen = True
+        self.root.attributes("-fullscreen", self.is_fullscreen)
         self.root.configure(bg="black")
-        self.root.bind("<Escape>", lambda e: self._on_close())
+        
+        # Bind Escape to TOGGLE size instead of closing
+        self.root.bind("<Escape>", lambda e: self.toggle_fullscreen())
+        # Bind Control-Q to actually close
+        self.root.bind("<Control-q>", lambda e: self._on_close())
 
         # Display label
         self.label = tk.Label(self.root, bg="black")
@@ -69,12 +82,21 @@ class FaceAnimationWindow:
         self.requested_state = "idle"
         self.frame_index = 0
         self.gif_frames: Dict[str, list] = {}
+
         self._ready_event = threading.Event()
 
         # Start prioritized loading
         self.root.after(10, lambda: self._load_assets_and_start(gif_source))
 
         logger.info("FaceAnimationWindow initialized")
+
+    def toggle_fullscreen(self):
+        """Switches between Fullscreen and a small window."""
+        self.is_fullscreen = not self.is_fullscreen
+        self.root.attributes("-fullscreen", self.is_fullscreen)
+        if not self.is_fullscreen:
+            # Set a small size when not fullscreen so you can see the terminal
+            self.root.geometry("800x480")
 
     def _load_assets_and_start(self, gif_source):
         """
@@ -93,8 +115,11 @@ class FaceAnimationWindow:
                      "gratitude": str(default_asset_dir / "gui_gratitude.gif"),
              }
 
+        # Keep a reference for on-demand loading
+        self._gif_source = gif_source
         first_value = next(iter(gif_source.values())) if gif_source else None
         is_preloaded = isinstance(first_value, list)
+        self._is_preloaded = is_preloaded
 
         # 1. IMMEDIATE LOAD: idle
         if "idle" in gif_source:
@@ -130,6 +155,24 @@ class FaceAnimationWindow:
 
         self.root.after(50, lambda: self._background_loader(keys, source, is_preloaded))
 
+    def _ensure_state_loaded(self, state: str):
+        """Synchronously load frames for a specific state if not already loaded."""
+        if state in self.gif_frames:
+            return
+
+        source = self._gif_source
+        if not source or state not in source:
+            return
+
+        try:
+            if self._is_preloaded:
+                self.gif_frames[state] = [ImageTk.PhotoImage(img) for img in source[state]]
+            else:
+                self.gif_frames[state] = self._load_frames_from_disk(source[state])
+            logger.info(f"Synchronously loaded frames for state '{state}'")
+        except Exception as e:
+            logger.error(f"Failed to synchronously load state '{state}': {e}")
+
     def _load_frames_from_disk(self, path):
         try:
             gif = Image.open(path)
@@ -156,6 +199,13 @@ class FaceAnimationWindow:
                 elif speaker == "speaking": new_state = "speaking"
                 elif mic == "listening": new_state = "listening"
                 else: new_state = "idle"
+
+            # If the desired state isn't loaded yet, attempt an on-demand load
+            if new_state not in self.gif_frames:
+                try:
+                    self._ensure_state_loaded(new_state)
+                except Exception:
+                    pass
 
             if new_state in self.gif_frames:
                 if new_state != self.requested_state:

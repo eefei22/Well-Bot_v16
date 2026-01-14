@@ -110,7 +110,7 @@ class WellBotOrchestrator:
                     self.ui_interface = UIInterface()
                     backend_assets = self.backend_dir / "assets" / "GUI"
                     
-                    # Build GIF paths including pairing_failed and all other states
+                    # Define GIF files
                     gif_files = {
                         "pairing_failed": str(backend_assets / "gui_failpairing.gif"),
                         "idle": str((backend_assets / "gui_idleing.gif") if (backend_assets / "gui_idleing.gif").exists() else (backend_assets / "gui_idleing.gif")),
@@ -583,7 +583,8 @@ class WellBotOrchestrator:
             self.wake_mode_activity = WakeModeActivity(
                 backend_dir=self.backend_dir,
                 user_id=self.user_id,
-                on_intent_detected=self._handle_intent_detected
+                on_intent_detected=self._handle_intent_detected,
+                ui_interface=self.ui_interface
             )
             if not self.wake_mode_activity.initialize():
                 raise RuntimeError("Failed to initialize Wake Mode activity")

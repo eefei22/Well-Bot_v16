@@ -528,7 +528,18 @@ class JournalActivity:
             # Use first 200 chars of body as preview
             journal_preview = body[:200] + "..." if len(body) > 200 else body
             seed = seed_tmpl.replace("{journal_preview}", journal_preview)
-            custom_start = journal_cfg.get("opener", "Thanks for sharing that with me. What else is on your mind?")
+
+            # Determine a localized opener. The language-specific journal config
+            # should provide an 'opener' when available; if not, fall back to a
+            # reasonable default per resolved language. This ensures Bahasa Malay
+            # users get an appropriate default instead of the English string.
+            resolved_lang = self.language_config.get("_resolved_language", "en")
+            default_openers = {
+                "en": "Thanks for sharing that with me. What else is on your mind?",
+                "bm": "Terima kasih kerana berkongsi dengan saya. Apa lagi yang bermain di fikiran anda?",
+                "cn": "感谢你与我分享。你还有什么想说的吗？",
+            }
+            custom_start = journal_cfg.get("opener", default_openers.get(resolved_lang, default_openers["en"]))
             
             # Create and start SmallTalk
             from src.activities.smalltalk import SmallTalkActivity

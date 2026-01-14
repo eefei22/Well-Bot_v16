@@ -516,7 +516,23 @@ class SmallTalkActivity:
             time.sleep(0.3)
         
         # Speak the prompt using TTS
-        self._speak(prompt)
+        # Notify UI that we're about to speak (extra-immediate feedback). The
+        # audio_manager.play_tts_stream will also update speaker status when
+        # it runs, but we set it here to ensure the GUI switches to speaking
+        # immediately for the mood-rating prompt.
+        try:
+            if self.ui_interface:
+                self.ui_interface.update_speaker_status("speaking")
+        except Exception:
+            pass
+        try:
+            self._speak(prompt)
+        finally:
+            try:
+                if self.ui_interface:
+                    self.ui_interface.update_speaker_status("idle")
+            except Exception:
+                pass
         
         # Create new mic for mood rating capture
         mic = MicStream(rate=16000, chunk_size=1600)
@@ -526,6 +542,11 @@ class SmallTalkActivity:
             mic.start()
             mic.unmute()
             logger.info(f"Post-activity mood rating mic started (muted={mic.is_muted()})")
+            try:
+                if self.ui_interface:
+                    self.ui_interface.update_mic_status("listening")
+            except Exception:
+                pass
         except Exception as e:
             logger.error(f"Failed to start mic for post-activity mood rating: {e}")
             return None
@@ -587,8 +608,14 @@ class SmallTalkActivity:
             logger.debug("No response received for post-activity mood rating prompt")
             return None
         finally:
+            # Ensure mic stopped and update UI
             if mic.is_running():
                 mic.stop()
+            try:
+                if self.ui_interface:
+                    self.ui_interface.update_mic_status("idle")
+            except Exception:
+                pass
     
     def cleanup(self):
         """Complete cleanup of all resources including native libraries, cached resources, and dependencies"""

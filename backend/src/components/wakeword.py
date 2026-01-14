@@ -57,7 +57,7 @@ class WakeWordDetector:
     Runs in the background and triggers callbacks when wake words are detected.
     """
     
-    def __init__(self, access_key: str, custom_keyword_path: Optional[str] = None):
+    def __init__(self, access_key: str, custom_keyword_path: Optional[str] = None, ui_interface=None):
         """
         Initialize the wake word detector.
         
@@ -73,6 +73,7 @@ class WakeWordDetector:
         self.running = False
         self._thread = None
         self.is_initialized = False
+        self.ui_interface = ui_interface
         
         # For subscription-based mode
         self._audio_generator = None
@@ -159,6 +160,12 @@ class WakeWordDetector:
                     input=True,
                     frames_per_buffer=self.porcupine.frame_length
                 )
+                # Notify UI that mic is active/listening
+                try:
+                    if self.ui_interface:
+                        self.ui_interface.update_mic_status("idle")
+                except Exception:
+                    pass
                 
                 logger.info("Wake word detection active")
                 
@@ -198,6 +205,12 @@ class WakeWordDetector:
                         self._stream = None
                     except Exception as e:
                         logger.error(f"Error closing audio stream: {e}")
+                # Ensure UI mic status reset
+                try:
+                    if self.ui_interface:
+                        self.ui_interface.update_mic_status("idle")
+                except Exception:
+                    pass
                         
                 logger.info("Wake word detection loop ended")
         
@@ -314,6 +327,12 @@ class WakeWordDetector:
         def _run_loop():
             """Background thread loop for subscription-based wake word detection."""
             logger.info("Wake word detection active (subscription mode)")
+            # Notify UI that mic is active when subscription mode starts
+            try:
+                if self.ui_interface:
+                    self.ui_interface.update_mic_status("idle")
+            except Exception:
+                pass
             
             try:
                 for audio_chunk in audio_generator:
@@ -339,6 +358,12 @@ class WakeWordDetector:
                 logger.info("Wake word detection loop ended")
                 self._subscription_mode = False
                 self._audio_generator = None
+                # Ensure UI mic status reset
+                try:
+                    if self.ui_interface:
+                        self.ui_interface.update_mic_status("idle")
+                except Exception:
+                    pass
         
         # Start background thread
         self._thread = threading.Thread(target=_run_loop, daemon=True)
@@ -386,7 +411,7 @@ class OpenWakeWordDetector:
     This is used as a fallback when Porcupine fails to initialize.
     """
     
-    def __init__(self, backend_dir: Optional[Path] = None):
+    def __init__(self, backend_dir: Optional[Path] = None, ui_interface=None):
         """
         Initialize the OpenWakeWord detector.
         
@@ -419,6 +444,9 @@ class OpenWakeWordDetector:
         
         # Detection threshold
         self.detection_threshold = 0.5
+
+        # Optional UI interface to update mic/speaker state
+        self.ui_interface = ui_interface
         
         # Audio configuration
         self.sample_rate = 16000
@@ -508,6 +536,12 @@ class OpenWakeWordDetector:
                     input=True,
                     frames_per_buffer=self.chunk_size
                 )
+                # Notify UI that mic is active/listening
+                try:
+                    if self.ui_interface:
+                        self.ui_interface.update_mic_status("idle")
+                except Exception:
+                    pass
                 
                 logger.info("OpenWakeWord detection active")
                 
@@ -557,6 +591,12 @@ class OpenWakeWordDetector:
                         self._stream = None
                     except Exception as e:
                         logger.error(f"Error closing audio stream: {e}")
+                # Ensure UI mic status reset
+                try:
+                    if self.ui_interface:
+                        self.ui_interface.update_mic_status("idle")
+                except Exception:
+                    pass
                         
                 logger.info("OpenWakeWord detection loop ended")
         
@@ -662,6 +702,12 @@ class OpenWakeWordDetector:
         def _run_loop():
             """Background thread loop for subscription-based wake word detection."""
             logger.info("OpenWakeWord detection active (subscription mode)")
+            # Notify UI that mic is active when subscription mode starts
+            try:
+                if self.ui_interface:
+                    self.ui_interface.update_mic_status("listening")
+            except Exception:
+                pass
             
             try:
                 for audio_chunk in audio_generator:
@@ -685,6 +731,12 @@ class OpenWakeWordDetector:
                 logger.info("OpenWakeWord detection loop ended")
                 self._subscription_mode = False
                 self._audio_generator = None
+                # Ensure UI mic status reset
+                try:
+                    if self.ui_interface:
+                        self.ui_interface.update_mic_status("idle")
+                except Exception:
+                    pass
         
         # Start background thread
         self._thread = threading.Thread(target=_run_loop, daemon=True)
@@ -727,7 +779,7 @@ class OpenWakeWordDetector:
                 self.is_initialized = False
 
 
-def create_wake_word_detector(access_key_file: str, custom_keyword_file: Optional[str] = None, backend_dir: Optional[Path] = None) -> Union[WakeWordDetector, 'OpenWakeWordDetector']:
+def create_wake_word_detector(access_key_file: str, custom_keyword_file: Optional[str] = None, backend_dir: Optional[Path] = None, ui_interface=None) -> Union[WakeWordDetector, 'OpenWakeWordDetector']:
     """
     Factory function to create a wake word detector.
     Tries Porcupine first, falls back to OpenWakeWord if Porcupine initialization fails.
@@ -742,7 +794,7 @@ def create_wake_word_detector(access_key_file: str, custom_keyword_file: Optiona
     """
     # Try Porcupine first
     try:
-        detector = WakeWordDetector(PORCUPINE_ACCESS_KEY, custom_keyword_file)
+        detector = WakeWordDetector(PORCUPINE_ACCESS_KEY, custom_keyword_file, ui_interface=ui_interface)
         
         # Try to initialize Porcupine
         if detector.initialize():
@@ -776,7 +828,7 @@ def create_wake_word_detector(access_key_file: str, custom_keyword_file: Optiona
             backend_dir = current_file.parent.parent.parent
     
     logger.info("Initializing OpenWakeWord as fallback detector...")
-    detector = OpenWakeWordDetector(backend_dir=backend_dir)
+    detector = OpenWakeWordDetector(backend_dir=backend_dir, ui_interface=ui_interface)
     
     if detector.initialize():
         logger.info("Using OpenWakeWord for wake word detection (fallback mode)")
