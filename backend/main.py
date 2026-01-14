@@ -105,15 +105,14 @@ class WellBotOrchestrator:
                 error_message = en_config.get('startup', {}).get('device_not_associated', 
                     "This device is not associated to any user. Please contact Well-Bot customer service for assistance.")
                 
-                # Initialize a minimal UI so the face GUI can load frames and display
-                # before we play the startup TTS. This improves UX so the user sees
-                # the face immediately while the startup message is spoken.
+                # Initialize UI to show pairing failure, but preload all GIFs for later use
                 try:
                     self.ui_interface = UIInterface()
-
-                    # Build GIF paths and preload into memory to avoid GUI lag
                     backend_assets = self.backend_dir / "assets" / "GUI"
+                    
+                    # Build GIF paths including pairing_failed and all other states
                     gif_files = {
+                        "pairing_failed": str(backend_assets / "gui_failpairing.gif"),
                         "idle": str((backend_assets / "gui_idleing.gif") if (backend_assets / "gui_idleing.gif").exists() else (backend_assets / "gui_idleing.gif")),
                         "listening": str((backend_assets / "gui_listening.gif") if (backend_assets / "gui_listening.gif").exists() else (backend_assets / "gui_listening.gif")),
                         "speaking": str((backend_assets / "gui_speaking.gif") if (backend_assets / "gui_speaking.gif").exists() else (backend_assets / "gui_speaking.gif")),
@@ -122,6 +121,41 @@ class WellBotOrchestrator:
                         "meditating": str(backend_assets / "gui_meditating.gif"),
                         "gratitude": str(backend_assets / "gui_gratitude.gif"),
                     }
+
+                    # Preload assets
+                    try:
+                        preloaded = preload_gif_data(gif_files)
+                    except Exception as pre_err:
+                        logger.warning(f"Preloading GIFs failed: {pre_err}")
+                        preloaded = {}
+
+                    # Start the GUI
+                    self._gui_window = start_gui(
+                        self.ui_interface, 
+                        preloaded if preloaded else None, 
+                        update_interval_ms=100, 
+                        wait_for_ready_seconds=2.0
+                    )
+
+                    # Set the state to 'pairing_failed' so the GIF plays
+                    if self.ui_interface:
+                        self.ui_interface.update_face_state("pairing_failed")
+                        
+                    # Wait briefly for window to render
+                    if self._gui_window:
+                        try:
+                            if getattr(self._gui_window, 'wait_until_ready', None):
+                                if self._gui_window.wait_until_ready(timeout=5.0):
+                                    logger.info("GUI frames loaded and first frame displayed")
+                                else:
+                                    logger.warning("GUI did not signal readiness within timeout; proceeding to speak")
+                        except Exception:
+                            logger.debug("GUI readiness check failed - continuing")
+                    else:
+                        logger.warning("GUI window not ready yet; continuing to speak startup message")
+
+                except Exception as ui_err:
+                    logger.warning(f"Failed to start GUI for pairing failure: {ui_err}")
 
                     try:
                         preloaded = preload_gif_data(gif_files)
@@ -165,62 +199,90 @@ class WellBotOrchestrator:
                     full_name=self.full_name,
                     backend_dir=self.backend_dir
                 )
-                logger.info(f"User resolved and saved: user_id={self.user_id}, prefer_name={self.prefer_name}, full_name={self.full_name}")
+                logger.info(f"✓ User resolved and saved: user_id={self.user_id}, prefer_name={self.prefer_name}, full_name={self.full_name}")
             except ValueError as e:
                 # Device association failed - enter waiting mode instead of crashing
                 logger.error(f"Failed to resolve user from device_id {DEVICE_ID}: {e}")
                 self.association_pending = True
                 
                 # Load English config for error message (default)
+
+            # Start GUI (if possible) and show pairing failure animation
+            try:
+                self.ui_interface = UIInterface()
+                backend_assets = self.backend_dir / "assets" / "GUI"
+                gif_files = {
+                    "pairing_failed": str(backend_assets / "gui_failpairing.gif"),
+                    "idle": str(backend_assets / "gui_idleing.gif"),
+                }
+                try:
+                    preloaded = preload_gif_data(gif_files)
+                except Exception as pre_err:
+                    logger.warning(f"Preloading pairing-failed GIFs failed: {pre_err}")
+                    preloaded = {}
+
+                self._gui_window = start_gui(
+                    self.ui_interface,
+                    preloaded if preloaded else None,
+                    update_interval_ms=100,
+                    wait_for_ready_seconds=5.0,
+                )
+
+                # Wait for first frame rendered if supported
+                if self._gui_window and getattr(self._gui_window, 'wait_until_ready', None):
+                    try:
+                        self._gui_window.wait_until_ready(timeout=5.0)
+                    except Exception:
+                        logger.debug("GUI readiness wait failed or timed out")
+
+                # Request pairing_failed face
+                try:
+                    if self.ui_interface:
+                        self.ui_interface.update_face_state("pairing_failed")
+                except Exception:
+                    logger.debug("Failed to set pairing_failed face state")
+
+                # Speak pairing failure message so user is informed (block until TTS finishes)
                 try:
                     en_config = load_language_config('en')
                     error_message = en_config.get('startup', {}).get('device_not_associated',
                         "This device is not associated to any user. Please contact Well-Bot customer service for assistance.")
-                    
-                    # Initialize minimal UI for waiting mode
-                    try:
-                        self.ui_interface = UIInterface()
-
-                        # Build GIF paths and preload into memory to avoid GUI lag
-                        backend_assets = self.backend_dir / "assets" / "GUI"
-                        gif_files = {
-                            "idle": str((backend_assets / "gui_idleing.gif") if (backend_assets / "gui_idleing.gif").exists() else (backend_assets / "gui_idleing.gif")),
-                            "listening": str((backend_assets / "gui_listening.gif") if (backend_assets / "gui_listening.gif").exists() else (backend_assets / "gui_listening.gif")),
-                            "speaking": str((backend_assets / "gui_speaking.gif") if (backend_assets / "gui_speaking.gif").exists() else (backend_assets / "gui_speaking.gif")),
-                            "loading": str(backend_assets / "gui_loading.gif"),
-                            "journaling": str(backend_assets / "gui_journaling.gif"),
-                            "meditating": str(backend_assets / "gui_meditating.gif"),
-                            "gratitude": str(backend_assets / "gui_gratitude.gif"),
-                        }
-
-                        try:
-                            preloaded = preload_gif_data(gif_files)
-                        except Exception as e:
-                            logger.warning(f"Preloading GIFs failed: {e}")
-                            preloaded = {}
-
-                        # Start GUI and pass preloaded frames (if any)
-                        self._gui_window = start_gui(self.ui_interface, preloaded if preloaded else None, update_interval_ms=100, wait_for_ready_seconds=2.0)
-                        if self._gui_window:
-                            # Wait until the window reports first frame rendered (max 5s)
-                            try:
-                                if getattr(self._gui_window, 'wait_until_ready', None):
-                                    if self._gui_window.wait_until_ready(timeout=5.0):
-                                        logger.info("GUI frames loaded and first frame displayed")
-                                    else:
-                                        logger.warning("GUI did not signal readiness within timeout; proceeding to speak")
-                            except Exception:
-                                logger.debug("GUI readiness check failed - continuing")
-                        else:
-                            logger.warning("GUI window not ready yet; continuing to speak startup message")
-                    except Exception as ui_err:
-                        logger.warning(f"Failed to start GUI before startup TTS: {ui_err}")
-                    
-                    # Speak error message via TTS
+                    logger.info("Speaking pairing failure message to user")
                     self._speak_startup_message(error_message, language='en')
-                    logger.error(error_message)
-                except Exception as tts_error:
-                    logger.warning(f"Failed to speak error message: {tts_error}")
+                except Exception as tts_err:
+                    logger.warning(f"Failed to play pairing failure TTS: {tts_err}")
+
+            except Exception as ui_err:
+                logger.warning(f"Failed to start GUI for pairing failure: {ui_err}")
+
+            # Poll the database every 15 seconds until the device is associated
+            logger.info("Polling for device association every 15s...")
+            while True:
+                try:
+                    user_info = resolve_user_from_device_id(DEVICE_ID)
+                    # Success: save and continue startup
+                    self.user_id = user_info['user_id']
+                    self.prefer_name = user_info.get('prefer_name')
+                    self.full_name = user_info.get('full_name')
+                    save_user_context_to_local(
+                        user_id=self.user_id,
+                        prefer_name=self.prefer_name,
+                        full_name=self.full_name,
+                        backend_dir=self.backend_dir
+                    )
+                    logger.info(f"Device successfully paired: user_id={self.user_id}")
+
+                    # Switch GUI back to normal idle mode
+                    try:
+                        if self.ui_interface:
+                            self.ui_interface.update_face_state(None)
+                    except Exception:
+                        logger.debug("Failed to clear pairing_failed face state")
+
+                    break
+                except Exception:
+                    logger.debug("Device not yet associated; retrying in 15s")
+                    time.sleep(15)
         
         # Load user-specific config (will be loaded in _initialize_components)
         self.global_config = None

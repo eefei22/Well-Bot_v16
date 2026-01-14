@@ -99,11 +99,11 @@ class FERServiceClient:
         Args:
             service_url: Optional service URL. If not provided, uses FER_SERVICE_URL from .env or placeholder
         """
-        self.service_url = service_url or os.getenv("FER_SERVICE_URL", "http://placeholder-fer-service")
-        self.analyze_endpoint = f"{self.service_url}/analyze-face" if self.service_url else None
+        self.service_url = service_url or os.getenv("FER_SERVICE_URL", "https://wellbot-fer-backend-520080168829.asia-southeast1.run.app")
+        self.analyze_endpoint = f"{self.service_url}/emotion" if self.service_url else None
         self.timeout = 30  # 30 second timeout for requests
         
-        if self.service_url and self.service_url != "http://placeholder-fer-service":
+        if self.service_url and self.service_url != "https://wellbot-fer-backend-520080168829.asia-southeast1.run.app":
             logger.info(f"FERServiceClient initialized with URL: {self.service_url}")
         else:
             logger.info("FERServiceClient initialized in placeholder mode (no service URL configured)")
@@ -122,9 +122,12 @@ class FERServiceClient:
         Returns:
             True if successful (or placeholder), False if failed
         """
-        if not self.service_url or self.service_url == "http://placeholder-fer-service" or not self.analyze_endpoint:
-            logger.debug("FER service URL not configured - placeholder mode (returning success)")
-            return True
+        # Always attempt to send if an analyze endpoint is configured. If the
+        # service URL is not set, the analyze_endpoint may still point to a
+        # default testing endpoint; attempt the request and report success/failure.
+        if not self.analyze_endpoint:
+            logger.debug("FER analyze endpoint not configured - skipping send")
+            return False
         
         try:
             if not image_file_path.exists():
