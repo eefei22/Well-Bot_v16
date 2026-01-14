@@ -288,7 +288,61 @@ class JournalActivity:
             prompt = "Ready to journal. Start speaking after the tone. You can pause anytime to think. Say 'stop journal' when you're finished."
         
         logger.info("Speaking start prompt...")
-        self._speak(prompt)
+        # Notify UI immediately that TTS is about to play so the face can
+        # switch to the speaking animation without waiting for the audio
+        # manager's playback hook. ConversationAudioManager also updates
+        # speaker_status during playback, but this gives immediate feedback.
+        try:
+            if self.ui_interface:
+                # Force the GUI into the speaking animation immediately by
+                # setting an explicit face_state override. Also mark speaker
+                # status so other listeners see it.
+                try:
+                    # set explicit speaking face so GUI doesn't wait for
+                    # audio-manager callbacks. Allow a small pause so the
+                    # GUI thread can poll and render the change before audio
+                    # playback starts.
+                    self.ui_interface.update_face_state("speaking")
+                except Exception:
+                    pass
+                try:
+                    self.ui_interface.update_speaker_status("speaking")
+                except Exception:
+                    pass
+                # Give GUI a short moment to pick up the speaking override
+                # before starting audio playback. Keep this very small to
+                # avoid noticeable latency to the user.
+                try:
+                    time.sleep(0.08)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        try:
+            self._speak(prompt)
+        finally:
+            # After speaking, reset speaker status and clear the explicit
+            # face override so the GUI can derive the next state (e.g. go
+            # into listening once the mic opens).
+            try:
+                if self.ui_interface:
+                    try:
+                        # Reset speaker status.
+                        self.ui_interface.update_speaker_status("idle")
+                    except Exception:
+                        pass
+                    try:
+                        # Instead of clearing the explicit face immediately
+                        # (which can cause a flash to 'listening' while
+                        # mic resources are still spinning up), restore the
+                        # journaling face explicitly. This keeps the GUI
+                        # visually stable until the mic reports 'listening'.
+                        self.ui_interface.update_face_state("journaling")
+                    except Exception:
+                        pass
+            except Exception:
+                pass
     
     def _record_loop(self):
         """Main recording loop with STT streaming"""
@@ -533,7 +587,14 @@ class JournalActivity:
             # should provide an 'opener' when available; if not, fall back to a
             # reasonable default per resolved language. This ensures Bahasa Malay
             # users get an appropriate default instead of the English string.
-            resolved_lang = self.language_config.get("_resolved_language", "en")
+            # Re-resolve language from the user's language config to ensure
+            # we respect the user's current language (bm/en/cn) even if
+            # language settings changed since initialization.
+            try:
+                lang_cfg = get_language_config(self.user_id)
+                resolved_lang = lang_cfg.get("_resolved_language", {})
+            except Exception:
+                resolved_lang = self.language_config.get("_resolved_language", {})
             default_openers = {
                 "en": "Thanks for sharing that with me. What else is on your mind?",
                 "bm": "Terima kasih kerana berkongsi dengan saya. Apa lagi yang bermain di fikiran anda?",
@@ -709,12 +770,57 @@ class JournalActivity:
         self._active = False
         
         logger.info("Cleaning up journal activity...")
-        # Clear explicit face state so GUI can derive next state
+        # Preserve the last visible face during cleanup to avoid a spurious
+        # switch to 'listening' or other transient states while resources
+        # are being stopped. We derive a sensible last-state from the
+        # current snapshot and set it as an explicit face_state override.
         try:
             if self.ui_interface:
-                self.ui_interface.update_face_state(None)
+                try:
+                    snap = self.ui_interface.get_snapshot()
+                except Exception:
+                    snap = None
+
+                last_state = None
+                if snap:
+                    # If an explicit face_state is already set, preserve it.
+                    if snap.get("face_state"):
+                        last_state = snap.get("face_state")
+                    else:
+                        # Derive from speaker/mic/loading statuses.
+                        if snap.get("speaker_status") == "speaking":
+                            last_state = "speaking"
+                        elif snap.get("mic_status") == "listening":
+                            last_state = "listening"
+                        elif snap.get("loading_status") == "loading":
+                            last_state = "loading"
+                        else:
+                            last_state = None
+
+                # If we were able to determine a last_state, lock it in as an
+                # explicit face_state so the GUI won't flip during cleanup.
+                try:
+                    if last_state is not None:
+                        self.ui_interface.update_face_state(last_state)
+                        # Lock other statuses to idle during cleanup so the
+                        # GUI doesn't derive a new face (e.g., 'listening')
+                        # while native resources are being shut down.
+                        try:
+                            self.ui_interface.update_speaker_status("idle")
+                        except Exception:
+                            pass
+                        try:
+                            self.ui_interface.update_mic_status("idle")
+                        except Exception:
+                            pass
+                        try:
+                            self.ui_interface.update_loading_status("idle")
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
         except Exception:
-            logger.debug("Failed to clear UIInterface face_state during journal cleanup")
+            logger.debug("Failed to preserve UIInterface face_state during journal cleanup")
         
         if self.audio_manager:
             self.audio_manager.stop()

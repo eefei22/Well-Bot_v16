@@ -85,8 +85,8 @@ class FaceAnimationWindow:
 
         self._ready_event = threading.Event()
 
-        # Start prioritized loading
-        self.root.after(10, lambda: self._load_assets_and_start(gif_source))
+        # Start prioritized loading (idle first, others in background)
+        self.root.after(10, lambda: self._load_assets_and_start(self._gif_source))
 
         logger.info("FaceAnimationWindow initialized")
 
@@ -105,40 +105,44 @@ class FaceAnimationWindow:
         2. Loads other states in background.
         """
         if not gif_source:
-             backend_dir = Path(__file__).parent.parent.parent
-             default_asset_dir = backend_dir / "assets" / "GUI"
-             gif_source = {
-                     "idle": str(default_asset_dir / "gui_idleing.gif"),
-                     "listening": str(default_asset_dir / "gui_listening.gif"),
-                     "speaking": str(default_asset_dir / "gui_speaking.gif"),
-                     "loading": str(default_asset_dir / "gui_loading.gif"),
-                     "gratitude": str(default_asset_dir / "gui_gratitude.gif"),
-             }
+            backend_dir = Path(__file__).parent.parent.parent
+            default_asset_dir = backend_dir / "assets" / "GUI"
+            gif_source = {
+                "idle": str(default_asset_dir / "gui_idleing.gif"),
+                "listening": str(default_asset_dir / "gui_listening.gif"),
+                "speaking": str(default_asset_dir / "gui_speaking.gif"),
+                "loading": str(default_asset_dir / "gui_loading.gif"),
+                "gratitude": str(default_asset_dir / "gui_gratitude.gif"),
+            }
 
         # Keep a reference for on-demand loading
         self._gif_source = gif_source
+
         first_value = next(iter(gif_source.values())) if gif_source else None
         is_preloaded = isinstance(first_value, list)
+        # record preloaded flag for later on-demand conversions
         self._is_preloaded = is_preloaded
 
         # 1. IMMEDIATE LOAD: idle
         if "idle" in gif_source:
             if is_preloaded:
-                self.gif_frames["idle"] = [ImageTk.PhotoImage(img) for img in gif_source["idle"]]
+                self.gif_frames["idle"] = [ImageTk.PhotoImage(image=img, master=self.root) for img in gif_source["idle"]]
             else:
                 self.gif_frames["idle"] = self._load_frames_from_disk(gif_source["idle"])
         else:
-            empty_img = ImageTk.PhotoImage(Image.new('RGB', (100, 100), 'black'))
+            empty_img = ImageTk.PhotoImage(Image.new('RGB', (100, 100), 'black'), master=self.root)
             self.gif_frames["idle"] = [empty_img]
 
         # Start Animation Loop immediately with idle
         self.current_frame_list = self.gif_frames.get("idle", [])
         self._poll_state()
-        self._play_frame() 
-        
+        self._play_frame()
+
         # 2. BACKGROUND LOAD: remaining states
         remaining_keys = [k for k in gif_source.keys() if k != "idle"]
         self.root.after(100, lambda: self._background_loader(remaining_keys, gif_source, is_preloaded))
+
+
 
     def _background_loader(self, keys, source, is_preloaded):
         if not keys:
@@ -147,7 +151,11 @@ class FaceAnimationWindow:
         key = keys.pop(0)
         try:
             if is_preloaded:
-                self.gif_frames[key] = [ImageTk.PhotoImage(img) for img in source[key]]
+                # FIX 3: Add master=self.root
+                self.gif_frames[key] = [
+                    ImageTk.PhotoImage(image=img, master=self.root) 
+                    for img in source[key]
+                ]
             else:
                 self.gif_frames[key] = self._load_frames_from_disk(source[key])
         except Exception as e:
@@ -166,7 +174,11 @@ class FaceAnimationWindow:
 
         try:
             if self._is_preloaded:
-                self.gif_frames[state] = [ImageTk.PhotoImage(img) for img in source[state]]
+                # FIX 4: Add master=self.root
+                self.gif_frames[state] = [
+                    ImageTk.PhotoImage(image=img, master=self.root) 
+                    for img in source[state]
+                ]
             else:
                 self.gif_frames[state] = self._load_frames_from_disk(source[state])
             logger.info(f"Synchronously loaded frames for state '{state}'")
@@ -178,7 +190,8 @@ class FaceAnimationWindow:
             gif = Image.open(path)
             frames = []
             for frame in ImageSequence.Iterator(gif):
-                frames.append(ImageTk.PhotoImage(frame.copy()))
+                # FIX 5: Add master=self.root
+                frames.append(ImageTk.PhotoImage(image=frame.copy(), master=self.root))
             return frames
         except Exception:
             return []

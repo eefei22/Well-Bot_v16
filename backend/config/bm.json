@@ -77,7 +77,7 @@
     "starting_activity_feedback": "Memulakan {activity} sekarang",
     "no_match_feedback": "Saya tidak begitu faham",
     "suggestions_unavailable": "Cadangan tidak tersedia sekarang",
-    "unknown_intent_prompt": "Saya tidak begitu faham, tetapi biar saya cadangkan sesuatu untuk anda",
+    "unknown_intent_prompt": "Saya tidak begitu faham, tetapi biar saya cadangkan sesuatu untuk anda.",
     "intervention_trigger_prompt": "Hei, Saya nampak anda tidak berada dalam keadaan baik, adakah anda ingin melakukan aktiviti bersama saya?",
     "prompts": {
       "nudge": "Adakah anda masih di situ? Aktiviti mana yang anda ingin cuba?",
@@ -108,7 +108,7 @@
       "wakeword_detected": "Hey, saya dengar anda memanggil saya. Apa yang boleh saya bantu?",
       "nudge": "Saya sedang mendengar. Apakah yang anda mahu lakukan?",
       "timeout": "Saya akan berada di sini apabila anda memerlukan saya. Hanya panggil nama saya.",
-      "unknown_intent": "Saya tidak begitu faham. Bolehkah anda mengulanginya?",
+      "unknown_intent": "Saya tak begitu faham. Boleh panggil nama saya sekali lagi? Saya akan bersedia untuk membantu.",
       "activity_unavailable": "Fungsi itu belum tersedia lagi. Apa lagi yang boleh saya bantu?"
     }
   },

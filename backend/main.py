@@ -72,6 +72,8 @@ class WellBotOrchestrator:
     Main orchestrator that coordinates the complete voice pipeline flow:
     Wake Word Detection → Speech Recognition → Intent Classification → Activity Execution
     """
+    # In src/backend/main.py
+
     def __init__(self):
         self.state = SystemState.STARTING
         self._lock = threading.Lock()
@@ -86,104 +88,47 @@ class WellBotOrchestrator:
         except Exception as e:
             logger.warning(f"Could not load servo controller: {e}")
             self.servo_controller = None
-
-        # Resolve user from device_id at startup
-        # Initialize flags for association retry logic
+        
         self.association_pending = False
         self.user_id = None
         self.prefer_name = None
         self.full_name = None
+        
+        # Thread tracking (Fixes 'no attribute _idle_mode_thread')
         self._association_retry_thread = None
+        self._idle_mode_thread = None
+        self._wake_mode_thread = None
+        self._activity_thread = None
         self._stop_retry_flag = False
         
+        # Activity State (Fixes 'no attribute current_activity')
+        self.current_activity = None
+        self._last_activity_end_time = None
+        self._current_activity_log_id = None
+        self._pre_activity_mood_rating = None
+        self._transitioning_to_activity = False
+        self._restarting_idle_mode = False
+
+        # Config and UI
+        self.global_config = None
+        self.ui_interface = None
+        self._gui_window = None
+
+        # Activity Instances (Lazy Loaded)
+        self.idle_mode_activity = None
+        self.wake_mode_activity = None
+        self.smalltalk_activity = None
+        self.journal_activity = None
+        self.spiritual_quote_activity = None
+        self.meditation_activity = None
+        self.gratitude_activity = None
+        self.activity_suggestion_activity = None
+
+        # --- FIX: REMOVED BLOCKING LOGIC FROM HERE ---
         if not DEVICE_ID:
-            # Load English config for error message (default)
             logger.error("DEVICE_ID environment variable is not set")
             self.association_pending = True
-            try:
-                en_config = load_language_config('en')
-                error_message = en_config.get('startup', {}).get('device_not_associated', 
-                    "This device is not associated to any user. Please contact Well-Bot customer service for assistance.")
-                
-                # Initialize UI to show pairing failure, but preload all GIFs for later use
-                try:
-                    self.ui_interface = UIInterface()
-                    backend_assets = self.backend_dir / "assets" / "GUI"
-                    
-                    # Build GIF paths including pairing_failed and all other states
-                    gif_files = {
-                        "pairing_failed": str(backend_assets / "gui_failpairing.gif"),
-                        "idle": str((backend_assets / "gui_idleing.gif") if (backend_assets / "gui_idleing.gif").exists() else (backend_assets / "gui_idleing.gif")),
-                        "listening": str((backend_assets / "gui_listening.gif") if (backend_assets / "gui_listening.gif").exists() else (backend_assets / "gui_listening.gif")),
-                        "speaking": str((backend_assets / "gui_speaking.gif") if (backend_assets / "gui_speaking.gif").exists() else (backend_assets / "gui_speaking.gif")),
-                        "loading": str(backend_assets / "gui_loading.gif"),
-                        "journaling": str(backend_assets / "gui_journaling.gif"),
-                        "meditating": str(backend_assets / "gui_meditating.gif"),
-                        "gratitude": str(backend_assets / "gui_gratitude.gif"),
-                    }
-
-                    # Preload assets
-                    try:
-                        preloaded = preload_gif_data(gif_files)
-                    except Exception as pre_err:
-                        logger.warning(f"Preloading GIFs failed: {pre_err}")
-                        preloaded = {}
-
-                    # Start the GUI
-                    self._gui_window = start_gui(
-                        self.ui_interface, 
-                        preloaded if preloaded else None, 
-                        update_interval_ms=100, 
-                        wait_for_ready_seconds=2.0
-                    )
-
-                    # Set the state to 'pairing_failed' so the GIF plays
-                    if self.ui_interface:
-                        self.ui_interface.update_face_state("pairing_failed")
-                        
-                    # Wait briefly for window to render
-                    if self._gui_window:
-                        try:
-                            if getattr(self._gui_window, 'wait_until_ready', None):
-                                if self._gui_window.wait_until_ready(timeout=5.0):
-                                    logger.info("GUI frames loaded and first frame displayed")
-                                else:
-                                    logger.warning("GUI did not signal readiness within timeout; proceeding to speak")
-                        except Exception:
-                            logger.debug("GUI readiness check failed - continuing")
-                    else:
-                        logger.warning("GUI window not ready yet; continuing to speak startup message")
-
-                except Exception as ui_err:
-                    logger.warning(f"Failed to start GUI for pairing failure: {ui_err}")
-
-                    try:
-                        preloaded = preload_gif_data(gif_files)
-                    except Exception as e:
-                        logger.warning(f"Preloading GIFs failed: {e}")
-                        preloaded = {}
-
-                    # Start GUI and pass preloaded frames (if any)
-                    self._gui_window = start_gui(self.ui_interface, preloaded if preloaded else None, update_interval_ms=100, wait_for_ready_seconds=2.0)
-                    if self._gui_window:
-                        # Wait until the window reports first frame rendered (max 5s)
-                        try:
-                            if getattr(self._gui_window, 'wait_until_ready', None):
-                                if self._gui_window.wait_until_ready(timeout=5.0):
-                                    logger.info("GUI frames loaded and first frame displayed")
-                                else:
-                                    logger.warning("GUI did not signal readiness within timeout; proceeding to speak")
-                        except Exception:
-                            logger.debug("GUI readiness check failed - continuing")
-                    else:
-                        logger.warning("GUI window not ready yet; continuing to speak startup message")
-                except Exception as ui_err:
-                    logger.warning(f"Failed to start GUI before startup TTS: {ui_err}")
-
-                self._speak_startup_message(error_message, language='en')
-                logger.error(error_message)
-            except Exception as tts_error:
-                logger.warning(f"Failed to speak error message: {tts_error}")
+            # Logic moved to start() to prevent blocking constructor
         else:
             logger.info(f"Resolving user for device_id: {DEVICE_ID}")
             try:
@@ -199,117 +144,17 @@ class WellBotOrchestrator:
                     full_name=self.full_name,
                     backend_dir=self.backend_dir
                 )
-                logger.info(f"✓ User resolved and saved: user_id={self.user_id}, prefer_name={self.prefer_name}, full_name={self.full_name}")
+                logger.info(f"✓ User resolved and saved: user_id={self.user_id}")
             except ValueError as e:
-                # Device association failed - enter waiting mode instead of crashing
                 logger.error(f"Failed to resolve user from device_id {DEVICE_ID}: {e}")
                 self.association_pending = True
-                
-                # Load English config for error message (default)
 
-            # Start GUI (if possible) and show pairing failure animation
-            try:
-                self.ui_interface = UIInterface()
-                backend_assets = self.backend_dir / "assets" / "GUI"
-                gif_files = {
-                    "pairing_failed": str(backend_assets / "gui_failpairing.gif"),
-                    "idle": str(backend_assets / "gui_idleing.gif"),
-                }
-                try:
-                    preloaded = preload_gif_data(gif_files)
-                except Exception as pre_err:
-                    logger.warning(f"Preloading pairing-failed GIFs failed: {pre_err}")
-                    preloaded = {}
-
-                self._gui_window = start_gui(
-                    self.ui_interface,
-                    preloaded if preloaded else None,
-                    update_interval_ms=100,
-                    wait_for_ready_seconds=5.0,
-                )
-
-                # Wait for first frame rendered if supported
-                if self._gui_window and getattr(self._gui_window, 'wait_until_ready', None):
-                    try:
-                        self._gui_window.wait_until_ready(timeout=5.0)
-                    except Exception:
-                        logger.debug("GUI readiness wait failed or timed out")
-
-                # Request pairing_failed face
-                try:
-                    if self.ui_interface:
-                        self.ui_interface.update_face_state("pairing_failed")
-                except Exception:
-                    logger.debug("Failed to set pairing_failed face state")
-
-                # Speak pairing failure message so user is informed (block until TTS finishes)
-                try:
-                    en_config = load_language_config('en')
-                    error_message = en_config.get('startup', {}).get('device_not_associated',
-                        "This device is not associated to any user. Please contact Well-Bot customer service for assistance.")
-                    logger.info("Speaking pairing failure message to user")
-                    self._speak_startup_message(error_message, language='en')
-                except Exception as tts_err:
-                    logger.warning(f"Failed to play pairing failure TTS: {tts_err}")
-
-            except Exception as ui_err:
-                logger.warning(f"Failed to start GUI for pairing failure: {ui_err}")
-
-            # Poll the database every 15 seconds until the device is associated
-            logger.info("Polling for device association every 15s...")
-            while True:
-                try:
-                    user_info = resolve_user_from_device_id(DEVICE_ID)
-                    # Success: save and continue startup
-                    self.user_id = user_info['user_id']
-                    self.prefer_name = user_info.get('prefer_name')
-                    self.full_name = user_info.get('full_name')
-                    save_user_context_to_local(
-                        user_id=self.user_id,
-                        prefer_name=self.prefer_name,
-                        full_name=self.full_name,
-                        backend_dir=self.backend_dir
-                    )
-                    logger.info(f"Device successfully paired: user_id={self.user_id}")
-
-                    # Switch GUI back to normal idle mode
-                    try:
-                        if self.ui_interface:
-                            self.ui_interface.update_face_state(None)
-                    except Exception:
-                        logger.debug("Failed to clear pairing_failed face state")
-
-                    break
-                except Exception:
-                    logger.debug("Device not yet associated; retrying in 15s")
-                    time.sleep(15)
-        
         # Load user-specific config (will be loaded in _initialize_components)
         self.global_config = None
 
         # Components
         self.idle_mode_activity: Optional[IdleModeActivity] = None
-        self.wake_mode_activity: Optional[WakeModeActivity] = None
-        # Activities are lazy-loaded (imported when needed)
-        self.smalltalk_activity = None
-        self.journal_activity = None
-        self.spiritual_quote_activity = None
-        self.meditation_activity = None
-        self.gratitude_activity = None
-        self.activity_suggestion_activity = None
-
-        self.current_activity: Optional[str] = None
-        self._activity_thread: Optional[threading.Thread] = None
-        self._idle_mode_thread: Optional[threading.Thread] = None  # Track idle mode thread
-        self._wake_mode_thread: Optional[threading.Thread] = None  # Track wake mode thread
-        self._transitioning_to_activity = False  # Flag to prevent idle mode restart during activity transition
-        self._restarting_idle_mode = False  # Flag to prevent multiple concurrent idle mode restarts
-        self._last_activity_end_time = None  # Timestamp when last activity ended (to prevent immediate wakeword triggers)
-        self._current_activity_log_id: Optional[str] = None  # Track log ID for completion
-        self._pre_activity_mood_rating: Optional[int] = None  # Store pre-activity mood rating
-        
-        # UI interface (for GUI updates)
-        self.ui_interface = None
+        # ... (rest of the component init remains the same)
         self._gui_window = None
 
         logger.info("WellBotOrchestrator initialized")
@@ -325,7 +170,12 @@ class WellBotOrchestrator:
         Returns:
             True if successful, False otherwise
         """
+        
         try:
+            # Set GUI to speaking
+            if self.ui_interface:
+                self.ui_interface.update_face_state("speaking")
+
             # Get language codes for TTS
             from src.utils.config_resolver import LANGUAGE_CODES
             lang_config = LANGUAGE_CODES.get(language, LANGUAGE_CODES['en'])
@@ -368,6 +218,14 @@ class WellBotOrchestrator:
         except Exception as e:
             logger.warning(f"Failed to speak startup message: {e}", exc_info=True)
             return False
+        finally:
+            if self.ui_interface:
+                # If we are still waiting for pairing, go back to the error GIF
+                if self.association_pending:
+                    self.ui_interface.update_face_state("pairing_failed")
+                else:
+                    # Otherwise go to standard idle
+                    self.ui_interface.update_face_state("idle")
 
     def _attempt_user_association(self) -> bool:
         """
@@ -436,6 +294,9 @@ class WellBotOrchestrator:
                     # Success! Complete initialization and transition to normal operation
                     logger.info("Device-user association successful! Completing initialization...")
                     
+                    if self.ui_interface:
+                        self.ui_interface.update_face_state("idle")
+
                     try:
                         # Initialize components now that we have user_id
                         if self._initialize_components():
@@ -602,7 +463,10 @@ class WellBotOrchestrator:
             config = self.global_config or {}
             gui_config = config.get("gui", {})
             gui_enabled = gui_config.get("enabled", False)
-            
+
+            if self._gui_window is not None:
+                gui_enabled = True
+                
             if gui_enabled:
                 # Reuse existing UIInterface if already created
                 if isinstance(self.ui_interface, UIInterface):
@@ -631,13 +495,27 @@ class WellBotOrchestrator:
         Start GUI window if enabled in configuration, preload assets, 
         and wait for the window to be ready.
         """
+        if self._gui_window is not None:
+            logger.info("GUI window already running, skipping start.")
+            return
+        
         try:
-            gui_config = self.global_config.get("gui", {})
-            gui_enabled = gui_config.get("enabled", False)
-            update_interval_ms = gui_config.get("update_interval_ms", 100)
+            # Determine config (handle case where global_config isn't loaded yet due to association pending)
+            if self.global_config:
+                gui_config = self.global_config.get("gui", {})
+                gui_enabled = gui_config.get("enabled", False)
+                update_interval_ms = gui_config.get("update_interval_ms", 100)
+            else:
+                # Default for startup/error screen
+                gui_enabled = True 
+                update_interval_ms = 100
             
-            if gui_enabled and self.ui_interface and not isinstance(self.ui_interface, NoOpUIInterface):
-                logger.info("🖥️  Initializing GUI...")
+            if gui_enabled:
+                # Ensure UI interface exists
+                if not self.ui_interface or isinstance(self.ui_interface, NoOpUIInterface):
+                    self.ui_interface = UIInterface()
+
+                logger.info("Initializing GUI...")
 
                 # 1. Define GIF paths
                 backend_assets = self.backend_dir / "assets" / "GUI"
@@ -649,6 +527,7 @@ class WellBotOrchestrator:
                     "journaling": str(backend_assets / "gui_journaling.gif"),
                     "meditating": str(backend_assets / "gui_meditating.gif"),
                     "gratitude": str(backend_assets / "gui_gratitude.gif"),
+                    "pairing_failed": str(backend_assets / "gui_failpairing.gif"),
                 }
 
                 # 2. Preload assets (prevents white screen/lag)
@@ -1023,14 +902,26 @@ class WellBotOrchestrator:
         """Handle unknown/unrecognized intent by prompting user to repeat and looping back"""
         logger.info(f"Handling unknown intent for transcript: '{transcript}' - prompting to repeat")
         
-        # Load prompt from config
-        language_code = resolve_language(self.user_id)
-        language_config = get_language_config(language_code)
-        wakeword_responses_config = language_config.get("wakeword_responses", {})
-        unknown_intent_prompt = wakeword_responses_config.get(
-            "unknown_intent",
-            "I didn't quite catch that. Could you call my name again and repeat please?"
-        )
+        # Load prompt from language-specific config file. We resolve the
+        # user's language code, then load the appropriate language JSON so
+        # the unknown-intent prompt is returned in the user's language (e.g., bm.json)
+        try:
+            language_code = resolve_language(self.user_id)
+            language_config = load_language_config(language_code)
+            wakeword_responses_config = language_config.get("wakeword_responses", {})
+            # Some configs put prompts under a 'prompts' key; try both shapes.
+            if isinstance(wakeword_responses_config, dict):
+                # Try nested prompts first
+                prompts_cfg = wakeword_responses_config.get("prompts") or wakeword_responses_config
+                unknown_intent_prompt = prompts_cfg.get(
+                    "unknown_intent",
+                    "I didn't quite catch that. Could you call my name again and repeat please?"
+                )
+            else:
+                unknown_intent_prompt = "I didn't quite catch that. Could you call my name again and repeat please?"
+        except Exception as e:
+            logger.warning(f"Failed to load language-specific unknown intent prompt: {e}")
+            unknown_intent_prompt = "I didn't quite catch that. Could you call my name again and repeat please?"
         
         # Prompt user to repeat using TTS
         # Try to use wake_mode_activity's TTS if available (it has TTS service)
@@ -2063,23 +1954,52 @@ class WellBotOrchestrator:
         """Start the entire orchestration system."""
         logger.info("=== Well-Bot Orchestrator Starting ===")
 
-        # Check if we're waiting for device-user association
+        # 1. Initialize UI Interface early (needed for both error state and normal state)
+        # We try to load global config if possible, otherwise use defaults
+        try:
+            if self.user_id:
+                # Force refresh to ensure we have preferences
+                from src.utils.config_resolver import force_refresh_user_configs
+                force_refresh_user_configs(self.user_id)
+                self.global_config = get_global_config_for_user(self.user_id)
+            self._initialize_ui() 
+        except Exception as e:
+            logger.warning(f"Early config load failed: {e}")
+            self.ui_interface = UIInterface() # Fallback
+
+        # 2. Start GUI immediately (so we have a visual for whatever happens next)
+        # This fixes the "no GUI in wait mode" issue
+        self._start_gui_if_enabled()
+
+        # 3. Check Pending Association (The Error Flow)
         if self.association_pending:
             logger.info("Device-user association pending, entering waiting mode...")
             
             with self._lock:
                 self.state = SystemState.WAITING_FOR_USER_ASSOCIATION
             
+            # Show Error Face
+            if self.ui_interface:
+                self.ui_interface.update_face_state("pairing_failed")
+
+            # Speak Error Message
+            try:
+                en_config = load_language_config('en')
+                error_message = en_config.get('startup', {}).get('device_not_associated', 
+                    "This device is not associated to any user. Please contact Well-Bot customer service.")
+                
+                # Run TTS in a thread so we don't block the main thread returning (GUI needs main thread loop)
+                threading.Thread(target=self._speak_startup_message, args=(error_message, 'en'), daemon=True).start()
+            except Exception as e:
+                logger.error(f"Failed to queue error message: {e}")
+
             # Start the retry thread
             self._start_association_retry_thread()
             
-            # TODO: Show visual indicator in GUI for waiting state
-            # if self.ui_interface:
-            #     self.ui_interface.set_waiting_mode(True)
-            
             logger.info("System in waiting mode - will retry association every 0.5 minutes")
-            return True  # System stays alive in waiting mode
+            return True  # Return True so main() enters the keep-alive loop
 
+        # 4. Normal Startup Flow
         if not self._validate_config_files():
             logger.error("Configuration validation failed")
             return False
@@ -2109,13 +2029,10 @@ class WellBotOrchestrator:
             user_name = self.prefer_name or self.full_name or "there"
             success_message = success_template.format(name=user_name)
             
-            # Speak success message via TTS
-            logger.info("Speaking startup completion message...")
-            self._speak_startup_message(success_message, language=user_language)
-            logger.info(f"Startup success message: {success_message}")
+            # Threaded speak so we don't delay idle mode start
+            threading.Thread(target=self._speak_startup_message, args=(success_message, user_language), daemon=True).start()
         except Exception as e:
-            logger.warning(f"Failed to speak startup success message: {e}", exc_info=True)
-            # Continue startup even if TTS fails
+            logger.warning(f"Failed to speak startup success message: {e}")
 
         try:
             # Start idle mode activity (emotion monitoring is managed internally by idle_mode)

@@ -1101,7 +1101,17 @@ class WakeModeActivity:
             # Notify UI that TTS/speaker is active
             try:
                 if self.ui_interface:
-                    self.ui_interface.update_speaker_status("speaking")
+                    # Provide both signals: a high-level explicit face override
+                    # and the speaker status. Some GUI flows prefer explicit
+                    # face_state to avoid transient flicker, so set both here.
+                    try:
+                        self.ui_interface.update_face_state("speaking")
+                    except Exception:
+                        pass
+                    try:
+                        self.ui_interface.update_speaker_status("speaking")
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
@@ -1124,6 +1134,14 @@ class WakeModeActivity:
             # Notify UI that speaker is idle
             try:
                 if self.ui_interface:
-                    self.ui_interface.update_speaker_status("idle")
+                    try:
+                        self.ui_interface.update_speaker_status("idle")
+                    except Exception:
+                        pass
+                    try:
+                        # Clear explicit face override so GUI can resume derived states
+                        self.ui_interface.update_face_state(None)
+                    except Exception:
+                        pass
             except Exception:
                 pass

@@ -8,35 +8,35 @@
     "emotional_score": 23
   },
   "latest_decision": {
-    "trigger_intervention": true,
+    "trigger_intervention": false,
     "confidence_score": 0.0,
-    "reasoning": "Recent activity 6.2 minutes ago"
+    "reasoning": "Emotion 'Happy' is not negative"
   },
   "latest_suggestion": {
     "ranked_activities": [
       {
-        "activity_type": "journal",
+        "activity_type": "gratitude",
         "rank": 1,
         "score": 1.0
       },
       {
-        "activity_type": "gratitude",
+        "activity_type": "journal",
         "rank": 2,
-        "score": 0.778
-      },
-      {
-        "activity_type": "meditation",
-        "rank": 3,
-        "score": 0.741
+        "score": 0.875
       },
       {
         "activity_type": "quote",
+        "rank": 3,
+        "score": 0.75
+      },
+      {
+        "activity_type": "meditation",
         "rank": 4,
-        "score": 0.667
+        "score": 0.625
       }
     ],
-    "reasoning": "Emotion: Sad; Top suggestion: journal (score: 1.000)"
+    "reasoning": "Emotion: Happy; Top suggestion: gratitude (score: 1.000)"
   },
-  "last_request_time": "2026-01-13T23:14:02.119947+08:00",
-  "last_response_time": "2026-01-13T23:14:05.312883+08:00"
+  "last_request_time": "2026-01-15T05:14:09.955745+08:00",
+  "last_response_time": "2026-01-15T05:14:16.024588+08:00"
 }
