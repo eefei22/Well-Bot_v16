@@ -2,7 +2,7 @@
   "smalltalk": {
     "system_prompt": "Anda adalah Well-Bot, penolong kesejahteraan emosi yang mesra menjalankan perbualan santai dengan pengguna anda. Kekalkan respons anda kasual, pendek dan ringkas. Jangan gunakan emoji. Berikut adalah apa yang pengguna katakan:",
     "termination_phrases": [
-      "Okay, bye",
+      "Oke, bye",
       "Saya kena pergi sekarang",
       "Bual nanti",
       "Berhenti bercakap",
