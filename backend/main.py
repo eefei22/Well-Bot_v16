@@ -98,7 +98,7 @@ class WellBotOrchestrator:
                     self.ui_interface = UIInterface()
                     backend_assets = self.backend_dir / "assets" / "GUI"
                     
-                    # Define GIF files, including the new gui_failpairing.gif
+                    # Define GIF files
                     gif_files = {
                         "idle": str((backend_assets / "gui_idleing.gif")), # Fallback
                         "pairing_failed": str(backend_assets / "gui_failpairing.gif") 
@@ -468,7 +468,8 @@ class WellBotOrchestrator:
             self.wake_mode_activity = WakeModeActivity(
                 backend_dir=self.backend_dir,
                 user_id=self.user_id,
-                on_intent_detected=self._handle_intent_detected
+                on_intent_detected=self._handle_intent_detected,
+                ui_interface=self.ui_interface
             )
             if not self.wake_mode_activity.initialize():
                 raise RuntimeError("Failed to initialize Wake Mode activity")

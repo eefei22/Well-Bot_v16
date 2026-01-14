@@ -257,6 +257,20 @@ class ConversationAudioManager:
                         logger.warning(f"PowerShell playback failed: {result.stderr}")
                 except Exception as e:
                     logger.warning(f"PowerShell playback error: {e}")
+            # Method 3: Try system player on Linux (paplay/aplay)
+            if not success and sys.platform != "win32":
+                try:
+                    import subprocess
+                    for cmd in (["paplay", audio_path], ["aplay", audio_path]):
+                        try:
+                            subprocess.run(cmd, check=True, timeout=10)
+                            logger.debug(f"Nudge audio played successfully with {cmd[0]}")
+                            success = True
+                            break
+                        except Exception:
+                            continue
+                except Exception as e:
+                    logger.warning(f"System playback fallback failed: {e}")
             
             if not success:
                 logger.error(f"All audio playback methods failed for nudge: {audio_path}")
@@ -334,6 +348,19 @@ class ConversationAudioManager:
                         logger.warning(f"PowerShell playback failed: {result.stderr}")
                 except Exception as e:
                     logger.warning(f"PowerShell playback error: {e}")
+            else:
+                # Try system players on Linux
+                try:
+                    import subprocess
+                    for cmd in (["paplay", audio_path], ["aplay", audio_path]):
+                        try:
+                            subprocess.run(cmd, check=True, timeout=10)
+                            logger.debug(f"Audio played successfully with {cmd[0]}")
+                            return True
+                        except Exception:
+                            continue
+                except Exception as e:
+                    logger.warning(f"System playback fallback failed: {e}")
             
             logger.error(f"All audio playback methods failed for: {audio_path}")
             return False

@@ -20,7 +20,7 @@ class MicStream:
     Handles buffering and threading for continuous audio capture.
     """
     
-    def __init__(self, rate: int = 16000, chunk_size: int = 1600):
+    def __init__(self, rate: int = 16000, chunk_size: int = 800):
         """
         Initialize the microphone stream.
         
@@ -48,19 +48,56 @@ class MicStream:
                 return
                 
             try:
+                # Try to open the input stream with multiple attempts and
+                # adjusted buffer sizes if needed. This makes the stream
+                # more robust on systems where PulseAudio/ALSA may reject
+                # the first attempt due to device contention.
                 self._pa = pyaudio.PyAudio()
-                self._stream = self._pa.open(
-                    format=pyaudio.paInt16,
-                    channels=1,
-                    rate=self.rate,
-                    input=True,
-                    frames_per_buffer=self.chunk_size,
-                    stream_callback=self._fill_buffer
-                )
-                self.closed = False
-                logger.info("Microphone active")
+
+                # Optional override for input device index
+                import os
+                device_index = None
+                dev_env = os.getenv("AUDIO_INPUT_DEVICE")
+                if dev_env:
+                    try:
+                        device_index = int(dev_env)
+                    except Exception:
+                        device_index = None
+
+                last_err = None
+                attempts = 3
+                for attempt in range(attempts):
+                    try:
+                        frames_per_buffer = max(256, int(self.chunk_size // (1 + attempt)))
+                        self._stream = self._pa.open(
+                            format=pyaudio.paInt16,
+                            channels=1,
+                            rate=self.rate,
+                            input=True,
+                            frames_per_buffer=frames_per_buffer,
+                            input_device_index=device_index,
+                            stream_callback=self._fill_buffer
+                        )
+                        # Mark running and exit retry loop
+                        self.closed = False
+                        logger.info(f"Microphone active (frames_per_buffer={frames_per_buffer})")
+                        last_err = None
+                        break
+                    except Exception as e:
+                        last_err = e
+                        logger.warning(f"MicStream start attempt {attempt+1} failed: {e}")
+                        # small backoff before retry
+                        import time as _time
+                        _time.sleep(0.1)
+
+                if last_err is not None:
+                    # Cleanup PyAudio handle and raise final error
+                    logger.error(f"Failed to start MicStream after {attempts} attempts: {last_err}")
+                    self._cleanup()
+                    raise last_err
                 
             except Exception as e:
+                # Re-raise any unexpected exception after cleanup
                 logger.error(f"Failed to start MicStream: {e}")
                 self._cleanup()
                 raise
