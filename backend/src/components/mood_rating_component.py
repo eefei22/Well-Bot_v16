@@ -22,12 +22,13 @@ class MoodRatingComponent:
     Prompt for a mood rating (1-10) and capture a single response.
     """
 
-    def __init__(self, stt_service, tts_service, audio_manager, language_config: dict, global_config: dict):
+    def __init__(self, stt_service, tts_service, audio_manager, language_config: dict, global_config: dict, ui_interface=None):
         self.stt_service = stt_service
         self.tts_service = tts_service
         self.audio_manager = audio_manager
         self.language_config = language_config
         self.global_config = global_config
+        self.ui_interface = ui_interface
 
     def prompt(self, phase: str = "pre") -> Dict[str, Any]:
         """
@@ -72,8 +73,24 @@ class MoodRatingComponent:
         def text_gen():
             yield text
 
+        # Notify UI (if available) that we're speaking. The audio manager
+        # will also set speaker status while playing, but we set it here
+        # for extra safety / immediate feedback.
+        try:
+            if self.ui_interface:
+                self.ui_interface.update_speaker_status("speaking")
+        except Exception:
+            pass
+
         pcm_chunks = self.tts_service.stream_synthesize(text_gen())
-        self.audio_manager.play_tts_stream(pcm_chunks, use_nudge_delays=False)
+        try:
+            self.audio_manager.play_tts_stream(pcm_chunks, use_nudge_delays=False)
+        finally:
+            try:
+                if self.ui_interface:
+                    self.ui_interface.update_speaker_status("idle")
+            except Exception:
+                pass
 
     def _capture_single_transcript(self, timeout_seconds: float = 10.0) -> Optional[str]:
         mic: MicStream = self.audio_manager.mic_factory()
@@ -82,6 +99,13 @@ class MoodRatingComponent:
 
         with self.audio_manager._mic_lock:
             self.audio_manager._current_mic = mic
+
+        # Notify UI that mic is listening for mood rating
+        try:
+            if self.ui_interface:
+                self.ui_interface.update_mic_status("listening")
+        except Exception:
+            pass
 
         final_text: Optional[str] = None
         interim_text: Optional[str] = None
@@ -132,6 +156,13 @@ class MoodRatingComponent:
         mic.stop()
         with self.audio_manager._mic_lock:
             self.audio_manager._current_mic = None
+
+        # Notify UI that mic is now idle
+        try:
+            if self.ui_interface:
+                self.ui_interface.update_mic_status("idle")
+        except Exception:
+            pass
 
         if final_text:
             return final_text
