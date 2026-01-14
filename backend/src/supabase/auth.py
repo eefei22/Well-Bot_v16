@@ -181,3 +181,57 @@ def get_user_from_token(token: str) -> Optional[str]:
     """
     # TODO: Implement JWT validation with Supabase Auth
     raise NotImplementedError("Auth not yet implemented")
+
+def refresh_user_persona_from_database(user_id: str, backend_dir: Optional[Path] = None) -> bool:
+    """
+    Refresh user_persona.json with latest data from database.
+    Updates prefer_name, full_name, and spiritual_beliefs.
+    
+    Args:
+        user_id: User UUID to refresh
+        backend_dir: Optional backend directory path (defaults to inferred path)
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        from .client import fetch_user_by_id
+        from .database import save_user_context_to_local
+        
+        user = fetch_user_by_id(user_id)
+        
+        if not user:
+            logger.warning(f"User {user_id} not found in database")
+            return False
+        
+        # Update user_persona.json
+        save_user_context_to_local(
+            user_id=user_id,
+            prefer_name=user.get('prefer_name'),
+            full_name=user.get('full_name'),
+            backend_dir=backend_dir
+        )
+        
+        # Also update spiritual_beliefs in user_persona.json if we want to track it
+        # For now, spiritual_beliefs is fetched fresh from DB when needed
+        # But we can store it for comparison purposes
+        try:
+            persona_path = _get_user_persona_path()
+            if persona_path.exists():
+                with open(persona_path, 'r', encoding='utf-8') as f:
+                    persona_data = json.load(f)
+                
+                # Update spiritual_beliefs if available
+                if 'spiritual_beliefs' in user:
+                    persona_data['spiritual_beliefs'] = user.get('spiritual_beliefs')
+                
+                with open(persona_path, 'w', encoding='utf-8') as f:
+                    json.dump(persona_data, f, indent=2, ensure_ascii=False)
+        except Exception as e:
+            logger.debug(f"Could not update spiritual_beliefs in user_persona.json: {e}")
+        
+        logger.info(f"Refreshed user_persona.json for user {user_id}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to refresh user_persona: {e}", exc_info=True)
+        return False

@@ -34,6 +34,7 @@ from src.components.stt import GoogleSTTService
 from src.components.keyword_intent_matcher import KeywordIntentMatcher
 from src.utils.config_resolver import get_global_config_for_user, get_language_config
 from src.utils.intervention_record import InterventionRecordManager
+from src.utils.mood_rating import parse_mood_rating_from_speech
 from src.supabase.auth import get_current_user_id
 
 logger = logging.getLogger(__name__)
@@ -60,7 +61,7 @@ class WakeModeActivity:
             backend_dir: Path to the backend directory
             user_id: User ID (optional, will be resolved if not provided)
             on_intent_detected: Callback function called when intent is detected
-                                Signature: (transcript: str, intent_result: dict) -> None
+                                Signature: (transcript: str, intent_result: dict, mood_rating: Optional[int]) -> None
         """
         self.backend_dir = backend_dir
         self.user_id = user_id if user_id is not None else get_current_user_id()
@@ -95,6 +96,7 @@ class WakeModeActivity:
         self._timeout_occurred = threading.Event()
         self._detected_transcript: Optional[str] = None
         self._detected_intent: Optional[Dict[str, Any]] = None
+        self._detected_mood_rating: Optional[int] = None
         
         # Intervention mode flag
         self._intervention_mode = False
@@ -204,6 +206,7 @@ class WakeModeActivity:
         self._timeout_occurred.clear()
         self._detected_intent = None
         self._detected_transcript = None
+        self._detected_mood_rating = None
         
         logger.info("Wake mode stopped")
     
@@ -222,6 +225,7 @@ class WakeModeActivity:
             self._timeout_occurred.clear()
             self._detected_intent = None
             self._detected_transcript = None
+            self._detected_mood_rating = None
             
             # Handle intervention mode vs wake word mode
             if self._intervention_mode:
@@ -456,6 +460,21 @@ class WakeModeActivity:
                     # Store results
                     self._detected_transcript = transcript
                     self._detected_intent = intent_result
+                    self._detected_mood_rating = None
+                    
+                    # CRITICAL: Stop the mic and STT session BEFORE mood rating capture
+                    # This ensures PyAudio device is released before starting new mic
+                    # #region agent log
+                    with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+                        import json
+                        f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"H","location":"wake_mode.py:461","message":"Stopping mic before mood rating","data":{"mic_running":mic.is_running()},"timestamp":int(time.time()*1000)})+"\n")
+                    # #endregion
+                    if mic.is_running():
+                        mic.stop()
+                    # Mark STT as inactive immediately
+                    with self._lock:
+                        self._mic_stream = None
+                        self.stt_active = False
                     
                     # In intervention mode, always route to activity_suggestion (per plan)
                     if self._intervention_mode:
@@ -485,6 +504,47 @@ class WakeModeActivity:
                                     self._detected_intent = {"intent": "activity_suggestion", "confidence": 1.0}
                             except Exception as e:
                                 logger.warning(f"Failed to check trigger_intervention or speak prompt: {e}")
+
+                    # Capture pre-activity mood rating if needed
+                    # #region agent log
+                    detected_intent_str = self._detected_intent.get("intent", "unknown")
+                    with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+                        import json
+                        f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"A","location":"wake_mode.py:495","message":"Before mood rating check","data":{"detected_intent":detected_intent_str,"intent_dict":self._detected_intent,"_active":self._active},"timestamp":int(time.time()*1000)})+"\n")
+                    # #endregion
+                    should_prompt = self._should_prompt_mood_rating(detected_intent_str)
+                    # #region agent log
+                    with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+                        import json
+                        f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"A","location":"wake_mode.py:496","message":"After _should_prompt_mood_rating","data":{"should_prompt":should_prompt,"intent":detected_intent_str,"global_config_exists":self.global_config is not None},"timestamp":int(time.time()*1000)})+"\n")
+                    # #endregion
+                    if should_prompt:
+                        # #region agent log
+                        with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+                            import json
+                            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"wake_mode.py:497","message":"Entering _prompt_mood_rating","data":{"tts_available":self.tts_service is not None,"stt_available":self.stt_service is not None,"_active":self._active},"timestamp":int(time.time()*1000)})+"\n")
+                        # #endregion
+                        try:
+                            self._detected_mood_rating = self._prompt_mood_rating()
+                            # #region agent log
+                            with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+                                import json
+                                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"wake_mode.py:498","message":"After _prompt_mood_rating","data":{"mood_rating":self._detected_mood_rating},"timestamp":int(time.time()*1000)})+"\n")
+                            # #endregion
+                        except Exception as e:
+                            # #region agent log
+                            with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+                                import json
+                                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"C","location":"wake_mode.py:499","message":"Exception in _prompt_mood_rating","data":{"error":str(e),"error_type":type(e).__name__},"timestamp":int(time.time()*1000)})+"\n")
+                            # #endregion
+                            logger.error(f"Exception in mood rating prompt: {e}", exc_info=True)
+                            self._detected_mood_rating = None
+                    else:
+                        # #region agent log
+                        with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+                            import json
+                            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"A","location":"wake_mode.py:500","message":"Mood rating check returned False","data":{"intent":detected_intent_str},"timestamp":int(time.time()*1000)})+"\n")
+                        # #endregion
                     
                     # Final check: ensure activity is still active
                     if not self._active:
@@ -497,7 +557,11 @@ class WakeModeActivity:
                     # Invoke callback if provided
                     if self.on_intent_detected and self._active:
                         try:
-                            self.on_intent_detected(self._detected_transcript, self._detected_intent)
+                            self.on_intent_detected(
+                                self._detected_transcript,
+                                self._detected_intent,
+                                self._detected_mood_rating
+                            )
                         except Exception as e:
                             logger.error(f"Error invoking intent detected callback: {e}")
                 else:
@@ -510,13 +574,14 @@ class WakeModeActivity:
         except Exception as e:
             logger.error(f"Error during keyword intent recognition: {e}", exc_info=True)
         finally:
-            # Stop mic
+            # Stop mic (only if still running - may have been stopped earlier for mood rating)
             if mic.is_running():
                 mic.stop()
             
-            # Mark STT as inactive
+            # Mark STT as inactive (only if not already marked)
             with self._lock:
-                self._mic_stream = None
+                if self._mic_stream == mic:  # Only clear if this is still the current mic
+                    self._mic_stream = None
                 self.stt_active = False
             logger.info("Keyword intent recognition session ended")
     
@@ -636,10 +701,298 @@ class WakeModeActivity:
             with self._lock:
                 if self._mic_stream and self._mic_stream.is_running():
                     logger.debug("Stopping mic in STT session")
+                    # #region agent log
+                    with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+                        import json
+                        f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"G","location":"wake_mode.py:688","message":"Stopping mic in STT session","data":{"mic_running":self._mic_stream.is_running()},"timestamp":int(time.time()*1000)})+"\n")
+                    # #endregion
                     self._mic_stream.stop()
                     self._mic_stream = None
+                    # #region agent log
+                    with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+                        import json
+                        f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"G","location":"wake_mode.py:691","message":"Mic stopped in STT session","data":{},"timestamp":int(time.time()*1000)})+"\n")
+                    # #endregion
         except Exception as e:
+            # #region agent log
+            with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+                import json
+                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"G","location":"wake_mode.py:693","message":"Failed to stop STT session","data":{"error":str(e)},"timestamp":int(time.time()*1000)})+"\n")
+            # #endregion
             logger.warning(f"Failed to stop STT session: {e}")
+
+    def _should_prompt_mood_rating(self, intent: str) -> bool:
+        """Return True if mood rating should be prompted for this intent."""
+        # #region agent log
+        with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+            import json
+            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"A","location":"wake_mode.py:657","message":"_should_prompt_mood_rating entry","data":{"intent":intent,"global_config_exists":self.global_config is not None},"timestamp":int(time.time()*1000)})+"\n")
+        # #endregion
+        if not self.global_config:
+            # #region agent log
+            with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+                import json
+                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"A","location":"wake_mode.py:660","message":"global_config is None","data":{},"timestamp":int(time.time()*1000)})+"\n")
+            # #endregion
+            return False
+
+        mood_cfg = self.global_config.get("mood_rating", {})
+        enabled = mood_cfg.get("enabled", True)
+        # #region agent log
+        with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+            import json
+            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"A","location":"wake_mode.py:663","message":"Checking mood_rating.enabled","data":{"enabled":enabled,"mood_cfg_keys":list(mood_cfg.keys())},"timestamp":int(time.time()*1000)})+"\n")
+        # #endregion
+        if not enabled:
+            # #region agent log
+            with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+                import json
+                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"A","location":"wake_mode.py:664","message":"mood_rating.enabled is False","data":{},"timestamp":int(time.time()*1000)})+"\n")
+            # #endregion
+            return False
+
+        allowed_intents = {"smalltalk", "journaling", "meditation", "gratitude", "quote"}
+        result = intent in allowed_intents
+        # #region agent log
+        with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+            import json
+            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"A","location":"wake_mode.py:667","message":"Intent check result","data":{"intent":intent,"allowed_intents":list(allowed_intents),"result":result},"timestamp":int(time.time()*1000)})+"\n")
+        # #endregion
+        return result
+
+    def _prompt_mood_rating(self) -> Optional[int]:
+        """Prompt user for mood rating and capture a single response."""
+        # #region agent log
+        with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+            import json
+            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"wake_mode.py:669","message":"_prompt_mood_rating entry","data":{"tts_available":self.tts_service is not None,"stt_available":self.stt_service is not None,"_active":self._active},"timestamp":int(time.time()*1000)})+"\n")
+        # #endregion
+        if not self.tts_service or not self.stt_service:
+            # #region agent log
+            with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+                import json
+                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"wake_mode.py:671","message":"TTS/STT unavailable","data":{"tts_available":self.tts_service is not None,"stt_available":self.stt_service is not None},"timestamp":int(time.time()*1000)})+"\n")
+            # #endregion
+            logger.warning("Mood rating skipped - TTS/STT service unavailable")
+            return None
+
+        if not self._active:
+            # #region agent log
+            with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+                import json
+                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"wake_mode.py:675","message":"Wake mode not active","data":{"_active":self._active},"timestamp":int(time.time()*1000)})+"\n")
+            # #endregion
+            logger.debug("Mood rating skipped - wake mode not active")
+            return None
+
+        mood_cfg = (self.language_config or {}).get("mood_rating", {})
+        prompt = mood_cfg.get(
+            "prompt_before",
+            "If you'd like - on a scale from 1 to 10 - how strong are any negative emotions you feel right now (1 = none, 10 = very strong)?"
+        )
+        skip_phrases = mood_cfg.get("skip_phrases", ["skip", "no", "not now", "later", "pass"])
+        timeout_seconds = (self.global_config or {}).get("mood_rating", {}).get("timeout_seconds", 10.0)
+
+        logger.info("Prompting for pre-activity mood rating...")
+        # #region agent log
+        with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+            import json
+            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"wake_mode.py:687","message":"About to prompt mood rating","data":{"prompt":prompt[:50],"timeout_seconds":timeout_seconds},"timestamp":int(time.time()*1000)})+"\n")
+        # #endregion
+
+        # Ensure the mic is stopped before prompting
+        # #region agent log
+        with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+            import json
+            old_mic_running = False
+            with self._lock:
+                old_mic_running = self._mic_stream is not None and self._mic_stream.is_running() if self._mic_stream else False
+            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"G","location":"wake_mode.py:774","message":"Before stopping STT session","data":{"old_mic_running":old_mic_running,"stt_thread_alive":self._stt_thread.is_alive() if self._stt_thread else False},"timestamp":int(time.time()*1000)})+"\n")
+        # #endregion
+        # Stop the STT session and mic
+        # This ensures the old mic generator stops and PyAudio releases the device
+        self._stop_stt_session()
+        
+        # Wait for STT thread to finish (if it's still running)
+        # This is critical - we need to ensure the old mic generator is fully stopped
+        current_thread = threading.current_thread()
+        stt_thread_was_alive = False
+        if self._stt_thread and self._stt_thread.is_alive():
+            stt_thread_was_alive = True
+            # #region agent log
+            with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+                import json
+                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"G","location":"wake_mode.py:799","message":"STT thread still alive, waiting","data":{"is_current_thread":self._stt_thread is current_thread},"timestamp":int(time.time()*1000)})+"\n")
+            # #endregion
+            logger.debug("Waiting for previous STT thread to finish before mood rating")
+            # Only join if we're not in the STT thread itself (to avoid deadlock)
+            if self._stt_thread is not current_thread:
+                # Wait with timeout - don't block indefinitely
+                self._stt_thread.join(timeout=0.5)
+                if self._stt_thread.is_alive():
+                    logger.warning("STT thread did not finish within timeout, continuing anyway")
+            else:
+                logger.debug("STT thread is current thread - skipping join to avoid deadlock")
+        
+        # Delay to ensure PyAudio device is fully released
+        # Longer delay if STT thread was still running (more cleanup needed)
+        delay = 0.5 if stt_thread_was_alive else 0.2
+        time.sleep(delay)
+        # #region agent log
+        with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+            import json
+            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"G","location":"wake_mode.py:820","message":"After cleanup delay, ready for new mic","data":{"delay":delay,"stt_thread_was_alive":stt_thread_was_alive,"stt_thread_alive":self._stt_thread.is_alive() if self._stt_thread else False},"timestamp":int(time.time()*1000)})+"\n")
+        # #endregion
+        # #region agent log
+        with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+            import json
+            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"G","location":"wake_mode.py:785","message":"After cleanup delay","data":{},"timestamp":int(time.time()*1000)})+"\n")
+        # #endregion
+
+        # Speak the prompt using TTS
+        # #region agent log
+        with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+            import json
+            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"wake_mode.py:693","message":"Calling _speak for mood rating prompt","data":{},"timestamp":int(time.time()*1000)})+"\n")
+        # #endregion
+        self._speak(prompt)
+        # #region agent log
+        with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+            import json
+            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"B","location":"wake_mode.py:694","message":"After _speak for mood rating","data":{},"timestamp":int(time.time()*1000)})+"\n")
+        # #endregion
+
+        mic = MicStream(rate=16000, chunk_size=1600)
+        with self._lock:
+            self._mic_stream = mic
+            self.stt_active = True
+
+        # Start the microphone before STT
+        try:
+            mic.start()
+            # Ensure mic is unmuted (in case it was muted during TTS)
+            mic.unmute()
+            # #region agent log
+            with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+                import json
+                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"F","location":"wake_mode.py:790","message":"Mic started for mood rating","data":{"mic_running":mic.is_running(),"mic_muted":mic.is_muted()},"timestamp":int(time.time()*1000)})+"\n")
+            # #endregion
+            logger.info(f"Mood rating mic started (muted={mic.is_muted()})")
+        except Exception as e:
+            # #region agent log
+            with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+                import json
+                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"F","location":"wake_mode.py:791","message":"Failed to start mic for mood rating","data":{"error":str(e)},"timestamp":int(time.time()*1000)})+"\n")
+            # #endregion
+            logger.error(f"Failed to start mic for mood rating: {e}")
+            return None
+
+        final_text: Optional[str] = None
+        stt_completed = threading.Event()
+        stt_error = {"error": None}
+
+        def on_transcript(text: str, is_final: bool):
+            nonlocal final_text
+            # #region agent log
+            with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+                import json
+                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"F","location":"wake_mode.py:798","message":"Mood rating transcript callback","data":{"text":text[:50] if text else None,"is_final":is_final},"timestamp":int(time.time()*1000)})+"\n")
+            # #endregion
+            if is_final and text:
+                final_text = text
+                if mic.is_running():
+                    mic.stop()
+
+        def run_stt():
+            try:
+                # #region agent log
+                with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+                    import json
+                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"F","location":"wake_mode.py:805","message":"Starting STT for mood rating","data":{"mic_running":mic.is_running()},"timestamp":int(time.time()*1000)})+"\n")
+                # #endregion
+                self.stt_service.stream_recognize(
+                    mic.generator(),
+                    on_transcript,
+                    interim_results=True,
+                    single_utterance=True
+                )
+            except Exception as e:
+                stt_error["error"] = e
+                # #region agent log
+                with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+                    import json
+                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"F","location":"wake_mode.py:815","message":"STT error during mood rating","data":{"error":str(e)},"timestamp":int(time.time()*1000)})+"\n")
+                # #endregion
+                logger.error(f"STT error during mood rating capture: {e}")
+            finally:
+                stt_completed.set()
+
+        stt_thread = threading.Thread(target=run_stt, daemon=True)
+        stt_thread.start()
+
+        # Wait for response with timeout
+        # #region agent log
+        with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+            import json
+            f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"F","location":"wake_mode.py:823","message":"Waiting for mood rating response","data":{"timeout_seconds":timeout_seconds},"timestamp":int(time.time()*1000)})+"\n")
+        # #endregion
+        if not stt_completed.wait(timeout=timeout_seconds):
+            # #region agent log
+            with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+                import json
+                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"F","location":"wake_mode.py:824","message":"Mood rating timeout","data":{},"timestamp":int(time.time()*1000)})+"\n")
+            # #endregion
+            logger.info("Mood rating prompt timed out after %ss", timeout_seconds)
+            if mic.is_running():
+                mic.stop()
+        else:
+            # #region agent log
+            with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+                import json
+                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"F","location":"wake_mode.py:828","message":"STT completed for mood rating","data":{"final_text":final_text[:50] if final_text else None,"stt_error":str(stt_error["error"]) if stt_error["error"] else None},"timestamp":int(time.time()*1000)})+"\n")
+            # #endregion
+
+        stt_thread.join(timeout=1.0)
+
+        try:
+            if stt_error["error"]:
+                # #region agent log
+                with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+                    import json
+                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"F","location":"wake_mode.py:835","message":"STT error, returning None","data":{"error":str(stt_error["error"])},"timestamp":int(time.time()*1000)})+"\n")
+                # #endregion
+                return None
+            if final_text:
+                rating = parse_mood_rating_from_speech(final_text, skip_phrases)
+                # #region agent log
+                with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+                    import json
+                    f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"F","location":"wake_mode.py:838","message":"Parsed mood rating","data":{"final_text":final_text,"rating":rating},"timestamp":int(time.time()*1000)})+"\n")
+                # #endregion
+                logger.info("Pre-activity mood rating: %s", rating)
+                
+                # Speak acknowledgment if rating was successfully captured
+                if rating is not None:
+                    mood_cfg = (self.language_config or {}).get("mood_rating", {})
+                    acknowledgment = mood_cfg.get("acknowledgment", "")
+                    if acknowledgment:
+                        logger.debug("Speaking mood rating acknowledgment")
+                        self._speak(acknowledgment)
+                
+                return rating
+            # #region agent log
+            with open(r"c:\Users\lowee\Desktop\Well-Bot_Cloud-Edge\.cursor\debug.log", "a", encoding="utf-8") as f:
+                import json
+                f.write(json.dumps({"sessionId":"debug-session","runId":"run1","hypothesisId":"F","location":"wake_mode.py:841","message":"No final_text, returning None","data":{},"timestamp":int(time.time()*1000)})+"\n")
+            # #endregion
+            logger.debug("No response received for mood rating prompt")
+            return None
+        finally:
+            if mic.is_running():
+                mic.stop()
+            with self._lock:
+                self._mic_stream = None
+                self.stt_active = False
     
     def _play_audio_file(self, audio_path: str) -> bool:
         """
@@ -724,4 +1077,3 @@ class WakeModeActivity:
                 if self._mic_stream and self._mic_stream.is_running():
                     logger.debug("Unmuting microphone after TTS")
                     self._mic_stream.unmute()
-

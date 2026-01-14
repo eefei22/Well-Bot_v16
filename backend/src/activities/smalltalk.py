@@ -10,10 +10,10 @@ import logging
 import threading
 import time
 import json
+import re
 from pathlib import Path
 from typing import Optional
 import gc
-import os
 import tempfile
 import requests
 
@@ -29,11 +29,15 @@ from src.components import (
     ConversationSession,
     SmallTalkSession,
     TerminationPhraseDetected,
+    GuardrailPhraseDetector,
+    GuardrailPhraseDetected,
     normalize_text
 )
 from src.utils.config_loader import get_deepseek_config
 from src.utils.config_resolver import get_global_config_for_user, get_language_config, resolve_language
 from src.supabase.auth import get_current_user_id
+from src.supabase.database import update_mood_rating, has_pre_activity_mood_rating
+from src.utils.mood_rating import parse_mood_rating_from_speech
 from src.components import UserContextInjector
 
 logger = logging.getLogger(__name__)
@@ -66,10 +70,14 @@ class SmallTalkActivity:
         self.llm_pipeline: Optional[SmallTalkSession] = None
         self.stt_service: Optional[GoogleSTTService] = None
         self.audio_config: Optional[dict] = None
+        self.guardrail_detector: Optional[GuardrailPhraseDetector] = None
         
         # Activity state
         self._active = False
         self._initialized = False
+        
+        # Source activity log ID for post-activity mood rating
+        self._source_activity_log_id: Optional[str] = None
         
         logger.info(f"SmallTalkActivity initialized for user {self.user_id}")
     
@@ -183,6 +191,11 @@ class SmallTalkActivity:
             )
             logger.info("✓ SmallTalkSession initialized")
             
+            # Initialize guardrail phrase detector for suicide risk detection
+            guardrail_phrases = self.smalltalk_config.get("guardrail_phrases", [])
+            self.guardrail_detector = GuardrailPhraseDetector(guardrail_phrases)
+            logger.info(f"✓ Guardrail detector initialized with {len(guardrail_phrases)} phrases")
+            
             self._initialized = True
             return True
             
@@ -194,6 +207,48 @@ class SmallTalkActivity:
         """Inject a system message into the LLM pipeline before starting."""
         if self.llm_pipeline:
             self.llm_pipeline.messages.append({"role": "system", "content": content})
+    
+    def _remove_guardrail_phrases(self, user_text: str) -> str:
+        """
+        Remove guardrail phrases from user text before sending to LLM.
+        
+        Args:
+            user_text: Original user text that may contain guardrail phrases
+            
+        Returns:
+            Sanitized text with guardrail phrases removed
+        """
+        if not user_text or not self.guardrail_detector:
+            return user_text
+        
+        sanitized_text = user_text
+        normalized_user = normalize_text(user_text)
+        
+        # Remove each guardrail phrase that matches
+        for phrase in self.guardrail_detector.phrases:
+            normalized_phrase = normalize_text(phrase)
+            
+            # Check if phrase matches using same logic as detector
+            if (normalized_user == normalized_phrase or 
+                normalized_user.startswith(normalized_phrase + " ") or
+                normalized_phrase in normalized_user):
+                
+                # Remove phrase from original text (case-insensitive, handle punctuation)
+                # Create pattern that matches phrase with word boundaries and punctuation
+                pattern = re.compile(re.escape(phrase), re.IGNORECASE)
+                sanitized_text = pattern.sub("", sanitized_text)
+                logger.debug(f"Removed guardrail phrase '{phrase}' from text")
+        
+        # Clean up extra whitespace
+        sanitized_text = " ".join(sanitized_text.split())
+        sanitized_text = sanitized_text.strip()
+        
+        # If text becomes empty after removal, return a generic message
+        if not sanitized_text:
+            sanitized_text = "User expressed distress"
+        
+        logger.info(f"Sanitized text: '{user_text}' -> '{sanitized_text}'")
+        return sanitized_text
     
     def _should_notify_context_processor(self) -> bool:
         """
@@ -399,6 +454,11 @@ class SmallTalkActivity:
             self._active = False
             return False
     
+    def set_activity_log_id(self, activity_log_id: Optional[str]):
+        """Set the source activity's log ID for post-activity mood rating tracking."""
+        self._source_activity_log_id = activity_log_id
+        logger.debug(f"Set source activity log ID: {activity_log_id}")
+    
     def stop(self):
         """Stop the SmallTalk activity"""
         if not self._active:
@@ -417,6 +477,118 @@ class SmallTalkActivity:
             self.session_manager.stop_session()
         
         logger.info("SmallTalk activity stopped")
+    
+    def _check_pre_activity_mood_rating_exists(self, activity_log_id: str) -> bool:
+        """Check if pre-activity mood rating exists for the given activity log ID."""
+        if not activity_log_id:
+            return False
+        try:
+            return has_pre_activity_mood_rating(activity_log_id)
+        except Exception as e:
+            logger.error(f"Failed to check pre-activity mood rating: {e}", exc_info=True)
+            return False
+    
+    def _prompt_post_activity_mood_rating(self) -> Optional[int]:
+        """Prompt user for post-activity mood rating and capture a single response."""
+        if not self.stt_service:
+            logger.warning("Mood rating skipped - STT service unavailable")
+            return None
+        
+        if not self._active:
+            logger.debug("Mood rating skipped - smalltalk not active")
+            return None
+        
+        # Get config
+        mood_cfg = (self.language_config or {}).get("mood_rating", {})
+        prompt = mood_cfg.get(
+            "prompt_after",
+            "If you'd like — on a scale from 1 to 10 — how strong are any negative emotions you feel right now (1 = none, 10 = very strong)?"
+        )
+        skip_phrases = mood_cfg.get("skip_phrases", ["skip", "no", "not now", "later", "pass"])
+        timeout_seconds = (self.global_config or {}).get("mood_rating", {}).get("timeout_seconds", 10.0)
+        
+        logger.info("Prompting for post-activity mood rating...")
+        
+        # Stop audio manager mic before prompting (if active)
+        if self.audio_manager:
+            self.audio_manager.stop()
+            # Small delay to ensure mic is released
+            time.sleep(0.3)
+        
+        # Speak the prompt using TTS
+        self._speak(prompt)
+        
+        # Create new mic for mood rating capture
+        mic = MicStream(rate=16000, chunk_size=1600)
+        
+        # Start the microphone
+        try:
+            mic.start()
+            mic.unmute()
+            logger.info(f"Post-activity mood rating mic started (muted={mic.is_muted()})")
+        except Exception as e:
+            logger.error(f"Failed to start mic for post-activity mood rating: {e}")
+            return None
+        
+        final_text: Optional[str] = None
+        stt_completed = threading.Event()
+        stt_error = {"error": None}
+        
+        def on_transcript(text: str, is_final: bool):
+            nonlocal final_text
+            if is_final and text:
+                final_text = text
+                if mic.is_running():
+                    mic.stop()
+        
+        def run_stt():
+            try:
+                self.stt_service.stream_recognize(
+                    mic.generator(),
+                    on_transcript,
+                    interim_results=True,
+                    single_utterance=True
+                )
+            except Exception as e:
+                stt_error["error"] = e
+                logger.error(f"STT error during post-activity mood rating capture: {e}")
+            finally:
+                stt_completed.set()
+        
+        stt_thread = threading.Thread(target=run_stt, daemon=True)
+        stt_thread.start()
+        
+        # Wait for response with timeout
+        if not stt_completed.wait(timeout=timeout_seconds):
+            logger.info(f"Post-activity mood rating prompt timed out after {timeout_seconds}s")
+            if mic.is_running():
+                mic.stop()
+        else:
+            logger.debug("STT completed for post-activity mood rating")
+        
+        stt_thread.join(timeout=1.0)
+        
+        try:
+            if stt_error["error"]:
+                return None
+            if final_text:
+                rating = parse_mood_rating_from_speech(final_text, skip_phrases)
+                logger.info(f"Post-activity mood rating: {rating}")
+                
+                # Speak acknowledgment if rating was successfully captured
+                if rating is not None:
+                    mood_cfg = (self.language_config or {}).get("mood_rating", {})
+                    acknowledgment = mood_cfg.get("acknowledgment", "")
+                    if acknowledgment:
+                        logger.debug("Speaking post-activity mood rating acknowledgment")
+                        self._speak(acknowledgment)
+                
+                return rating
+            logger.debug("No response received for post-activity mood rating prompt")
+            return None
+        finally:
+            if mic.is_running():
+                mic.stop()
     
     def cleanup(self):
         """Complete cleanup of all resources including native libraries, cached resources, and dependencies"""
@@ -665,11 +837,63 @@ class SmallTalkActivity:
                 normalized = normalize_text(user_text)
                 logger.info(f"[User] normalized_text = '{normalized}'")
                 
-                # Add user message to LLM pipeline memory
-                self.llm_pipeline.messages.append({"role": "user", "content": user_text})
+                # Check for guardrail phrases BEFORE adding to LLM messages
+                logger.info("Checking for guardrail phrases BEFORE LLM processing...")
+                guardrail_detected = False
+                try:
+                    if self.guardrail_detector:
+                        self.guardrail_detector.check_guardrail(user_text)
+                except GuardrailPhraseDetected as e:
+                    logger.warning(f"GUARDRAIL TRIGGERED! {e.user_text}")
+                    guardrail_detected = True
+                    
+                    # Log original message to database (with guardrail phrases) for safety records
+                    self.session_manager.add_message("user", user_text, intent="guardrail_detected")
+                    
+                    # Remove guardrail phrases from message before sending to LLM
+                    sanitized_text = self._remove_guardrail_phrases(user_text)
+                    
+                    # Add sanitized message to LLM pipeline memory
+                    self.llm_pipeline.messages.append({"role": "user", "content": sanitized_text})
+                    
+                    # Inject temporary supportive system prompt
+                    guardrail_system_prompt = self.smalltalk_config.get(
+                        "guardrail_system_prompt",
+                        "The user has expressed concerning thoughts. Be extra supportive, empathetic, and encouraging. Ask open-ended questions to understand their feelings better. Do not dismiss their concerns. Offer hope and remind them that help is available."
+                    )
+                    self.llm_pipeline.messages.append({"role": "system", "content": guardrail_system_prompt})
+                    logger.info("Injected guardrail system prompt for next LLM response")
+                    
+                    # Get guardrail response from config
+                    guardrail_response = self.smalltalk_config.get("prompts", {}).get(
+                        "guardrail_response",
+                        "I'm really concerned about what you just shared. Your life has value, and there are people who care about you. Would you like to talk more about what you're going through? I'm here to listen."
+                    )
+                    
+                    # Speak guardrail response (mic mute/unmute handled by _speak method)
+                    logger.info(f"Speaking guardrail response: {guardrail_response}")
+                    self._speak(guardrail_response)
+                    
+                    # Add guardrail response to LLM messages
+                    self.llm_pipeline.messages.append({"role": "assistant", "content": guardrail_response})
+                    
+                    # Save guardrail response to database
+                    self.session_manager.add_message("assistant", guardrail_response, intent="guardrail_response")
+                    
+                    # Reset silence timer to prevent nudge from triggering immediately
+                    self.audio_manager.reset_silence_timer()
+                    logger.info("Silence timer reset after guardrail response")
+                    
+                    # Continue conversation loop (do not break - conversation continues)
+                    continue
                 
-                # Save user message to database
-                self.session_manager.add_message("user", user_text, intent="small_talk")
+                # If no guardrail detected, proceed with normal flow
+                if not guardrail_detected:
+                    # Add user message to LLM pipeline memory
+                    self.llm_pipeline.messages.append({"role": "user", "content": user_text})
+                    
+                    # Save user message to database
+                    self.session_manager.add_message("user", user_text, intent="small_talk")
                 
                 # Check for termination phrases
                 logger.info("Checking for termination BEFORE LLM processing...")
@@ -678,6 +902,25 @@ class SmallTalkActivity:
                     logger.info("No termination detected, proceeding with conversation...")
                 except TerminationPhraseDetected as e:
                     logger.info(f"TERMINATION TRIGGERED! {e}")
+                    
+                    # Check if we should prompt for post-activity mood rating
+                    post_activity_rating: Optional[int] = None
+                    if self._source_activity_log_id:
+                        if self._check_pre_activity_mood_rating_exists(self._source_activity_log_id):
+                            logger.info("Pre-activity mood rating exists, prompting for post-activity mood rating...")
+                            post_activity_rating = self._prompt_post_activity_mood_rating()
+                            
+                            # Write post-activity mood rating to database
+                            if self._source_activity_log_id:
+                                try:
+                                    update_mood_rating(self._source_activity_log_id, post_rating=post_activity_rating)
+                                    logger.info(f"Post-activity mood rating written to DB: {post_activity_rating}")
+                                except Exception as e:
+                                    logger.error(f"Failed to write post-activity mood rating to DB: {e}", exc_info=True)
+                        else:
+                            logger.debug("No pre-activity mood rating found, skipping post-activity prompt")
+                    else:
+                        logger.debug("No source activity log ID, skipping post-activity mood rating")
                     
                     use_audio_files = self.global_smalltalk_config.get("use_audio_files", False)
                     

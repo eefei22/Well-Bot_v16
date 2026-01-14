@@ -32,6 +32,7 @@ from src.utils.config_loader import get_deepseek_config
 from src.utils.config_resolver import get_global_config_for_user, get_language_config, resolve_language
 from src.supabase.auth import get_current_user_id
 from src.utils.intervention_record import InterventionRecordManager
+from src.utils.mood_rating import parse_mood_rating_from_speech
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +77,7 @@ class ActivitySuggestionActivity:
         self._timeout_handler_finished = threading.Event()  # Event to signal when timeout handler completes
         self._nudge_occurred = False  # Flag to track if nudge occurred (to restart listening)
         self._listening_result: Optional[str] = None  # Store result from _listen_for_activity_choice
+        self._detected_mood_rating: Optional[int] = None  # Store pre-activity mood rating
         
         logger.info(f"ActivitySuggestionActivity initialized for user {self.user_id}")
     
@@ -379,9 +381,13 @@ class ActivitySuggestionActivity:
         try:
             logger.info("Listening for activity choice with keyword matching...")
             
-            # Use standard STT parameters (16kHz)
-            mic = MicStream(rate=16000, chunk_size=1600)  # 100ms chunks at 16kHz
+            # Use audio_manager's mic factory to ensure proper tracking
+            mic = self.audio_manager.mic_factory()
             self._listening_mic = mic  # Store reference so timeout handler can stop it
+            
+            # Register mic with ConversationAudioManager so silence monitoring can track it
+            with self.audio_manager._mic_lock:
+                self.audio_manager._current_mic = mic
             
             intent_result: Optional[dict] = None
             transcript: Optional[str] = None
@@ -402,6 +408,12 @@ class ActivitySuggestionActivity:
                         logger.info("Timeout detected in on_transcript callback - stopping mic")
                         mic.stop()
                         return
+                    
+                    # Reset silence timer on any transcript (interim or final)
+                    # This prevents nudge from triggering while user is speaking
+                    if self.audio_manager and text:
+                        self.audio_manager.reset_silence_timer()
+                    
                     if is_final and text:
                         transcript = text
                         mic.stop()
@@ -445,6 +457,12 @@ class ActivitySuggestionActivity:
                         logger.info("Termination phrase detected - will return to idle mode")
                         self._termination_detected = True
                         return "__termination__"  # Special sentinel value for termination
+                    
+                    # Check for rejection intent
+                    if intent_name == "rejection":
+                        logger.info("Rejection detected - will acknowledge and return to idle mode")
+                        self._termination_detected = True
+                        return "__rejection__"  # Special sentinel value for rejection
                 
                 # Map intent to activity type
                 if intent_result:
@@ -473,6 +491,10 @@ class ActivitySuggestionActivity:
                 return None
             finally:
                 mic.stop()
+                # Clear mic reference from ConversationAudioManager
+                with self.audio_manager._mic_lock:
+                    if self.audio_manager._current_mic == mic:
+                        self.audio_manager._current_mic = None
                 self._listening_mic = None  # Clear reference
             
         except Exception as e:
@@ -552,6 +574,10 @@ class ActivitySuggestionActivity:
         """Get conversation context for seeding smalltalk"""
         return self._conversation_context.copy()
     
+    def get_mood_rating(self) -> Optional[int]:
+        """Get the detected pre-activity mood rating"""
+        return self._detected_mood_rating
+    
     def add_system_message(self, content: str):
         """Inject a system message into the LLM pipeline before starting."""
         if self.llm_pipeline:
@@ -596,6 +622,10 @@ class ActivitySuggestionActivity:
             if self._listening_mic and self._listening_mic.is_running():
                 logger.info("Stopping current listening mic to restart after nudge...")
                 self._listening_mic.stop()
+                # Clear mic reference from ConversationAudioManager
+                with self.audio_manager._mic_lock:
+                    if self.audio_manager._current_mic == self._listening_mic:
+                        self.audio_manager._current_mic = None
                 self._listening_mic = None
             
         except Exception as e:
@@ -614,6 +644,11 @@ class ActivitySuggestionActivity:
             logger.info("Stopping listening mic due to timeout...")
             try:
                 self._listening_mic.stop()
+                # Clear mic reference from ConversationAudioManager
+                if self.audio_manager:
+                    with self.audio_manager._mic_lock:
+                        if self.audio_manager._current_mic == self._listening_mic:
+                            self.audio_manager._current_mic = None
             except Exception as e:
                 logger.warning(f"Error stopping listening mic: {e}")
         
@@ -682,6 +717,7 @@ class ActivitySuggestionActivity:
             self._active = True
             self._selected_activity = None
             self._conversation_context = []
+            self._detected_mood_rating = None
             
             
             # Start session
@@ -733,6 +769,11 @@ class ActivitySuggestionActivity:
             logger.info("Stopping listening mic...")
             try:
                 self._listening_mic.stop()
+                # Clear mic reference from ConversationAudioManager
+                if self.audio_manager:
+                    with self.audio_manager._mic_lock:
+                        if self.audio_manager._current_mic == self._listening_mic:
+                            self.audio_manager._current_mic = None
             except Exception as e:
                 logger.warning(f"Error stopping listening mic: {e}")
             self._listening_mic = None
@@ -821,6 +862,121 @@ class ActivitySuggestionActivity:
         
         logger.info("Activity Suggestion activity cleanup completed")
     
+    def _should_prompt_mood_rating(self, intent: str) -> bool:
+        """Return True if mood rating should be prompted for this intent."""
+        if not self.global_config:
+            return False
+
+        mood_cfg = self.global_config.get("mood_rating", {})
+        enabled = mood_cfg.get("enabled", True)
+        if not enabled:
+            return False
+
+        allowed_intents = {"smalltalk", "journaling", "meditation", "gratitude", "quote"}
+        return intent in allowed_intents
+
+    def _prompt_mood_rating(self) -> Optional[int]:
+        """Prompt user for mood rating and capture a single response."""
+        if not self.stt_service:
+            logger.warning("Mood rating skipped - STT service unavailable")
+            return None
+
+        if not self._active:
+            logger.debug("Mood rating skipped - activity not active")
+            return None
+
+        mood_cfg = (self.language_config or {}).get("mood_rating", {})
+        prompt = mood_cfg.get(
+            "prompt_before",
+            "Before we start, on a scale of 1 to 10, how strong are any negative emotions you're feeling right now? 1 means none, 10 means very strong."
+        )
+        skip_phrases = mood_cfg.get("skip_phrases", ["skip", "no", "not now", "later", "pass"])
+        timeout_seconds = (self.global_config or {}).get("mood_rating", {}).get("timeout_seconds", 10.0)
+
+        logger.info("Prompting for pre-activity mood rating...")
+
+        # Stop listening mic before prompting (if still active)
+        if self._listening_mic and self._listening_mic.is_running():
+            logger.debug("Stopping listening mic before mood rating prompt")
+            self._listening_mic.stop()
+            self._listening_mic = None
+            # Small delay to ensure mic is released
+            time.sleep(0.3)
+
+        # Speak the prompt using TTS
+        self._speak(prompt)
+
+        # Create new mic for mood rating capture
+        mic = MicStream(rate=16000, chunk_size=1600)
+
+        # Start the microphone
+        try:
+            mic.start()
+            mic.unmute()
+            logger.info(f"Mood rating mic started (muted={mic.is_muted()})")
+        except Exception as e:
+            logger.error(f"Failed to start mic for mood rating: {e}")
+            return None
+
+        final_text: Optional[str] = None
+        stt_completed = threading.Event()
+        stt_error = {"error": None}
+
+        def on_transcript(text: str, is_final: bool):
+            nonlocal final_text
+            if is_final and text:
+                final_text = text
+                if mic.is_running():
+                    mic.stop()
+
+        def run_stt():
+            try:
+                self.stt_service.stream_recognize(
+                    mic.generator(),
+                    on_transcript,
+                    interim_results=True,
+                    single_utterance=True
+                )
+            except Exception as e:
+                stt_error["error"] = e
+                logger.error(f"STT error during mood rating capture: {e}")
+            finally:
+                stt_completed.set()
+
+        stt_thread = threading.Thread(target=run_stt, daemon=True)
+        stt_thread.start()
+
+        # Wait for response with timeout
+        if not stt_completed.wait(timeout=timeout_seconds):
+            logger.info(f"Mood rating prompt timed out after {timeout_seconds}s")
+            if mic.is_running():
+                mic.stop()
+        else:
+            logger.debug("STT completed for mood rating")
+
+        stt_thread.join(timeout=1.0)
+
+        try:
+            if stt_error["error"]:
+                return None
+            if final_text:
+                rating = parse_mood_rating_from_speech(final_text, skip_phrases)
+                logger.info(f"Pre-activity mood rating: {rating}")
+                
+                # Speak acknowledgment if rating was successfully captured
+                if rating is not None:
+                    acknowledgment = mood_cfg.get("acknowledgment", "")
+                    if acknowledgment:
+                        logger.debug("Speaking mood rating acknowledgment")
+                        self._speak(acknowledgment)
+                
+                return rating
+            logger.debug("No response received for mood rating prompt")
+            return None
+        finally:
+            if mic.is_running():
+                mic.stop()
+    
     def _speak(self, text: str, is_nudge: bool = False):
         """Speak text using TTS"""
         if not text:
@@ -864,6 +1020,7 @@ class ActivitySuggestionActivity:
         self._timeout_handler_finished.clear()  # Reset timeout handler event
         self._nudge_occurred = False  # Reset nudge flag
         self._listening_result = None  # Reset listening result
+        self._detected_mood_rating = None  # Reset mood rating
         
         # Re-initialize components
         return self.initialize()
@@ -941,6 +1098,42 @@ class ActivitySuggestionActivity:
                 self._selected_activity = "__termination__"  # Special sentinel value
                 self.stop()
                 return True
+            
+            # Check for rejection
+            if matched_activity == "__rejection__":
+                logger.info("Rejection detected - acknowledging and returning to idle mode")
+                
+                # Speak rejection prompt before returning to idle mode
+                try:
+                    prompts = self.activity_suggestion_config.get("prompts", {})
+                    rejection_prompt = prompts.get(
+                        "rejection",
+                        "No problem at all. I'll be here whenever you're ready. Take care!"
+                    )
+                    logger.info(f"Speaking rejection prompt: {rejection_prompt}")
+                    self._speak(rejection_prompt)
+                except Exception as e:
+                    logger.warning(f"Failed to load or speak rejection prompt: {e}")
+                
+                self._selected_activity = "__termination__"  # Use termination sentinel to return to idle mode
+                self.stop()
+                return True
+            
+            # Prompt mood rating if matched activity is valid (not None, not termination, not timeout)
+            if matched_activity:
+                should_prompt = self._should_prompt_mood_rating(matched_activity)
+                if should_prompt:
+                    try:
+                        # Ensure listening mic is stopped before prompting (if still active)
+                        if self._listening_mic and self._listening_mic.is_running():
+                            logger.debug("Stopping listening mic before mood rating prompt")
+                            self._listening_mic.stop()
+                            self._listening_mic = None
+                        
+                        self._detected_mood_rating = self._prompt_mood_rating()
+                    except Exception as e:
+                        logger.error(f"Exception in mood rating prompt: {e}", exc_info=True)
+                        self._detected_mood_rating = None
             
             if matched_activity:
                 if matched_activity == "smalltalk":

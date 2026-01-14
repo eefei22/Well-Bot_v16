@@ -8,11 +8,23 @@
       "Stop talking",
       "Exit"
     ],
+    "guardrail_phrases": [
+      "kill myself",
+      "end my life",
+      "suicide",
+      "want to die",
+      "end it all",
+      "take my life",
+      "hurt myself",
+      "self harm"
+    ],
+    "guardrail_system_prompt": "The user has expressed concerning thoughts. Be extra supportive, empathetic, and encouraging. Ask open-ended questions to understand their feelings better. Do not dismiss their concerns. Offer hope and remind them that help is available.",
     "prompts": {
       "start": "Let's talk! What's on your mind?",
       "nudge": "Hey are you still there? Feel free to continue our conversation.",
       "timeout": "It seems like you're not there. I'll go take a break now. Just call my name when you're ready to talk again.",
-      "end": "Okay talk later, bye for now!."
+      "end": "Talk later, bye for now!.",
+      "guardrail_response": "I’m really sorry that you’re feeling this overwhelmed. You don’t have to go through this alone. What you’re feeling matters, and support is available right now. Please call Befrienders KL at 03-7627 2929. Trained volunteers are there to listen and support you, without judgment. If you feel that you’re in immediate danger, please go to the nearest hospital or call your local emergency number. If it helps, I can stay here with you while you reach out."
     }
   },
   "journal": {
@@ -87,7 +99,8 @@
     "prompts": {
       "nudge": "Are you still there? Which activity would you like to try?",
       "timeout": "It seems like you're not there. I'll go take a break now. Just call my name when you're ready to talk again.",
-      "termination": "Okay, I'll catch you later."
+      "termination": "Okay, I'll catch you later.",
+      "rejection": "No problem at all. I'll be here whenever you're ready. Take care!"
     },
     "activity_names": {
       "journaling": "Journaling",
@@ -96,15 +109,15 @@
       "quote": "Inspirational Quote"
     },
     "activity_descriptions": {
-      "meditation": "a calming way to center your mind and find peace",
-      "journaling": "a chance to reflect and release your thoughts",
-      "quote": "a quick dose of motivation and perspective",
-      "gratitude": "focusing on the good to brighten your day"
+      "meditation": "",
+      "journaling": "",
+      "quote": "",
+      "gratitude": ""
     },
     "smalltalk_suggestion_message": "If you're not feeling like doing any of these suggestions, maybe we can just have a chat?"
   },
   "startup": {
-    "device_not_associated": "This device is not associated to any user. Please contact Well-Bot customer service for assistance.",
+    "device_not_associated": "I'm having trouble connecting to verify your device. Don't worry, I'll keep trying in the background. Please ensure your internet connection is working.",
     "startup_completed": "Startup completed. Hi {name}, call me Well-Bot to wake me up!"
   },
   "wakeword_responses": {
@@ -113,12 +126,14 @@
       "nudge": "I'm listening. What would you like to do?",
       "timeout": "I'll be here when you need me. Just say my name.",
       "unknown_intent": "I didn't quite catch that. can you call my name again, and I'll be ready to help you.",
-      "activity_unavailable": "That activity isn't available right now. Can we try something else? Just call my name, Well-Bot, and I'll be ready for you."
+      "activity_unavailable": "That activity isn't available right now. Can we try something else? Just call my name, Well-Bot, and I'll be ready for you.",
+      "termination": "Alright, just call my name again when you're ready."
     }
   },
   "mood_rating": {
-    "prompt_before": "If you'd like — on a scale from 1 to 10 — how strong are any negative emotions you feel right now (1 = none, 10 = very strong)?",
-    "prompt_after": "If you'd like — on a scale from 1 to 10 — how strong are any negative emotions you feel right now (1 = none, 10 = very strong)?",
+    "prompt_before": "Before we start, on a scale of 1 to 10, can you rate you're feeling right now? 1 means really bad, 10 means really good.",
+    "prompt_after": "Now that we're done, on a scale of 1 to 10, can you rate you're feeling right now? 1 means really bad, 10 means really good..",
+    "acknowledgment": "Thank you for sharing.",
     "skip_phrases": ["skip", "no", "not now", "later", "pass"]
   },
   "audio_paths": {

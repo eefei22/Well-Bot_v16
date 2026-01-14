@@ -82,7 +82,8 @@
     "prompts": {
       "nudge": "Adakah anda masih di situ? Aktiviti mana yang anda ingin cuba?",
       "timeout": "Nampaknya anda tiada di situ. Saya akan berehat sekarang. Panggil nama saya apabila anda sudah bersedia untuk bercakap lagi.",
-      "termination": "Baiklah, jumpa lagi nanti."
+      "termination": "Baiklah, jumpa lagi nanti.",
+      "rejection": "Tidak mengapa. Saya akan berada di sini apabila anda sudah bersedia. Jaga diri!"
     },
     "activity_names": {
       "journaling": "Menulis Jurnal",
@@ -99,7 +100,7 @@
     "smalltalk_suggestion_message": "Jika anda tidak mahu melakukan mana-mana cadangan ini, mungkin kita boleh berbual?"
   },
   "startup": {
-    "device_not_associated": "Peranti ini tidak dikaitkan dengan mana-mana pengguna. Sila hubungi perkhidmatan pelanggan Well-Bot untuk bantuan.",
+    "device_not_associated": "Saya mengalami masalah untuk mengesahkan peranti anda. Jangan risau, saya akan terus mencuba di latar belakang. Sila pastikan sambungan internet anda berfungsi.",
     "startup_completed": "Permulaan selesai. Hai {name}, panggil saya Well-Bot untuk membangunkan saya!"
   },
   "wakeword_responses": {
@@ -112,8 +113,9 @@
     }
   },
   "mood_rating": {
-    "prompt_before": "Jika anda mahu — pada skala 1 hingga 10 — betapa kuatnya sebarang emosi negatif yang anda rasa sekarang (1 = tiada, 10 = sangat kuat)?",
-    "prompt_after": "Jika anda mahu — pada skala 1 hingga 10 — betapa kuatnya sebarang emosi negatif yang anda rasa sekarang (1 = tiada, 10 = sangat kuat)?",
+    "prompt_before": "Sebelum kita bermula, pada skala 1 hingga 10, bolehkah anda menilai perasaan anda sekarang? 1 bermaksud sangat tidak baik, 10 bermaksud sangat baik.",
+    "prompt_after": "Sekarang kita sudah selesai, pada skala 1 hingga 10, bolehkah anda menilai perasaan anda sekarang? 1 bermaksud sangat tidak baik, 10 bermaksud sangat baik.",
+    "acknowledgment": "Terima kasih kerana berkongsi.",
     "skip_phrases": ["langkau", "tidak", "bukan sekarang", "kemudian", "lepaskan"]
   },
   "audio_paths": {

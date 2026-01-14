@@ -11,7 +11,6 @@ import sys
 import threading
 import time
 import logging
-import uuid
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any, Union
 
@@ -93,20 +92,8 @@ class IdleModeActivity:
         self._wake_detected = threading.Event()
         self._intervention_triggered_flag = threading.Event()
         self._last_was_intervention = False  # Track if last trigger was intervention
-
-        # Correlation id for a single IdleModeActivity.run() lifetime (used across callbacks/threads)
-        self._idle_run_id: Optional[str] = None
-        
-        # Preferences checking thread
-        self._preferences_check_thread: Optional[threading.Thread] = None
-        self._preferences_check_interval = 300  # 5 minutes in seconds
-        self._stop_preferences_check = False
         
         logger.info(f"IdleModeActivity initialized for user {self.user_id}")
-
-    def get_current_run_id(self) -> Optional[str]:
-        """Return the current idle run correlation id (if run() has started)."""
-        return self._idle_run_id
     
     def initialize(self) -> bool:
         """Initialize the activity components"""
@@ -127,7 +114,7 @@ class IdleModeActivity:
                     str(wakeword_model_path),
                     backend_dir=self.backend_dir
                 )
-                logger.info("Wakeword detector created")
+                logger.info("✓ Wakeword detector created")
             except Exception as e:
                 logger.error(f"Failed to create wakeword detector: {e}", exc_info=True)
                 return False
@@ -149,7 +136,7 @@ class IdleModeActivity:
                     service_url=service_url,
                     on_intervention_triggered=self._on_intervention_triggered
                 )
-                logger.info(f"Intervention poller initialized (interval: {poll_interval_minutes} minutes)")
+                logger.info(f"✓ Intervention poller initialized (interval: {poll_interval_minutes} minutes)")
             except Exception as e:
                 logger.warning(f"Failed to initialize intervention poller: {e}", exc_info=True)
                 self.intervention_poller = None
@@ -163,7 +150,7 @@ class IdleModeActivity:
                 if not self.emotion_monitoring_activity.initialize():
                     logger.error("Failed to initialize emotion monitoring activity")
                     return False
-                logger.info("Emotion monitoring activity initialized")
+                logger.info("✓ Emotion monitoring activity initialized")
             except Exception as e:
                 logger.error(f"Failed to initialize emotion monitoring activity: {e}", exc_info=True)
                 return False
@@ -187,11 +174,6 @@ class IdleModeActivity:
             return True
         
         try:
-            logger.info(
-                "event=idle.start.begin user_id=%s idle_run_id=%s",
-                self.user_id,
-                self._idle_run_id,
-            )
             logger.info("Starting wakeword detector...")
             # Detector should already be initialized by create_wake_word_detector()
             # Verify initialization status
@@ -217,12 +199,7 @@ class IdleModeActivity:
             if self.intervention_poller:
                 try:
                     self.intervention_poller.start()
-                    logger.info(
-                        "event=idle.poller.started user_id=%s idle_run_id=%s poll_interval_minutes=%s",
-                        self.user_id,
-                        self._idle_run_id,
-                        getattr(self.intervention_poller, "poll_interval_minutes", None),
-                    )
+                    logger.info("✓ Intervention poller started")
                 except Exception as e:
                     logger.warning(f"Failed to start intervention poller: {e}")
             
@@ -243,27 +220,14 @@ class IdleModeActivity:
                             name="EmotionMonitoring"
                         )
                         self._emotion_monitoring_thread.start()
-                        logger.info(
-                            "event=idle.emotion_monitoring.thread_started user_id=%s idle_run_id=%s",
-                            self.user_id,
-                            self._idle_run_id,
-                        )
+                        logger.info("✓ Emotion monitoring started")
                     else:
                         logger.warning("Failed to start emotion monitoring")
                 except Exception as e:
                     logger.warning(f"Error starting emotion monitoring: {e}", exc_info=True)
             
-            # Start preferences checking thread
-            self._start_preferences_check_thread()
-            
             self._active = True
-            logger.info(
-                "event=idle.start.ready user_id=%s idle_run_id=%s wakeword_detector=%s has_poller=%s",
-                self.user_id,
-                self._idle_run_id,
-                type(self.wakeword_detector).__name__ if self.wakeword_detector else None,
-                bool(self.intervention_poller),
-            )
+            logger.info("Idle mode active: listening for wake word and monitoring emotions")
             return True
         except Exception as e:
             logger.error(f"Failed to start idle mode: {e}", exc_info=True)
@@ -273,30 +237,19 @@ class IdleModeActivity:
     def stop(self):
         """Stop the idle mode activity"""
         if not self._active:
-            logger.debug(
-                "event=idle.stop.noop user_id=%s idle_run_id=%s reason=not_active",
-                self.user_id,
-                self._idle_run_id,
-            )
+            logger.warning("Idle mode not active, cannot stop")
             return
         
-        logger.info(
-            "event=idle.stop.begin user_id=%s idle_run_id=%s",
-            self.user_id,
-            self._idle_run_id,
-        )
+        logger.info("Stopping idle mode activity...")
         
         # Mark as inactive FIRST
         self._active = False
-        
-        # Stop preferences checking thread
-        self._stop_preferences_check_thread()
         
         # Stop emotion monitoring
         if self.emotion_monitoring_activity:
             try:
                 self.emotion_monitoring_activity.stop()
-                logger.info("Emotion monitoring stopped")
+                logger.info("✓ Emotion monitoring stopped")
             except Exception as e:
                 logger.warning(f"Error stopping emotion monitoring: {e}")
         
@@ -317,7 +270,7 @@ class IdleModeActivity:
         if self.intervention_poller:
             try:
                 self.intervention_poller.stop()
-                logger.info("Intervention poller stopped")
+                logger.info("✓ Intervention poller stopped")
             except Exception as e:
                 logger.warning(f"Error stopping intervention poller: {e}")
         
@@ -342,19 +295,11 @@ class IdleModeActivity:
         self._intervention_triggered_flag.clear()
         self._last_was_intervention = False
         
-        logger.info(
-            "event=idle.stop.end user_id=%s idle_run_id=%s",
-            self.user_id,
-            self._idle_run_id,
-        )
+        logger.info("Idle mode stopped")
     
     def _on_intervention_triggered(self):
         """Callback when intervention trigger is detected from poller"""
-        logger.info(
-            "event=idle.trigger.intervention user_id=%s idle_run_id=%s",
-            self.user_id,
-            self._idle_run_id,
-        )
+        logger.info("Intervention trigger detected")
         
         # Stop emotion monitoring immediately (non-blocking - don't wait for it to finish)
         if self.emotion_monitoring_activity:
@@ -365,11 +310,7 @@ class IdleModeActivity:
                 def stop_emotion_monitoring():
                     try:
                         self.emotion_monitoring_activity.stop()
-                        logger.info(
-                            "event=idle.emotion_monitoring.stop.async user_id=%s idle_run_id=%s reason=intervention",
-                            self.user_id,
-                            self._idle_run_id,
-                        )
+                        logger.info("✓ Emotion monitoring stopped (intervention triggered)")
                     except Exception as e:
                         logger.warning(f"Error stopping emotion monitoring: {e}")
                 threading.Thread(target=stop_emotion_monitoring, daemon=True).start()
@@ -387,11 +328,7 @@ class IdleModeActivity:
             except Exception as e:
                 logger.error(f"Error invoking intervention callback: {e}")
         
-        logger.info(
-            "event=idle.trigger.signaled user_id=%s idle_run_id=%s trigger=intervention",
-            self.user_id,
-            self._idle_run_id,
-        )
+        logger.info("Intervention trigger flag set - orchestrator will start wake_mode immediately")
     
     def run(self) -> bool:
         """
@@ -401,12 +338,7 @@ class IdleModeActivity:
             True if wake word detected or intervention triggered (activity should exit to allow wake_mode)
             False on error or if activity was stopped
         """
-        self._idle_run_id = uuid.uuid4().hex[:8]
-        logger.info(
-            "event=idle.run.begin user_id=%s idle_run_id=%s",
-            self.user_id,
-            self._idle_run_id,
-        )
+        logger.info("IdleModeActivity.run() - Starting idle mode execution")
         
         try:
             # Clear any stale state before starting
@@ -426,54 +358,32 @@ class IdleModeActivity:
                 return True
             
             # Wait for wake word detection or intervention trigger
-            logger.info(
-                "event=idle.wait.begin user_id=%s idle_run_id=%s",
-                self.user_id,
-                self._idle_run_id,
-            )
+            logger.info("Waiting for wake word detection or intervention trigger...")
             
             while self._active and not self._wake_detected.is_set() and not self._intervention_triggered_flag.is_set():
                 time.sleep(0.01)  # Very small sleep for minimal latency (10ms)
             
             # Check if wake word was detected
             if self._wake_detected.is_set():
-                logger.info(
-                    "event=idle.exit user_id=%s idle_run_id=%s reason=trigger trigger=wakeword",
-                    self.user_id,
-                    self._idle_run_id,
-                )
+                logger.info("Wake word detected - exiting idle mode to allow wake_mode")
                 self.stop()
                 return True
             
             # Check if intervention was triggered
             if self._intervention_triggered_flag.is_set():
-                logger.info(
-                    "event=idle.exit user_id=%s idle_run_id=%s reason=trigger trigger=intervention",
-                    self.user_id,
-                    self._idle_run_id,
-                )
+                logger.info("Intervention triggered - exiting idle mode to allow wake_mode")
                 self._intervention_triggered_flag.clear()
                 self.stop()
                 return True
             
             # Activity was stopped externally
-            logger.info(
-                "event=idle.exit user_id=%s idle_run_id=%s reason=external_stop",
-                self.user_id,
-                self._idle_run_id,
-            )
+            logger.info("Idle mode stopped externally")
             return False
                 
         except Exception as e:
             logger.error(f"Error running idle mode activity: {e}", exc_info=True)
             self.stop()
             return False
-        finally:
-            logger.info(
-                "event=idle.run.end user_id=%s idle_run_id=%s",
-                self.user_id,
-                self._idle_run_id,
-            )
     
     def cleanup(self):
         """Clean up all resources"""
@@ -493,109 +403,13 @@ class IdleModeActivity:
                 except Exception as e:
                     logger.warning(f"Error cleaning up emotion monitoring: {e}")
             
-            # Stop preferences check thread
-            self._stop_preferences_check_thread()
-            
             logger.info("Idle mode cleanup completed")
         except Exception as e:
             logger.error(f"Error during idle mode cleanup: {e}", exc_info=True)
     
-    def _start_preferences_check_thread(self):
-        """Start background thread to periodically check user preferences"""
-        if self._preferences_check_thread is not None:
-            logger.warning("Preferences check thread already running")
-            return
-        
-        def check_loop():
-            """Background thread that checks preferences immediately, then every 5 minutes"""
-            first_check = True  # Flag to check immediately on first run
-            
-            while not self._stop_preferences_check:
-                try:
-                    # On first run, check immediately. Otherwise wait for interval
-                    if not first_check:
-                        # Wait for check interval (check every second for stop flag)
-                        for _ in range(self._preferences_check_interval):
-                            if self._stop_preferences_check:
-                                logger.debug("Preferences check thread stopping due to shutdown")
-                                return
-                            time.sleep(1)
-                    else:
-                        first_check = False
-                        logger.info("Performing initial preferences check on idle_mode start...")
-                    
-                    # Check all preferences
-                    from src.utils.config_resolver import check_user_preferences_changed
-                    changes = check_user_preferences_changed(self.user_id)
-                    
-                    # Handle changes
-                    if any(changes.values()):
-                        logger.info(f"User preferences changed for {self.user_id}: {changes}")
-                        
-                        # Invalidate language cache if language changed
-                        if changes['language']:
-                            from src.utils.config_resolver import invalidate_user_cache
-                            invalidate_user_cache(self.user_id)
-                            logger.info("Language cache invalidated - new language will be used on next activity")
-                        
-                        # Update user_persona.json if prefer_name or spiritual_beliefs changed
-                        if changes['prefer_name'] or changes['spiritual_beliefs']:
-                            from src.supabase.auth import refresh_user_persona_from_database
-                            if refresh_user_persona_from_database(self.user_id, self.backend_dir):
-                                logger.info("User persona refreshed with latest preferences")
-                            else:
-                                logger.warning("Failed to refresh user persona")
-                    else:
-                        logger.debug(f"No preference changes detected for user {self.user_id}")
-                        
-                except Exception as e:
-                    logger.warning(f"Error in preferences check loop: {e}", exc_info=True)
-                    # Continue loop even on error
-                    if not first_check:  # Only sleep if not first check
-                        time.sleep(1)
-        
-        self._stop_preferences_check = False
-        self._preferences_check_thread = threading.Thread(
-            target=check_loop,
-            daemon=True,
-            name="PreferencesCheck"
-        )
-        self._preferences_check_thread.start()
-        logger.info(f"Preferences check thread started (checking every {self._preferences_check_interval} seconds)")
-    
-    def _stop_preferences_check_thread(self):
-        """Stop the preferences checking thread"""
-        if self._preferences_check_thread is not None:
-            logger.info("Stopping preferences check thread...")
-            self._stop_preferences_check = True
-            self._preferences_check_thread.join(timeout=5.0)
-            if self._preferences_check_thread.is_alive():
-                logger.warning("Preferences check thread did not stop within timeout")
-            else:
-                logger.info(
-                    "event=idle.preferences_thread.stopped user_id=%s idle_run_id=%s",
-                    self.user_id,
-                    self._idle_run_id,
-                )
-            self._preferences_check_thread = None
-    
     def reinitialize(self) -> bool:
         """Re-initialize the activity for subsequent runs"""
-        logger.info(
-            "event=idle.reinit.begin user_id=%s idle_run_id=%s",
-            self.user_id,
-            self._idle_run_id,
-        )
-        
-        # Stop intervention poller if running
-        if self.intervention_poller:
-            try:
-                self.intervention_poller.stop()
-                logger.debug("Stopped intervention poller before reinitialize")
-            except Exception as e:
-                logger.warning(f"Error stopping intervention poller during reinitialize: {e}")
-            finally:
-                self.intervention_poller = None
+        logger.info("Re-initializing Idle Mode activity...")
         
         # Cleanup existing wakeword detector before resetting state
         if self.wakeword_detector:
@@ -625,14 +439,7 @@ class IdleModeActivity:
         self._last_wake_time = 0.0
         
         # Re-initialize components
-        ok = self.initialize()
-        logger.info(
-            "event=idle.reinit.end user_id=%s idle_run_id=%s ok=%s",
-            self.user_id,
-            self._idle_run_id,
-            ok,
-        )
-        return ok
+        return self.initialize()
     
     def is_active(self) -> bool:
         """Check if the activity is currently active"""
@@ -655,11 +462,7 @@ class IdleModeActivity:
             # Update last wake time
             self._last_wake_time = current_time
         
-        logger.info(
-            "event=idle.trigger.wakeword user_id=%s idle_run_id=%s",
-            self.user_id,
-            self._idle_run_id,
-        )
+        logger.info("Wake word detected")
 
         # Minimal wake reaction before handoff to wake mode
         if self.ui_interface:
@@ -682,11 +485,7 @@ class IdleModeActivity:
                 def stop_emotion_monitoring():
                     try:
                         self.emotion_monitoring_activity.stop()
-                        logger.info(
-                            "event=idle.emotion_monitoring.stop.async user_id=%s idle_run_id=%s reason=wakeword",
-                            self.user_id,
-                            self._idle_run_id,
-                        )
+                        logger.info("✓ Emotion monitoring stopped (wake word detected)")
                     except Exception as e:
                         logger.warning(f"Error stopping emotion monitoring: {e}")
                 threading.Thread(target=stop_emotion_monitoring, daemon=True).start()
@@ -704,8 +503,4 @@ class IdleModeActivity:
             except Exception as e:
                 logger.error(f"Error invoking wake detected callback: {e}")
         
-        logger.info(
-            "event=idle.trigger.signaled user_id=%s idle_run_id=%s trigger=wakeword",
-            self.user_id,
-            self._idle_run_id,
-        )
+        logger.info("Wake word flag set - orchestrator will start wake_mode immediately")

@@ -92,7 +92,8 @@
     "prompts": {
       "nudge": "你还在吗？你想尝试哪个活动？我们可以一起冥想，或者你想写日记？ 我也可以送你一句励志名言，或者来一次感恩练习。你随便选一个吧",
       "timeout": "看起来你不在，我先休息一下。等你准备好了，随时叫我。",
-      "termination": "好的，我们稍后再见。"
+      "termination": "好的，我们稍后再见。",
+      "rejection": "没问题。我随时都在，等你准备好了再找我。保重！"
     },
     "activity_names": {
       "journaling": "写日记",
@@ -109,7 +110,7 @@
     "smalltalk_suggestion_message": "如果你不想做这些建议的活动，也许我们可以聊聊天？"
   },
   "startup": {
-    "device_not_associated": "此设备未关联任何用户。请联系 Well-Bot 客户服务寻求帮助。",
+    "device_not_associated": "我在验证你的设备时遇到了问题。别担心，我会在后台继续尝试。请确保你的网络连接正常。",
     "startup_completed": "启动完成。你好 {name}，叫我 Well-Bot 来唤醒我！"
   },
   "wakeword_responses": {
@@ -122,8 +123,9 @@
     }
   },
   "mood_rating": {
-    "prompt_before": "如果你愿意的话——从1到10分——你现在感受到的任何负面情绪有多强烈（1 = 没有，10 = 非常强烈）？",
-    "prompt_after": "如果你愿意的话——从1到10分——你现在感受到的任何负面情绪有多强烈（1 = 没有，10 = 非常强烈）？",
+    "prompt_before": "在我们开始之前，请用 1 到 10 分来评价你现在的整体感受。1 表示感觉非常糟糕，10 表示感觉非常好。",
+    "prompt_after": "现在我们已经完成了，请用 1 到 10 分来评价你现在的整体感受。1 表示感觉非常糟糕，10 表示感觉非常好。",
+    "acknowledgment": "谢谢你的分享。",
     "skip_phrases": ["跳过", "不", "现在不要", "稍后", "算了"]
   },
   "audio_paths": {
